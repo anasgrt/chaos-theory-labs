@@ -1,0 +1,110 @@
+title: 'Lab 17 — Automated startup checks'
+concept: >-
+  An SLI measures a service outcome; an SLO sets a target for that measurement over a stated scope and window. This lab measures time from workload creation until an HTTP probe succeeds. That includes platform startup work, not just application execution. A repeated check samples variability, but five successful samples cannot establish a long-term availability or latency guarantee.
+mechanism: >-
+  The loop creates a disposable workload, starts timing, probes its exposed endpoint, records the result and removes its objects before repeating. Scheduling, image retrieval, startup and routing can all affect the duration. A deliberately delayed server acts as a known failing case to validate the checker. Cleanup prevents an old endpoint from producing false success; timestamps expose a checker that has stopped reporting.
+solution: 'After Lab 15, use the prepared startup manifest and follow Lab 17 to run five healthy cycles, then prove detection using the deliberately delayed command.'
+verify_note: 'The chaos cluster is reachable, the startup manifest is present, and no stale startup-check objects exist.'
+commands:
+  - name: Save the finite startup-check loop with cleanup
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab17
+      cat > run.sh <<'SH'
+      #!/usr/bin/env bash
+      set -u
+      source "$HOME/labs/common.sh"
+      cd "$HOME/labs/lab17" || exit 1
+      NODE_IP=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' chaos-control-plane) || exit 1
+      # PID 1 in the pod ignores SIGTERM; a 1 s grace period keeps cleanup inside the timeouts.
+      cleanup() { k delete -f startup.yaml --ignore-not-found --wait=true --timeout=30s --grace-period=1 --request-timeout=0 >/dev/null; }
+      trap cleanup EXIT
+      trap 'exit 130' INT TERM
+      mkdir -p metrics
+      for run in $(seq 1 5); do
+        cleanup || exit 1
+        start=$(date +%s)
+        ok=0
+        k apply -f startup.yaml >/dev/null || exit 1
+        while (( $(date +%s)-start < 30 )); do
+          if curl -fsS --max-time 1 -o /dev/null "http://$NODE_IP:30090/"; then ok=1; break; fi
+          sleep 0.5
+        done
+        elapsed=$(( $(date +%s)-start ))
+        (( elapsed <= 30 )) || ok=0
+        printf 'run=%s success=%s elapsed=%ss\n' "$run" "$ok" "$elapsed"
+        printf 'ce_start_success %s\nce_start_seconds %s\nce_last_run_timestamp_seconds %s\n' \
+          "$ok" "$elapsed" "$(date +%s)" > metrics/start.prom.tmp
+        mv metrics/start.prom.tmp metrics/start.prom
+        k get pod startup-check -o wide
+        sleep 2
+      done
+      SH
+  - name: Predict, run five healthy cycles, confirm nothing is left behind
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab17
+      source ~/labs/common.sh
+      bash run.sh | tee runs.txt
+      cat metrics/start.prom
+      k get pod startup-check; k get svc startup-check
+    expect: >-
+      Five lines with success=1 and a few seconds elapsed; both final gets report NotFound.
+  - name: Prove the check detects a deliberately delayed startup
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab17
+      cp startup.yaml startup-good.yaml
+      sed -i "s|command: \[python, -m, http.server, '8080'\]|command: [sh, -c, 'sleep 45; exec python -m http.server 8080']|" startup.yaml
+      grep -n 'command:' startup.yaml
+      bash run.sh | tee runs-delayed.txt
+    expect: >-
+      The grep shows the sleep 45 command; all five runs report success=0 after about 30 s.
+  - name: Restore the good command and confirm healthy cycles again
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab17
+      mv startup-good.yaml startup.yaml
+      grep -n 'command:' startup.yaml
+      bash run.sh | tee runs-restored.txt
+  - name: Manual fallback if the loop was killed
+    where: VM terminal 2
+    run: !unsafe |
+      source ~/labs/common.sh
+      k delete -f ~/labs/lab17/startup.yaml --ignore-not-found --grace-period=1
+setup:
+  - name: Write the disposable startup-check manifest
+    command: |
+      kubectl --kubeconfig="$HOME/labs/chaos.kubeconfig" --context=kind-chaos get nodes >/dev/null
+      mkdir -p "$HOME/labs/lab17/metrics"
+      cat > "$HOME/labs/lab17/startup.yaml" <<'YAML'
+      apiVersion: v1
+      kind: Pod
+      metadata: {name: startup-check, labels: {app: startup-check}}
+      spec:
+        containers:
+        - name: web
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          command: [python, -m, http.server, '8080']
+          readinessProbe: {httpGet: {path: /, port: 8080}, periodSeconds: 1}
+        restartPolicy: Never
+      ---
+      apiVersion: v1
+      kind: Service
+      metadata: {name: startup-check}
+      spec:
+        type: NodePort
+        selector: {app: startup-check}
+        ports: [{port: 8080, targetPort: 8080, nodePort: 30090}]
+      YAML
+verify:
+  - name: Verify startup-check readiness to run
+    command: |
+      test -s "$HOME/labs/lab17/startup.yaml"
+      ! kubectl --kubeconfig="$HOME/labs/chaos.kubeconfig" --context=kind-chaos --namespace=chaos-labs get pod startup-check >/dev/null 2>&1
+reset:
+  - name: Delete only startup-check resources and current metrics
+    command: |
+      kubectl --kubeconfig="$HOME/labs/chaos.kubeconfig" --context=kind-chaos --namespace=chaos-labs delete -f "$HOME/labs/lab17/startup.yaml" --ignore-not-found --wait=true 2>/dev/null || true
+      rm -f "$HOME/labs/lab17/metrics/start.prom"

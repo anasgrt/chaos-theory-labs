@@ -1,0 +1,351 @@
+---
+- name: Configure the Chaos Labs teaching VM
+  hosts: chaos_labs
+  become: true
+  gather_facts: true
+  vars:
+    lab_user: vagrant
+    lab_home: "/home/{{ lab_user }}"
+    lab_root: "{{ lab_home }}/labs"
+    book_repository: https://github.com/seeker89/chaos-engineering-book.git
+    book_commit: 3e3ee64db71f51a5e9f79af8562dd4aa913a0e71
+    kind_version: v0.33.0
+    goldpinger_image: bloomberg/goldpinger:v3.11.3
+    goldpinger_repository: https://github.com/bloomberg/goldpinger.git
+    goldpinger_version: v3.11.3
+    required_packages:
+      - ca-certificates
+      - curl
+      - git
+      - jq
+      - python3
+      - python3-venv
+      - python3-redis
+      - redis-server
+      - build-essential
+      - nginx
+      - apache2-utils
+      - sysstat
+      - stress-ng
+      - fio
+      - strace
+      - libseccomp-dev
+      - libcap2-bin
+      - util-linux
+      - iproute2
+      - iptables
+      - tcpdump
+      - bc
+      - unzip
+      - cloud-guest-utils
+      - e2fsprogs
+      - lvm2
+      - openjdk-17-jdk-headless
+      - docker.io
+      - docker-buildx
+      - docker-compose-v2
+    lab_images:
+      - hello-world:latest
+      - busybox:1.36
+      - python:3.12-slim
+      - ubuntu:24.04
+      - mysql:8.4
+      - wordpress:6-apache
+      - ghcr.io/shopify/toxiproxy:2.12.0
+      - nginx:1.27
+
+  pre_tasks:
+    - name: Require Ubuntu 24.04
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == 'Ubuntu'
+          - ansible_facts['distribution_version'] is version('24.04', '==')
+        fail_msg: This playbook requires an Ubuntu Server 24.04 VM.
+
+    - name: Verify the lab user exists
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ lab_user }}"
+
+  tasks:
+    - name: Update apt metadata
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install shared lab dependencies
+      ansible.builtin.apt:
+        name: "{{ required_packages }}"
+        state: present
+
+    - name: Expand the ext4 root logical volume to the virtual disk capacity
+      ansible.builtin.shell: |
+        set -euo pipefail
+        root_device=$(findmnt -no SOURCE /)
+        root_filesystem=$(findmnt -no FSTYPE /)
+        test "$root_filesystem" = ext4
+        volume_group=$(lvs --noheadings -o vg_name "$root_device" | xargs)
+        free_extents=$(vgs --noheadings -o vg_free_count "$volume_group" | xargs)
+        if (( free_extents > 0 )); then
+          lvextend --resizefs -l +100%FREE "$root_device"
+        fi
+      args:
+        executable: /bin/bash
+      register: root_filesystem_expansion
+      changed_when: root_filesystem_expansion.stdout | length > 0
+
+    - name: Enable rootful Docker
+      ansible.builtin.systemd_service:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Keep Redis stopped until its lab starts it
+      ansible.builtin.systemd_service:
+        name: redis-server
+        enabled: false
+        state: stopped
+
+    - name: Keep NGINX stopped until its lab configures it
+      ansible.builtin.systemd_service:
+        name: nginx
+        enabled: false
+        state: stopped
+
+    - name: Grant the lab user Docker access for new login sessions
+      ansible.builtin.user:
+        name: "{{ lab_user }}"
+        groups: docker
+        append: true
+
+    - name: Create the Linux-local lab workspace
+      ansible.builtin.file:
+        path: "{{ lab_root }}"
+        state: directory
+        owner: "{{ lab_user }}"
+        group: "{{ lab_user }}"
+        mode: '0755'
+
+    - name: Clone the pinned companion source
+      ansible.builtin.git:
+        repo: "{{ book_repository }}"
+        dest: "{{ lab_root }}/book"
+        version: "{{ book_commit }}"
+        update: true
+        force: false
+      become_user: "{{ lab_user }}"
+
+    - name: Select the kind binary architecture
+      ansible.builtin.set_fact:
+        kind_architecture: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(ansible_architecture, '') }}"
+
+    - name: Require a supported VM architecture
+      ansible.builtin.assert:
+        that: kind_architecture | length > 0
+        fail_msg: "Unsupported architecture for kind: {{ ansible_architecture }}"
+
+    - name: Clone the pinned Goldpinger source for ARM64
+      ansible.builtin.git:
+        repo: "{{ goldpinger_repository }}"
+        dest: "{{ lab_root }}/goldpinger"
+        version: "{{ goldpinger_version }}"
+        update: true
+        force: false
+      become_user: "{{ lab_user }}"
+      when: ansible_architecture == 'aarch64'
+
+    - name: Install reusable lab helpers
+      ansible.builtin.copy:
+        src: common.sh
+        dest: "{{ lab_root }}/common.sh"
+        owner: "{{ lab_user }}"
+        group: "{{ lab_user }}"
+        mode: '0755'
+
+    - name: Install the cluster-matched kubectl installer
+      ansible.builtin.copy:
+        src: install-kubectl-for-kind.sh
+        dest: "{{ lab_root }}/install-kubectl-for-kind.sh"
+        owner: "{{ lab_user }}"
+        group: "{{ lab_user }}"
+        mode: '0755'
+
+    - name: Install the kind image loader
+      ansible.builtin.copy:
+        src: load-lab-images-into-kind.sh
+        dest: "{{ lab_root }}/load-lab-images-into-kind.sh"
+        owner: "{{ lab_user }}"
+        group: "{{ lab_user }}"
+        mode: '0755'
+
+    - name: Copy the lab guide into the VM
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../chaos-labs.md"
+        dest: "{{ lab_root }}/chaos-labs.md"
+        owner: "{{ lab_user }}"
+        group: "{{ lab_user }}"
+        mode: '0644'
+
+    - name: Copy provisioning notes into the VM
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../README.md"
+        dest: "{{ lab_root }}/README-provisioning.md"
+        owner: "{{ lab_user }}"
+        group: "{{ lab_user }}"
+        mode: '0644'
+
+    - name: Install the pinned kind binary
+      ansible.builtin.get_url:
+        url: "https://kind.sigs.k8s.io/dl/{{ kind_version }}/kind-linux-{{ kind_architecture }}"
+        dest: /usr/local/bin/kind
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Inspect locally available lab images
+      ansible.builtin.command:
+        argv: [docker, image, inspect, "{{ item }}"]
+      loop: "{{ lab_images }}"
+      register: image_inspections
+      changed_when: false
+      failed_when: false
+
+    - name: Pull the images required by the core labs
+      ansible.builtin.command:
+        argv: [timeout, 10m, docker, pull, "{{ item.item }}"]
+      loop: "{{ image_inspections.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.rc != 0
+
+    - name: Inspect the Goldpinger image
+      ansible.builtin.command:
+        argv: [docker, image, inspect, "{{ goldpinger_image }}"]
+      register: goldpinger_inspection
+      changed_when: false
+      failed_when: false
+
+    - name: Pull Goldpinger on AMD64
+      ansible.builtin.command:
+        argv: [timeout, 10m, docker, pull, "{{ goldpinger_image }}"]
+      when:
+        - ansible_architecture == 'x86_64'
+        - goldpinger_inspection.rc != 0
+
+    - name: Build Goldpinger from the pinned source on ARM64
+      ansible.builtin.command:
+        argv:
+          - timeout
+          - 10m
+          - docker
+          - build
+          - --pull=false
+          - --network
+          - host
+          - --target
+          - simple
+          - --tag
+          - "{{ goldpinger_image }}"
+          - .
+      args:
+        chdir: "{{ lab_root }}/goldpinger"
+      environment:
+        DOCKER_BUILDKIT: '1'
+      when:
+        - ansible_architecture == 'aarch64'
+        - goldpinger_inspection.rc != 0
+
+    - name: Read the cgroup filesystem type
+      ansible.builtin.command: stat -fc %T /sys/fs/cgroup
+      register: cgroup_filesystem
+      changed_when: false
+
+    - name: Require cgroup v2
+      ansible.builtin.assert:
+        that: cgroup_filesystem.stdout == 'cgroup2fs'
+        fail_msg: The VM did not boot with the cgroup v2 unified hierarchy.
+
+    - name: Read available cgroup controllers
+      ansible.builtin.command: cat /sys/fs/cgroup/cgroup.controllers
+      register: cgroup_controllers
+      changed_when: false
+
+    - name: Require CPU memory and PID cgroup controllers
+      ansible.builtin.assert:
+        that:
+          - "'cpu' in cgroup_controllers.stdout.split()"
+          - "'memory' in cgroup_controllers.stdout.split()"
+          - "'pids' in cgroup_controllers.stdout.split()"
+        fail_msg: Required cgroup v2 controllers are unavailable.
+
+    - name: Verify the Docker daemon
+      ansible.builtin.command: docker info
+      register: docker_info
+      changed_when: false
+
+    - name: Verify Docker can run a container
+      ansible.builtin.command: docker run --rm hello-world:latest
+      changed_when: false
+
+    - name: Require Docker cgroup v2
+      ansible.builtin.assert:
+        that: "'Cgroup Version: 2' in docker_info.stdout"
+        fail_msg: Docker is not using cgroup v2.
+
+    - name: Verify the Compose v2 plugin
+      ansible.builtin.command: docker compose version
+      changed_when: false
+
+    - name: Verify passwordless sudo for the lab user
+      ansible.builtin.command: sudo -n true
+      become: false
+      changed_when: false
+
+    - name: Read root filesystem capacity in GiB
+      ansible.builtin.shell: "df -BG / | awk 'NR == 2 {gsub(/G/, \"\", $2); print $2}'"
+      args:
+        executable: /bin/bash
+      register: root_disk_gib
+      changed_when: false
+
+    - name: Require the minimum root filesystem capacity
+      ansible.builtin.assert:
+        that: root_disk_gib.stdout | int >= 60
+        fail_msg: The VM root filesystem is smaller than the 60 GiB lab minimum.
+
+    - name: Record provisioned versions
+      ansible.builtin.shell: |
+        {
+          uname -a
+          systemd --version | head -1
+          docker version
+          docker compose version
+          python3 --version
+          java -version
+          strace --version
+          kind version
+        } > "{{ lab_root }}/versions.txt" 2>&1
+      args:
+        executable: /bin/bash
+      become_user: "{{ lab_user }}"
+      changed_when: false
+
+    - name: Record the checked-out companion source commit
+      ansible.builtin.command:
+        argv: [git, -C, "{{ lab_root }}/book", rev-parse, HEAD]
+      become_user: "{{ lab_user }}"
+      register: checked_out_book_commit
+      changed_when: false
+
+    - name: Save the checked-out companion source commit
+      ansible.builtin.copy:
+        content: "{{ checked_out_book_commit.stdout }}\n"
+        dest: "{{ lab_root }}/book-commit.txt"
+        owner: "{{ lab_user }}"
+        group: "{{ lab_user }}"
+        mode: '0644'
+
+    - name: Confirm the companion source commit
+      ansible.builtin.assert:
+        that: checked_out_book_commit.stdout == book_commit
+        fail_msg: The companion source is not at the required commit.

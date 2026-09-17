@@ -1,0 +1,110 @@
+title: 'Lab 03 — Restart limit and proxy availability'
+concept: >-
+  A process supervisor and a load balancer protect different parts of availability. systemd can restart a crashed backend; NGINX can direct requests toward other usable backends. Redundancy helps only while enough working capacity remains. A successful request through the proxy can therefore conceal a failed instance, and a running process still needs to serve correct responses.
+mechanism: >-
+  systemd checks both the restart policy and the permitted number of starts within a configured interval. Rapid repeated crashes can exhaust this allowance and leave a unit in start-limit-hit despite Restart=always. The remaining backend may carry requests until it reaches its own limit. Comparing isolated crashes with repeated crashes exposes how restart timing and backend availability interact.
+solution: 'Use Lab 3 to kill each named backend, inspect ActiveState, Result and NRestarts, then measure the proxy before and after reset-failed.'
+verify_note: 'Both backends are active and the proxy returns HTTP 200 before injection.'
+commands:
+  - name: Measure the proxy baseline
+    where: VM terminal 1
+    run: !unsafe |
+      source ~/labs/common.sh
+      measure http://127.0.0.1:8003/ 10
+    expect: >-
+      Ten lines starting with 200.
+  - name: Watch both backend states
+    where: VM terminal 2
+    run: !unsafe |
+      watch -n 1 'systemctl is-active ce-lab03-a ce-lab03-b'
+  - name: Kill backend A once, then six times quickly
+    where: VM terminal 1
+    run: !unsafe |
+      sudo systemctl kill --kill-whom=main --signal=KILL ce-lab03-a
+      sleep 1
+      curl -fsS --max-time 3 http://127.0.0.1:8003/
+      for i in $(seq 1 6); do
+        sudo systemctl kill --kill-whom=main --signal=KILL ce-lab03-a || true
+        sleep 1
+      done
+      systemctl show ce-lab03-a -p ActiveState -p Result -p NRestarts
+      sudo journalctl -u ce-lab03-a -n 15 --no-pager
+    expect: >-
+      A reaches Result=start-limit-hit while the proxy still answers through B.
+  - name: Record 30 seconds of proxy HTTP codes (stop the watch first, start this before the next step)
+    where: VM terminal 2
+    run: !unsafe |
+      for i in $(seq 1 60); do curl -s --max-time 1 -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8003/; sleep 0.5; done | tee ~/labs/lab03-proxy-codes.txt
+      sort ~/labs/lab03-proxy-codes.txt | uniq -c
+  - name: Repeat the six-kill loop against backend B
+    where: VM terminal 1
+    run: !unsafe |
+      for i in $(seq 1 6); do
+        sudo systemctl kill --kill-whom=main --signal=KILL ce-lab03-b || true
+        sleep 1
+      done
+      systemctl show ce-lab03-a ce-lab03-b -p Id -p ActiveState -p Result -p NRestarts
+    expect: >-
+      Both units can show start-limit-hit; terminal 2 then records 502 responses (or 000 for timeouts).
+  - name: Recover and prove the proxy works again
+    where: VM terminal 1
+    run: !unsafe |
+      sudo systemctl reset-failed ce-lab03-a ce-lab03-b
+      sudo systemctl start ce-lab03-a ce-lab03-b
+      systemctl is-active ce-lab03-a ce-lab03-b
+      curl -fsS --max-time 3 http://127.0.0.1:8003/
+  - name: Optional A/B change, remove the start limit on A, then repeat the A kill loop
+    where: VM terminal 1
+    run: !unsafe |
+      sudo mkdir -p /etc/systemd/system/ce-lab03-a.service.d
+      printf '[Unit]\nStartLimitIntervalSec=0\n' | sudo tee /etc/systemd/system/ce-lab03-a.service.d/override.conf
+      sudo systemctl daemon-reload
+      sudo systemctl restart ce-lab03-a
+      systemctl show ce-lab03-a -p StartLimitIntervalUSec -p StartLimitBurst
+      for i in $(seq 1 6); do
+        sudo systemctl kill --kill-whom=main --signal=KILL ce-lab03-a || true
+        sleep 1
+      done
+      systemctl show ce-lab03-a -p ActiveState -p Result -p NRestarts
+    expect: >-
+      StartLimitIntervalUSec=0. This removes the give-up threshold; it does not fix the crash.
+setup:
+  - name: Create the restart-limit fixture
+    command: |
+      sudo install -d -m 0755 /srv/ce-lab03
+      printf 'lab03 OK\n' | sudo tee /srv/ce-lab03/index.html >/dev/null
+      for pair in a:8001 b:8002; do
+        name=${pair%:*}; port=${pair#*:}
+        sudo tee "/etc/systemd/system/ce-lab03-$name.service" >/dev/null <<UNIT
+      [Unit]
+      Description=Chaos lab 03 $name
+      StartLimitIntervalSec=20
+      StartLimitBurst=4
+      [Service]
+      ExecStart=/usr/bin/python3 -m http.server $port --bind 127.0.0.1 --directory /srv/ce-lab03
+      Restart=always
+      RestartSec=200ms
+      UNIT
+      done
+      sudo tee /etc/nginx/conf.d/ce-lab03.conf >/dev/null <<'NGX'
+      upstream ce_lab03 { server 127.0.0.1:8001 max_fails=1 fail_timeout=1s; server 127.0.0.1:8002 max_fails=1 fail_timeout=1s; }
+      server { listen 127.0.0.1:8003; location / { proxy_pass http://ce_lab03; } }
+      NGX
+      sudo systemctl daemon-reload
+      sudo systemctl start ce-lab03-a ce-lab03-b
+      sudo nginx -t
+      sudo systemctl restart nginx
+verify:
+  - name: Verify both backends and proxy baseline
+    command: |
+      systemctl is-active --quiet ce-lab03-a
+      systemctl is-active --quiet ce-lab03-b
+      curl -fsS --max-time 3 http://127.0.0.1:8003/ | grep -qx 'lab03 OK'
+reset:
+  - name: Remove only Lab 03 services and proxy configuration
+    command: |
+      sudo systemctl stop ce-lab03-a ce-lab03-b 2>/dev/null || true
+      sudo rm -f /etc/systemd/system/ce-lab03-a.service /etc/systemd/system/ce-lab03-b.service /etc/nginx/conf.d/ce-lab03.conf
+      sudo rm -rf /etc/systemd/system/ce-lab03-a.service.d /etc/systemd/system/ce-lab03-b.service.d
+      sudo systemctl daemon-reload
+      sudo nginx -t && sudo systemctl stop nginx || true

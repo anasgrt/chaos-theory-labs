@@ -1,0 +1,99 @@
+title: 'Lab 12 — JVM failure and silent success'
+concept: >-
+  Java source becomes bytecode stored in class files, which a compatible JVM loads and executes. Instrumentation changes that executable representation without editing the original method's source. A Java agent can therefore inject a failure at a chosen method boundary. The experiment asks whether the application reports incomplete work correctly, rather than merely whether it survives an exception.
+mechanism: >-
+  The -javaagent option loads an agent that uses ASM, a bytecode-editing library, to transform the selected class. Matching the class, method name and descriptor limits injection to the intended signature. The inserted call throws before normal output; the application catches the exception and continues. Because catching an exception does not automatically make the process exit nonzero, output completeness must be checked independently of exit status.
+solution: 'Use the self-contained Demo and Agent sources in Lab 12, compile both with --release 17, and compare baseline, injected output, error output, and recovery.'
+verify_note: 'JDK 17 and ASM 9.7 are present; a successful Java process without the agent prints ten lines.'
+commands:
+  - name: Build the tiny batch application and record the baseline
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab12
+      test -s asm-9.7.jar
+      cat > Demo.java <<'JAVA'
+      import java.io.IOException;
+      public class Demo {
+        public static void output(int i) throws IOException { System.out.println(i); }
+        public static void boom() throws IOException { throw new IOException("CHAOS"); }
+        public static void main(String[] args) {
+          for (int i=1; i<=10; i++) {
+            try { output(i); } catch (IOException e) { System.err.println(e); }
+          }
+        }
+      }
+      JAVA
+      javac --release 17 Demo.java
+      java Demo > baseline.txt
+      echo "exit=$?"; wc -l baseline.txt
+      javap -c Demo
+      javap -v Demo | grep 'major version'
+    expect: >-
+      exit=0, 10 lines, major version: 61.
+  - name: Build the narrowly targeted ASM agent
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab12
+      cat > Agent.java <<'JAVA'
+      import java.lang.instrument.*;
+      import java.security.ProtectionDomain;
+      import org.objectweb.asm.*;
+      public class Agent {
+        public static void premain(String args, Instrumentation inst) {
+          inst.addTransformer(new ClassFileTransformer() {
+            public byte[] transform(ClassLoader loader, String name, Class<?> cls,
+                ProtectionDomain domain, byte[] bytes) {
+              if (!"Demo".equals(name)) return null;
+              ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+              ClassVisitor visitor = new ClassVisitor(Opcodes.ASM9, writer) {
+                public MethodVisitor visitMethod(int access, String method, String desc,
+                    String signature, String[] exceptions) {
+                  MethodVisitor base = super.visitMethod(access,method,desc,signature,exceptions);
+                  if (!method.equals("output") || !desc.equals("(I)V")) return base;
+                  return new MethodVisitor(Opcodes.ASM9,base) {
+                    public void visitCode() {
+                      super.visitCode();
+                      visitMethodInsn(Opcodes.INVOKESTATIC,"Demo","boom","()V",false);
+                    }
+                  };
+                }
+              };
+              new ClassReader(bytes).accept(visitor,0);
+              return writer.toByteArray();
+            }
+          });
+        }
+      }
+      JAVA
+      javac --release 17 -cp asm-9.7.jar Agent.java
+      printf 'Premain-Class: Agent\nClass-Path: asm-9.7.jar\n\n' > manifest.mf
+      jar cfm agent.jar manifest.mf Agent*.class
+      jar tf agent.jar
+  - name: Run with the agent and check all three signals
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab12
+      java -javaagent:agent.jar Demo > chaos.txt 2> chaos-errors.txt
+      echo "exit=$?"; wc -l chaos.txt
+      cat chaos-errors.txt
+    expect: >-
+      exit=0 and 0 lines in chaos.txt, plus ten "java.io.IOException: CHAOS" lines: the exit status missed the failed work.
+  - name: Verify as a user would, without the agent
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab12
+      java Demo > recovered.txt
+      test "$(wc -l < recovered.txt)" -eq 10 && echo 'output check passed'
+setup:
+  - name: Prepare the pinned ASM dependency
+    command: |
+      mkdir -p "$HOME/labs/lab12"
+      curl -fsSL -o "$HOME/labs/lab12/asm-9.7.jar" https://repo.maven.apache.org/maven2/org/ow2/asm/asm/9.7/asm-9.7.jar
+verify:
+  - name: Verify JVM instrumentation prerequisites
+    command: |
+      javac -version 2>&1 | grep -q '17'
+      test -s "$HOME/labs/lab12/asm-9.7.jar"
+reset:
+  - name: Remove only Lab 12 generated artifacts
+    command: rm -f "$HOME/labs/lab12"/{Demo.class,Agent*.class,agent.jar,manifest.mf,baseline.txt,chaos.txt,chaos-errors.txt,recovered.txt}

@@ -1,0 +1,64 @@
+title: 'Lab 02 — Signals and memory-limit kills'
+concept: >-
+  Signals notify processes of events or request termination. SIGTERM gives an application an opportunity to handle shutdown and release resources; SIGKILL cannot be caught or ignored. Bash normally reports a fatal signal as 128 plus its number: 143 for SIGTERM and 137 for SIGKILL. These values identify how execution ended, not who sent the signal or why.
+mechanism: >-
+  A cgroup memory limit constrains a group independently of total free host memory. When its memory demand cannot be satisfied through reclaim, an out-of-memory (OOM) kill may terminate a member. Separately, virtual address space describes mappings, while resident set size (RSS) describes pages currently in RAM. The mmap comparison delays touching pages so you can observe these two quantities diverge.
+solution: 'Follow Lab 2: compare TERM/KILL/FPE, run the bounded ce-lab02 unit, then use pages.py to compare VSZ and RSS.'
+verify_note: 'The cgroup v2 memory controller is available and no ce-lab02 transient unit remains active.'
+commands:
+  - name: Compare TERM, KILL and FPE exit statuses (interactive Bash, no set -e)
+    where: VM terminal 1
+    run: !unsafe |
+      sleep 60 & victim=$!; kill -TERM "$victim"; wait "$victim"; echo "TERM=$?"
+      sleep 60 & victim=$!; kill -KILL "$victim"; wait "$victim"; echo "KILL=$?"
+      python3 -c 'import os,signal; os.kill(os.getpid(),signal.SIGFPE)'; echo "FPE=$?"
+    expect: >-
+      TERM=143, KILL=137, FPE=136.
+  - name: Cause a cgroup-bounded OOM and collect unit plus kernel evidence
+    where: VM terminal 1
+    run: !unsafe |
+      since=$(date --iso-8601=seconds)
+      sudo systemd-run --unit=ce-lab02 --wait --collect \
+        -p MemoryMax=128M -p MemorySwapMax=0 -p RuntimeMaxSec=20s \
+        /usr/bin/python3 -c 'a=[]
+      while True: a.append(b"x"*1000000)'
+      sudo journalctl -u ce-lab02 --since "$since" --no-pager
+      sudo journalctl -k --since "$since" --no-pager | grep -iE 'oom|killed process'
+      sudo journalctl -u systemd-oomd --since "$since" --no-pager
+    expect: >-
+      The unit fails before the 20 s bound, with oom-kill in the unit log and a matching kernel line. An oomd entry means userspace acted instead.
+  - name: Compare virtual size (VSZ) with touched memory (RSS)
+    where: VM terminal 1
+    run: !unsafe |
+      mkdir -p ~/labs/lab02 && cd ~/labs/lab02
+      cat > pages.py <<'PY'
+      import mmap, os, time
+      n=256*1024*1024
+      m=mmap.mmap(-1,n)
+      print('PID',os.getpid(),'mapped, not yet touched',flush=True)
+      time.sleep(10)
+      for offset in range(0,n,mmap.PAGESIZE): m[offset]=1
+      print('touched every page',flush=True)
+      time.sleep(10)
+      PY
+      python3 pages.py & victim=$!
+      for i in $(seq 1 20); do ps -p "$victim" -o pid,vsz,rss,comm; sleep 1; done
+      wait "$victim"
+    expect: >-
+      VSZ jumps by about 256 MiB at mapping; RSS rises only after "touched every page".
+  - name: Cleanup, only if something is still running
+    where: VM terminal 1, same shell
+    run: !unsafe |
+      sudo systemctl stop ce-lab02.service 2>/dev/null || true
+      kill -0 "$victim" 2>/dev/null && kill "$victim"
+setup:
+  - name: Create the Lab 02 workspace
+    command: mkdir -p "$HOME/labs/lab02"
+verify:
+  - name: Verify memory-control readiness
+    command: |
+      grep -qw memory /sys/fs/cgroup/cgroup.controllers
+      ! systemctl is-active --quiet ce-lab02.service
+reset:
+  - name: Stop the exact bounded unit
+    command: sudo systemctl stop ce-lab02.service 2>/dev/null || true

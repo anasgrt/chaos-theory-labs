@@ -1,0 +1,166 @@
+title: 'Lab 13 — Race exposure with latency'
+concept: >-
+  A read-modify-write sequence spans several operations: read the old value, calculate a replacement, then save it. Two requests can both read the same value and each write a different replacement, losing one update. Individually atomic GET and SET commands do not make the whole sequence atomic. Concurrency exposes this gap even if every request returns successfully.
+mechanism: >-
+  The Redis wrapper delays GET and SET, increasing the time in which requests can overlap. The fix replaces client-side rewriting with list operations grouped in MULTI/EXEC, preventing other clients' commands from interleaving within that transaction. Plain pipelining only batches requests and does not provide that guarantee. Because the fix changes the client interface, the latency injection must move to the transaction boundary too.
+solution: 'Follow Lab 13 to enable the wrapper, compare disabled/zero/0.1-second latency, reproduce the race, then move the latency boundary to the transactional list implementation.'
+verify_note: 'Redis responds, the isolated app source and venv exist, and no recorded Lab 13 server remains active after recovery.'
+commands:
+  - name: Enable the book latency wrapper and define exact-PID helpers
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab13
+      redis-cli ping
+      cp app-original.py app.py
+      sed -i 's/^#import chaos$/import chaos/; s/^#CACHE_CLIENT =/CACHE_CLIENT =/' app.py
+      grep -nE '^(import chaos|CACHE_CLIENT)' app.py
+      probe() {
+        curl -sS --max-time 3 -o /dev/null -w '%{http_code} %{time_total}\n' \
+          -b sessionID=ce-lab13 -d query=apple http://127.0.0.1:5000/search
+      }
+      restart_app() {
+        if [ -n "${apppid:-}" ]; then kill "$apppid" 2>/dev/null; wait "$apppid" 2>/dev/null; fi
+        env -u CHAOS -u CHAOS_DELAY_SECONDS "$@" .venv/bin/flask --app app run --no-reload > server.log 2>&1 & apppid=$!
+        echo "$apppid" > server.pid
+        for _ in $(seq 1 30); do
+          curl -fsS --max-time 1 -o /dev/null http://127.0.0.1:5000/ && return 0
+          sleep 0.5
+        done
+        echo 'Flask did not start; read server.log' >&2
+        return 1
+      }
+    expect: >-
+      Two matching lines: import chaos and CACHE_CLIENT = chaos.attach_chaos_if_enabled(CACHE_CLIENT).
+  - name: Start without CHAOS and pass the checkpoint
+    where: VM terminal 1, same shell
+    run: !unsafe |
+      restart_app
+      curl -fsS --max-time 3 -b sessionID=ce-lab13 -d query=apple http://127.0.0.1:5000/search
+      for i in 1 2 3 4 5; do probe; done
+    expect: >-
+      HTML containing "Since you're interested in" followed by apple (list quotes are HTML-escaped).
+  - name: Compare zero delay (wrapper overhead) with 0.1-second delay
+    where: VM terminal 1, same shell
+    run: !unsafe |
+      restart_app CHAOS=1 CHAOS_DELAY_SECONDS=0
+      for i in 1 2 3 4 5; do probe; done
+      restart_app CHAOS=1 CHAOS_DELAY_SECONDS=0.1
+      for i in 1 2 3 4 5; do probe; done
+    expect: >-
+      With 0.1 s, each /search is about 0.2 s slower (GET delay plus SET delay).
+  - name: Send six concurrent updates to one key, with the 0.1-second delay still active
+    where: VM terminal 1, same shell
+    run: !unsafe |
+      for run in $(seq 1 5); do
+        redis-cli del ce-lab13-race >/dev/null
+        requests=()
+        for q in a b c d e f; do
+          curl -fsS --max-time 5 -o /dev/null -b sessionID=ce-lab13-race \
+            -d "query=$q" http://127.0.0.1:5000/search & requests+=("$!")
+        done
+        for pid in "${requests[@]}"; do wait "$pid"; done
+        redis-cli get ce-lab13-race
+      done
+    expect: >-
+      Some runs store fewer than three queries in the JSON list: overlapping read-modify-write lost updates.
+  - name: Repeat the race without CHAOS
+    where: VM terminal 1, same shell
+    run: !unsafe |
+      restart_app
+      for run in $(seq 1 5); do
+        redis-cli del ce-lab13-race >/dev/null
+        requests=()
+        for q in a b c d e f; do
+          curl -fsS --max-time 5 -o /dev/null -b sessionID=ce-lab13-race \
+            -d "query=$q" http://127.0.0.1:5000/search & requests+=("$!")
+        done
+        for pid in "${requests[@]}"; do wait "$pid"; done
+        redis-cli get ce-lab13-race
+      done
+  - name: Apply the MULTI/EXEC fix with latency at the transaction boundary
+    where: VM terminal 1, same shell
+    run: !unsafe |
+      kill "$apppid"; wait "$apppid" 2>/dev/null; unset apppid
+      cp app-original.py app.py
+      sed -i 's/^#import chaos$/import chaos/; s/^#CACHE_CLIENT =/CACHE_CLIENT =/' app.py
+      python3 - <<'PY'
+      from pathlib import Path
+      path = Path('app.py')
+      source = path.read_text()
+      start = source.index('def store_interests(session, query):')
+      end = source.index('def recommend_other_products(')
+      fixed = """def store_interests(session, query):
+          client = CACHE_CLIENT.client if isinstance(CACHE_CLIENT, chaos.ChaosClient) else CACHE_CLIENT
+          key = 'ce-lab13-list:' + session
+          with client.pipeline(transaction=True) as pipe:
+              if query:
+                  pipe.lrem(key, 0, query)
+                  pipe.rpush(key, query)
+              pipe.ltrim(key, -3, -1)
+              pipe.lrange(key, 0, -1)
+              if os.environ.get('CHAOS'):
+                  time.sleep(float(os.environ.get('CHAOS_DELAY_SECONDS', '0')))
+              values = pipe.execute()[-1]
+          return [value.decode() for value in values]
+
+
+      """
+      path.write_text('import os, time\n' + source[:start] + fixed + source[end:])
+      PY
+      diff -u app-original.py app.py
+  - name: Rerun the race against the list key with the 0.1-second delay
+    where: VM terminal 1, same shell
+    run: !unsafe |
+      restart_app CHAOS=1 CHAOS_DELAY_SECONDS=0.1
+      for run in $(seq 1 5); do
+        redis-cli del ce-lab13-list:ce-lab13-race >/dev/null
+        requests=()
+        for q in a b c d e f; do
+          curl -fsS --max-time 5 -o /dev/null -b sessionID=ce-lab13-race \
+            -d "query=$q" http://127.0.0.1:5000/search & requests+=("$!")
+        done
+        for pid in "${requests[@]}"; do wait "$pid"; done
+        redis-cli lrange ce-lab13-list:ce-lab13-race 0 -1
+      done
+    expect: >-
+      Exactly three entries every run; order follows transaction execution, not launch order.
+  - name: Recheck injection coverage (zero versus 0.1 s)
+    where: VM terminal 1, same shell
+    run: !unsafe |
+      restart_app CHAOS=1 CHAOS_DELAY_SECONDS=0
+      for i in 1 2 3 4 5; do probe; done
+      restart_app CHAOS=1 CHAOS_DELAY_SECONDS=0.1
+      for i in 1 2 3 4 5; do probe; done
+    expect: >-
+      Now about 0.1 s slower per request: one delay per transaction, not two.
+  - name: Clean up the exact server and lab keys
+    where: VM terminal 1, same shell
+    run: !unsafe |
+      kill "$apppid"; wait "$apppid" 2>/dev/null || true
+      rm -f server.pid
+      redis-cli del ce-lab13 ce-lab13-race ce-lab13-list:ce-lab13 ce-lab13-list:ce-lab13-race
+      unset CHAOS CHAOS_DELAY_SECONDS
+setup:
+  - name: Prepare the isolated Flask source and virtual environment
+    command: |
+      sudo systemctl start redis-server
+      rm -rf "$HOME/labs/lab13"
+      cp -a "$HOME/labs/book/examples/app" "$HOME/labs/lab13"
+      cd "$HOME/labs/lab13"
+      python3 -m venv .venv
+      .venv/bin/pip install 'Flask==3.0.3' 'redis==5.0.8'
+      cp app.py app-original.py
+verify:
+  - name: Verify race-lab baseline prerequisites
+    command: |
+      redis-cli ping | grep -qx PONG
+      test -x "$HOME/labs/lab13/.venv/bin/flask"
+      test -f "$HOME/labs/lab13/app.py"
+reset:
+  - name: Stop only the Lab 13 server and remove its Redis keys
+    command: |
+      pid_file="$HOME/labs/lab13/server.pid"
+      if [[ -f "$pid_file" ]] && [[ "$(cat "$pid_file")" =~ ^[0-9]+$ ]]; then kill "$(cat "$pid_file")" 2>/dev/null || true; fi
+      rm -f "$pid_file"
+      redis-cli del ce-lab13 ce-lab13-race ce-lab13-list:ce-lab13 ce-lab13-list:ce-lab13-race >/dev/null 2>&1 || true
+      sudo systemctl stop redis-server

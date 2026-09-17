@@ -1,0 +1,89 @@
+title: 'Lab 01 — Refused versus silent dependency'
+concept: >-
+  A dependency can fail quickly, respond too slowly, or never respond within a useful time. These are different conditions for the caller. An exception handler only runs after an operation returns or raises; it cannot rescue a call that remains blocked. While waiting, requests may occupy worker slots or connections, reducing the application's ability to serve other users.
+mechanism: >-
+  In this lab, REJECT returns a TCP refusal while DROP silently discards traffic, leaving the client waiting for a response or timeout. A connection timeout limits connection establishment; a read timeout limits waiting on an established connection. The external watchdog bounds the demonstration. A whole-request deadline must also account for multiple dependency calls and retries, rather than restarting the full waiting budget at each step.
+solution: 'Use the Core experiment in Lab 1 to create the Python client, run the commented REJECT and DROP comparison, and record all three elapsed outcomes.'
+verify_note: 'Redis answers PONG and no ce-lab01 OUTPUT rule remains after recovery.'
+commands:
+  - name: Create the tiny Redis client and check the baseline
+    where: VM terminal 1
+    run: !unsafe |
+      redis-cli ping
+      mkdir -p ~/labs/lab01 && cd ~/labs/lab01
+      cat > client.py <<'PY'
+      import os, time, redis
+      from redis.retry import Retry
+      from redis.backoff import NoBackoff
+      t = float(os.environ['TIMEOUT']) if 'TIMEOUT' in os.environ else None
+      c = redis.Redis(host='127.0.0.1', port=6379,
+          socket_connect_timeout=t, socket_timeout=t,
+          retry=Retry(NoBackoff(), 0))
+      start = time.monotonic()
+      try:
+          print('OK', c.ping())
+      except redis.exceptions.RedisError as exc:
+          print('DEGRADED', type(exc).__name__)
+      print(f'elapsed={time.monotonic()-start:.3f}s')
+      PY
+      python3 client.py
+    expect: >-
+      PONG, then OK True.
+  - name: Save the bounded REJECT/DROP comparison script
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab01
+      cat > run.sh <<'SH'
+      #!/usr/bin/env bash
+      set -u
+      rule=(-p tcp -d 127.0.0.1 --dport 6379 -m comment --comment ce-lab01)
+      cleanup() {
+        sudo iptables -D OUTPUT "${rule[@]}" -j DROP 2>/dev/null || true
+        sudo iptables -D OUTPUT "${rule[@]}" -j REJECT --reject-with tcp-reset 2>/dev/null || true
+      }
+      trap cleanup EXIT
+      trap 'exit 130' INT TERM
+      sudo -v || exit 1
+      cleanup
+      echo 'REJECT'
+      sudo iptables -I OUTPUT 1 "${rule[@]}" -j REJECT --reject-with tcp-reset || exit 1
+      timeout 5s python3 client.py; echo "exit=$?"
+      cleanup
+      echo 'DROP, no application timeout'
+      sudo iptables -I OUTPUT 1 "${rule[@]}" -j DROP || exit 1
+      sudo iptables -nvL OUTPUT --line-numbers
+      timeout 5s python3 client.py; echo "exit=$?"
+      echo 'DROP, 0.5-second application timeout'
+      TIMEOUT=0.5 timeout 5s python3 client.py; echo "exit=$?"
+      SH
+  - name: Predict, run, then prove recovery
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab01
+      bash run.sh
+      python3 client.py
+      sudo iptables -S OUTPUT | grep ce-lab01; echo "grep exit=$? (1 means no lab rule remains)"
+    expect: >-
+      REJECT fails fast. DROP without a timeout is stopped by the external watchdog (exit=124). DROP with TIMEOUT=0.5 prints DEGRADED near 0.5 s. The final client prints OK True.
+  - name: Manual rule removal, only if run.sh was killed
+    where: VM terminal 2
+    run: !unsafe |
+      sudo iptables -D OUTPUT -p tcp -d 127.0.0.1 --dport 6379 -m comment --comment ce-lab01 -j DROP
+      sudo iptables -D OUTPUT -p tcp -d 127.0.0.1 --dport 6379 -m comment --comment ce-lab01 -j REJECT --reject-with tcp-reset
+      python3 ~/labs/lab01/client.py
+setup:
+  - name: Start the dedicated Redis dependency
+    command: sudo systemctl start redis-server
+verify:
+  - name: Verify Redis and firewall recovery
+    command: |
+      redis-cli ping | grep -qx PONG
+      ! sudo iptables -S OUTPUT | grep -q -- '--comment ce-lab01'
+reset:
+  - name: Remove only Lab 01 firewall rules
+    command: |
+      rule=(-p tcp -d 127.0.0.1 --dport 6379 -m comment --comment ce-lab01)
+      sudo iptables -D OUTPUT "${rule[@]}" -j DROP 2>/dev/null || true
+      sudo iptables -D OUTPUT "${rule[@]}" -j REJECT --reject-with tcp-reset 2>/dev/null || true
+  - name: Return Redis to its shared baseline state
+    command: sudo systemctl stop redis-server

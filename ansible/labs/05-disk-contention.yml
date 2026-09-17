@@ -1,0 +1,111 @@
+title: 'Lab 05 — Disk contention without guessing capacity'
+concept: >-
+  Storage has separate capacity and performance limits: how much data fits, and how quickly operations finish. Throughput is data transferred per second; latency is time per operation. Competing I/O can increase queues and delay a database even when plenty of space remains. Application impact depends on whether the tested request actually needs that storage.
+mechanism: >-
+  The finite fio writer competes with the WordPress/MySQL stack when they share backing storage. Calibration establishes throughput for this file, access pattern and VM; changing block size or read/write mix changes the meaning of that number. Direct I/O reduces operating-system page-cache effects but not every cache. A cached page may show little slowdown even while the writer produces substantial disk activity.
+solution: 'Complete the WordPress installer through the documented SSH tunnel, then run Lab 5 baseline, calibration, loaded, and recovery probes.'
+verify_note: 'MySQL is healthy and WordPress responds on loopback; HTTP may redirect to the installer until you complete it.'
+commands:
+  - name: Open the SSH tunnel for the WordPress installer (leave it running)
+    where: Mac host, project folder
+    run: !unsafe |
+      vagrant ssh -- -N -L 8080:127.0.0.1:8080
+  - name: Complete the installer with disposable credentials
+    where: Browser on the Mac
+    run: !unsafe |
+      http://localhost:8080
+  - name: Check the fixture
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab05
+      docker compose ps
+      curl -sS --max-time 10 -o /dev/null -w '%{http_code}\n' http://localhost:8080/
+    expect: >-
+      db is healthy and the probe returns 200. A 302 means the installer is not complete. On failure run docker compose logs --tail=40.
+  - name: Record the baseline three times
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab05
+      for run in 1 2 3; do ab -t 15 -c 1 -l http://localhost:8080/ | tee "baseline-$run.txt"; done
+  - name: Watch disk activity while calibrating
+    where: VM terminal 2
+    run: !unsafe |
+      iostat -xz 1
+  - name: Calibrate the bounded fio writer
+    where: VM terminal 1
+    run: !unsafe |
+      fio --name=calibrate --filename="$HOME/labs/lab05/fio.bin" --size=512M \
+        --rw=write --bs=1M --direct=1 --time_based --runtime=15 --group_reporting | tee ~/labs/lab05/calibrate.txt
+    expect: >-
+      Record the WRITE bw value. It describes this file, VM and access pattern only.
+  - name: Repeat the probe under the same writer, then after it
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab05
+      fio --name=neighbour --filename="$HOME/labs/lab05/fio.bin" --size=512M \
+        --rw=write --bs=1M --direct=1 --time_based --runtime=25 --group_reporting > fio.txt &
+      writer=$!
+      sleep 3
+      ab -t 15 -c 1 -l http://localhost:8080/ | tee loaded.txt
+      wait "$writer"
+      ab -t 15 -c 1 -l http://localhost:8080/ | tee recovered.txt
+  - name: Compare throughput, errors and latency
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab05
+      grep -HE 'Requests per second|Failed requests|Non-2xx|Time per request:.*mean\)$|^ +(50|95|99)%' baseline-*.txt loaded.txt recovered.txt
+      grep -E 'WRITE:' fio.txt
+  - name: Remove the fio file and keep the stack for Labs 6 and 9
+    where: VM terminal 1
+    run: !unsafe |
+      rm -f ~/labs/lab05/fio.bin
+setup:
+  - name: Start the isolated WordPress and MySQL fixture
+    command: |
+      mkdir -p "$HOME/labs/lab05"
+      cat > "$HOME/labs/lab05/compose.yaml" <<'YAML'
+      name: ce-lab05
+      services:
+        db:
+          image: mysql:8.4
+          environment:
+            MYSQL_ROOT_PASSWORD: lab-only-root
+            MYSQL_DATABASE: wordpress
+            MYSQL_USER: wordpress
+            MYSQL_PASSWORD: lab-only-wordpress
+          volumes: [dbdata:/var/lib/mysql]
+          healthcheck:
+            test: [CMD-SHELL, 'mysqladmin ping -h 127.0.0.1 --silent']
+            interval: 5s
+            timeout: 3s
+            retries: 30
+        wordpress:
+          image: wordpress:6-apache
+          depends_on:
+            db: {condition: service_healthy}
+          ports: ['127.0.0.1:8080:80']
+          environment:
+            WORDPRESS_DB_HOST: db
+            WORDPRESS_DB_USER: wordpress
+            WORDPRESS_DB_PASSWORD: lab-only-wordpress
+            WORDPRESS_DB_NAME: wordpress
+          volumes: [wp:/var/www/html]
+      volumes: {dbdata: {}, wp: {}}
+      YAML
+      cd "$HOME/labs/lab05"
+      docker compose up -d
+      for _ in $(seq 1 36); do
+        docker inspect ce-lab05-db-1 | jq -e -r '.[0].State.Health.Status == "healthy"' >/dev/null && exit 0
+        sleep 5
+      done
+      exit 1
+verify:
+  - name: Verify WordPress fixture readiness
+    command: |
+      docker inspect ce-lab05-db-1 | jq -e -r '.[0].State.Health.Status == "healthy"' >/dev/null
+      curl -sS --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/ | grep -Eq '^(200|301|302)$'
+reset:
+  - name: Stop the shared WordPress fixture without deleting volumes
+    command: |
+      rm -f "$HOME/labs/lab05/fio.bin"
+      test -f "$HOME/labs/lab05/compose.yaml" && docker compose -f "$HOME/labs/lab05/compose.yaml" down || true

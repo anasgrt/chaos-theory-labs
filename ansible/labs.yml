@@ -1,0 +1,97 @@
+---
+- name: Run one Chaos Lab lifecycle action
+  hosts: chaos_labs
+  gather_facts: false
+  vars:
+    lab_action: setup
+    lab_definition: ''
+    lab_solution_output: ''
+
+  pre_tasks:
+    - name: Validate the lifecycle action
+      ansible.builtin.assert:
+        that: lab_action in ['setup', 'verify', 'solution', 'reset']
+        fail_msg: Use setup, verify, solution, or reset.
+
+    - name: Validate the selected lab definition
+      ansible.builtin.assert:
+        that: lab_definition | length > 0
+        fail_msg: Select a lab through ansible/run-lab.sh.
+
+    - name: Load the selected lab definition
+      ansible.builtin.include_vars:
+        file: "{{ lab_definition }}"
+        name: selected_lab
+
+  tasks:
+    - name: Show the lab model before setup
+      ansible.builtin.debug:
+        msg:
+          - "{{ selected_lab.title }}"
+          - "Concept: {{ selected_lab.concept }}"
+          - "Mechanism: {{ selected_lab.mechanism }}"
+      when: lab_action == 'setup'
+
+    - name: Reset prior state before setup
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ item.command }}
+      args:
+        executable: /bin/bash
+      loop: "{{ selected_lab.reset | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: lab_action == 'setup'
+
+    - name: Set up the selected lab
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ item.command }}
+      args:
+        executable: /bin/bash
+      loop: "{{ selected_lab.setup | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: lab_action == 'setup'
+
+    - name: Verify the selected lab
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ item.command }}
+      args:
+        executable: /bin/bash
+      loop: "{{ selected_lab.verify | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: lab_action == 'verify'
+      changed_when: false
+
+    - name: Reset the selected lab
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ item.command }}
+      args:
+        executable: /bin/bash
+      loop: "{{ selected_lab.reset | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: lab_action == 'reset'
+
+    # Rendered as plain text on the controller: debug output would JSON-escape
+    # the quotes and newlines that heredocs and scripts need to stay pasteable.
+    - name: Render the solution path and practical commands
+      ansible.builtin.template:
+        src: solution.txt.j2
+        dest: "{{ lab_solution_output }}"
+        mode: '0600'
+      delegate_to: localhost
+      when: lab_action == 'solution' and lab_solution_output | length > 0
+
+    - name: Show the solution path
+      ansible.builtin.debug:
+        msg:
+          - "{{ selected_lab.title }}"
+          - "Solution: {{ selected_lab.solution }}"
+          - "Verify: {{ selected_lab.verify_note }}"
+          - Use ansible/run-lab.sh to print the practical commands.
+      when: lab_action == 'solution' and lab_solution_output | length == 0
