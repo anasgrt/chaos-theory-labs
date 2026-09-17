@@ -1,0 +1,176 @@
+title: 'Lab 07 — Delay from outside the target container'
+concept: >-
+  A network namespace contains interfaces, routes and packet-handling configuration. Containers sharing that namespace share those network settings even if they have separate filesystems. This lets a helper supply diagnostic tools without modifying the application's image. It also means a helper's networking changes can directly affect the target, so the chosen namespace defines the actual scope.
+mechanism: >-
+  The host can enter MySQL's network namespace, or a helper container can join it and use NET_ADMIN permission to configure tc. Both methods install a netem qdisc on the same target interface, delaying database egress. Pumba automates related targeting and cleanup. The qdisc remains attached to the interface after the helper exits; deleting the helper alone does not restore traffic.
+task:
+  question: >-
+    Can you slow MySQL's network without installing anything inside the MySQL container, and does removing the helper container undo the fault?
+  brief:
+    theory:
+      - >-
+        The slow Dockerized app (Ch. 5 §5.10–5.11): two plausible causes — CPU starvation (read cpu.stat) and fragility to database network slowness. "It's a common gotcha to make assumptions based on… test environments and local databases, and then be surprised when networking slows down in the real world."
+      - >-
+        Docker networking (Ch. 5 §5.8): none gives no networking, host shares the host's stack, and bridge creates docker0 plus, for each container, a net namespace holding a virtual interface connected to the bridge and a loopback. Interfaces in a net namespace are accessible only to processes in that namespace.
+      - >-
+        Entering or sharing a net namespace (Ch. 5 §5.4.4, §5.8): nsenter --net=/proc/$CONTAINER_PID/ns/net runs a host command inside a container's network namespace (ip addr looks identical to inside). A second process — or container — can join an existing container's net namespace and manipulate its interfaces, including running tc against them.
+      - >-
+        tc and netem (cheat sheet §5 and §15 glossary): a qdisc is a queueing discipline — a packet scheduler, nothing to do with disks — and netem is the tc network-emulator qdisc for delay, loss, duplication, corruption and reordering. tc qdisc add dev eth0 root netem delay … affects the whole interface; tc qdisc del dev eth0 root removes it.
+      - >-
+        Pumba's --tc-image trick (Ch. 5 §5.11): pumba netem runs tc inside the target, which rarely ships tc, so --tc-image starts a throwaway container that has tc in the target's net namespace. docker ps shows one helper that added the qdisc and another that deleted it — the teardown is a first-class part of the injection, and --duration makes it automatic.
+      - >-
+        Latency multiplies (Card 5.5, cheat sheet §13): 100 ms on MySQL egress took Ghost from 26.328 ms to 490.128 ms mean, a factor of more than 18, because each database round trip absorbs the delay. A 1 ms control run (36.212 ms) bounded the injector's own overhead, so the result was plausible, not an artefact.
+      - >-
+        Capabilities (Ch. 5 §5.8.1): Docker's default set of 14 capabilities does not include cap_net_admin, so a helper that changes another container's qdisc must be granted it explicitly. "It's always a good idea to give the container only what it really needs."
+    in_this_lab:
+      - >-
+        Setup starts WordPress and MySQL with Docker Compose (project ce-lab07, WordPress on 127.0.0.1:8080) and completes the WordPress installer, so / returns 200 and each page load queries MySQL.
+      - >-
+        This lab adds a root netem qdisc to MySQL's eth0, so it delays everything MySQL sends (its replies to WordPress), not only traffic to one port.
+      - >-
+        ce-tc:lab is Ubuntu with iproute2 and ENTRYPOINT ["tc"], so docker run ... ce-tc:lab qdisc add ... runs tc qdisc add. --rm deletes the helper container as soon as tc exits.
+      - >-
+        dbnet runs a command in MySQL's network namespace from the host. Both methods act on the same eth0, so the host view shows whether the helper's change outlived the helper.
+      - >-
+        Start only from the default qdisc (noqueue): a leftover root qdisc makes the add fail or contaminates the baseline with an old delay.
+  predict: >-
+    Latency added to the WordPress page by a 25 ms delay on all MySQL egress, and whether the qdisc is still attached after the --rm helper exits.
+  steps:
+    - >-
+      Enter MySQL's network namespace from the host; confirm eth0 has the default qdisc and measure http://localhost:8080/.
+    - >-
+      Add netem delay 25ms from the host; read the counter, measure, delete the qdisc, measure again.
+    - >-
+      Repeat the injection from the ce-tc:lab helper using --network container:<db> and --cap-add NET_ADMIN.
+    - >-
+      After the helper exits, check the qdisc from the host and measure the page.
+    - >-
+      Delete the qdisc and confirm the baseline returns.
+  answer_with: >-
+    Page latency for baseline, host method, helper method and recovery, plus qdisc output showing netem still attached after the helper exited. Explain why tc run from another container changes MySQL's traffic.
+solution: 'Run both Lab 7 injection methods, confirm qdisc counters and HTTP impact, then delete the MySQL namespace qdisc before removing the helper.'
+verify_note: 'MySQL is healthy, WordPress returns 200, the helper image exists, and MySQL has no netem qdisc.'
+commands:
+  - name: Resolve MySQL and measure WordPress
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab07
+      DB=$(docker compose ps -q db)
+      PID=$(docker inspect -f '{{.State.Pid}}' "$DB")
+      dbnet() { [ "$PID" -gt 1 ] || return 1; sudo nsenter --target "$PID" --net -- "$@"; }
+      dbnet tc qdisc show dev eth0
+      source ~/labs/common.sh
+      measure http://localhost:8080/ 10
+    expect: >-
+      eth0 shows only the default qdisc (noqueue). Do not continue if a custom root qdisc exists.
+  - name: Add 25 ms on all MySQL egress from the host, measure, recover
+    where: VM terminal 1, same shell
+    run: !unsafe |
+      dbnet tc qdisc add dev eth0 root netem delay 25ms
+      dbnet tc -s qdisc show dev eth0
+      measure http://localhost:8080/ 10
+      dbnet tc qdisc del dev eth0 root
+      measure http://localhost:8080/ 10
+    expect: >-
+      Page latency rises by more than 25 ms while the netem counter grows, then returns to baseline.
+  - name: Repeat the same injection from a helper container that joins the MySQL network namespace
+    where: VM terminal 1, same shell
+    run: !unsafe |
+      docker image inspect ce-tc:lab --format '{{.Config.Entrypoint}}'
+      docker run --rm --network "container:$DB" --cap-add NET_ADMIN ce-tc:lab qdisc add dev eth0 root netem delay 25ms
+      docker run --rm --network "container:$DB" --cap-add NET_ADMIN ce-tc:lab -s qdisc show dev eth0
+      measure http://localhost:8080/ 10
+      dbnet tc qdisc show dev eth0
+      docker run --rm --network "container:$DB" --cap-add NET_ADMIN ce-tc:lab qdisc del dev eth0 root
+    expect: >-
+      Entrypoint [tc]. The host still sees the netem qdisc after each --rm helper exited: removing the helper does not undo tc.
+  - name: Confirm recovery
+    where: VM terminal 1, same shell
+    run: !unsafe |
+      dbnet tc qdisc show dev eth0
+      measure http://localhost:8080/ 10
+    expect: >-
+      eth0 is back to the default qdisc and latency matches the baseline.
+setup:
+  - name: Start the WordPress and MySQL fixture
+    command: |
+      mkdir -p "$HOME/labs/lab07"
+      cat > "$HOME/labs/lab07/compose.yaml" <<'YAML'
+      name: ce-lab07
+      services:
+        db:
+          image: mysql:8.4
+          environment:
+            MYSQL_ROOT_PASSWORD: lab-only-root
+            MYSQL_DATABASE: wordpress
+            MYSQL_USER: wordpress
+            MYSQL_PASSWORD: lab-only-wordpress
+          volumes: [dbdata:/var/lib/mysql]
+          healthcheck:
+            test: [CMD-SHELL, 'mysqladmin ping -h 127.0.0.1 --silent']
+            interval: 5s
+            timeout: 3s
+            retries: 30
+        wordpress:
+          image: wordpress:6-apache
+          depends_on:
+            db: {condition: service_healthy}
+          ports: ['127.0.0.1:8080:80']
+          environment:
+            WORDPRESS_DB_HOST: db
+            WORDPRESS_DB_USER: wordpress
+            WORDPRESS_DB_PASSWORD: lab-only-wordpress
+            WORDPRESS_DB_NAME: wordpress
+          volumes: [wp:/var/www/html]
+      volumes: {dbdata: {}, wp: {}}
+      YAML
+      cd "$HOME/labs/lab07"
+      docker compose up -d
+      for _ in $(seq 1 36); do
+        docker inspect ce-lab07-db-1 | jq -e '.[0].State.Health.Status == "healthy"' >/dev/null && exit 0
+        sleep 5
+      done
+      echo 'MySQL did not become healthy; read docker compose logs db.' >&2
+      exit 1
+  - name: Complete the WordPress installer with disposable credentials
+    command: |
+      code=000
+      for _ in $(seq 1 30); do
+        code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' http://localhost:8080/ || true)
+        [[ "$code" =~ ^(200|302)$ ]] && break
+        sleep 2
+      done
+      if [[ "$code" == 302 ]]; then
+        curl -fsS --max-time 60 -o /dev/null "http://localhost:8080/wp-admin/install.php?step=2" \
+          --data-urlencode weblog_title=ce-lab07 --data-urlencode user_name=labadmin \
+          --data-urlencode admin_password=lab-only-Pass-123 --data-urlencode admin_password2=lab-only-Pass-123 \
+          --data-urlencode pw_weak=1 --data-urlencode admin_email=lab@example.com --data-urlencode blog_public=0
+      fi
+      test "$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' http://localhost:8080/)" = 200
+  - name: Build the explicit tc helper image
+    command: |
+      mkdir -p "$HOME/labs/lab07/tc-helper"
+      cat > "$HOME/labs/lab07/tc-helper/Dockerfile" <<'DOCKERFILE'
+      FROM ubuntu:24.04
+      RUN apt-get update && apt-get install -y iproute2 && rm -rf /var/lib/apt/lists/*
+      ENTRYPOINT ["tc"]
+      DOCKERFILE
+      # Host networking keeps apt DNS working even on a VM provisioned before the shared Docker DNS fix.
+      docker build --network host -t ce-tc:lab "$HOME/labs/lab07/tc-helper"
+verify:
+  - name: Verify the WordPress fixture, helper image and MySQL network recovery
+    command: |
+      docker inspect ce-lab07-db-1 | jq -e '.[0].State.Health.Status == "healthy"' >/dev/null
+      docker image inspect ce-tc:lab >/dev/null
+      test "$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/)" = 200
+      db_pid=$(docker inspect ce-lab07-db-1 | jq -er '.[0].State.Pid')
+      ! sudo nsenter --target "$db_pid" --net -- tc qdisc show dev eth0 | grep -q netem
+reset:
+  - name: Remove the MySQL qdisc, the helper image and the running stack (volumes are kept)
+    command: |
+      db_pid=$(docker inspect ce-lab07-db-1 2>/dev/null | jq -er '.[0].State.Pid' 2>/dev/null || true)
+      if [[ "$db_pid" =~ ^[2-9][0-9]*$ ]]; then
+        sudo nsenter --target "$db_pid" --net -- tc qdisc del dev eth0 root 2>/dev/null || true
+      fi
+      docker image rm ce-tc:lab 2>/dev/null || true
+      if [[ -f "$HOME/labs/lab07/compose.yaml" ]]; then docker compose -f "$HOME/labs/lab07/compose.yaml" down; fi

@@ -2,7 +2,50 @@ title: 'Lab 03 — Restart limit and proxy availability'
 concept: >-
   A process supervisor and a load balancer protect different parts of availability. systemd can restart a crashed backend; NGINX can direct requests toward other usable backends. Redundancy helps only while enough working capacity remains. A successful request through the proxy can therefore conceal a failed instance, and a running process still needs to serve correct responses.
 mechanism: >-
-  systemd checks both the restart policy and the permitted number of starts within a configured interval. Rapid repeated crashes can exhaust this allowance and leave a unit in start-limit-hit despite Restart=always. The remaining backend may carry requests until it reaches its own limit. Comparing isolated crashes with repeated crashes exposes how restart timing and backend availability interact.
+  systemd checks both the restart policy and the permitted number of starts within a configured interval. Rapid repeated crashes can exhaust this allowance and leave a unit failed, with no further restarts, despite Restart=always. The remaining backend may carry requests until it reaches its own limit. Comparing isolated crashes with repeated crashes exposes how restart timing and backend availability interact.
+task:
+  question: >-
+    Backends ce-lab03-a and ce-lab03-b run with Restart=always behind NGINX on 127.0.0.1:8003. If they crash repeatedly, does systemd keep restarting them, and when do users of the proxy actually notice?
+  brief:
+    theory:
+      - >-
+        The system as a black box (Ch. 2 §2.2, §2.4): an NGINX load balancer in front of two identical Python API instances. When an instance is unavailable the request fails, the load balancer retransmits to the other instance, and the internal failure should be invisible to the user. "Components dying is a norm, not an exception", so test that clients see no errors, not that processes never die.
+      - >-
+        Load-balancer ejection (Ch. 2 §2.4): max_fails=1 means a single error response takes that instance out of the pool; fail_timeout=1s keeps it out for 1 second before it returns. The retry to the other instance is the only thing that hides instance death — if both are unavailable at once, nothing is left to retry onto.
+      - >-
+        A pass proves only its conditions (Card 2.1): killing A, waiting 2 s, then killing B gave 50,000 requests and 0 failed, because NGINX's retry plus systemd's restart covered a single, spaced-out death. The author chose the 2-second sleep precisely to make it pass.
+      - >-
+        Restart=always is not always (Ch. 2 §2.6): systemd defaults are DefaultStartLimitIntervalSec=10s and DefaultStartLimitBurst=5 — only five restarts inside a 10-second moving window. Six kills 1.25 s apart is one over the limit, so the unit ends in failed (Result: start-limit-hit) with "Start request repeated too quickly" in the journal, and clients see errors once both instances are down.
+      - >-
+        Read the defaults (Card 2.2): a restart policy has an implicit give-up threshold, and a crash loop is exactly the condition that trips it. Read the supervisor's defaults, not just the directive you wrote.
+      - >-
+        The fix and its control group (Ch. 2 §2.6): StartLimitIntervalSec=0 in the [Unit] section plus daemon-reload makes restarts unlimited. Patching only A gives a control group in one run: A active, B still failed.
+      - >-
+        The double-edged lesson (Ch. 2 §2.6, Card 2.2): unlimited restarts mask a crashing application — "our friends from Glanden might never fix it, because their clients are no longer complaining." Keep restart counts on a dashboard and alert on them; Failed requests is the right kind of metric because it is user-visible, not implementation-visible (Card 2.1).
+    in_this_lab:
+      - >-
+        ce-lab03-a (127.0.0.1:8001) and ce-lab03-b (:8002) use Restart=always, RestartSec=200ms, StartLimitIntervalSec=20 and StartLimitBurst=4: a fifth start inside 20 s is refused. The proxy listens on 127.0.0.1:8003.
+      - >-
+        systemctl kill --kill-whom=main --signal=KILL targets only that unit's main process, not anything whose name or port merely matches (a narrow blast radius).
+      - >-
+        systemd 255 on this VM logs the limit as "Start request repeated too quickly" and leaves ActiveState=failed, but the Result property keeps the last crash reason (signal) instead of the book's start-limit-hit. NRestarts counts automatic restarts. A failed unit stays down until systemctl reset-failed (or the interval passes) and a new start.
+      - >-
+        With one backend up, NGINX sends the request to the other one and clients still get 200. With both down it has no working upstream and returns 502; curl prints 000 when no response arrives before its timeout.
+  predict: >-
+    After one kill and after six quick kills of A: A's ActiveState, Result and NRestarts, and the proxy's HTTP codes. Then the same once B also crashes six times.
+  steps:
+    - >-
+      Measure the proxy baseline on http://127.0.0.1:8003/ (expect 200).
+    - >-
+      SIGKILL backend A once, then six times about 1 s apart; read ActiveState, Result and NRestarts.
+    - >-
+      Record 30 s of proxy HTTP codes while you repeat the six-kill loop against B.
+    - >-
+      Recover: systemctl reset-failed, start both units, confirm HTTP 200.
+    - >-
+      Optional: set StartLimitIntervalSec=0 on A and repeat its kill loop.
+  answer_with: >-
+    Backend state, restart count and client HTTP codes recorded separately for each phase, including the "Start request repeated too quickly" log line and the 502/000 count. Explain why a 200 from the proxy did not prove A had recovered.
 solution: 'Use Lab 3 to kill each named backend, inspect ActiveState, Result and NRestarts, then measure the proxy before and after reset-failed.'
 verify_note: 'Both backends are active and the proxy returns HTTP 200 before injection.'
 commands:
@@ -30,7 +73,7 @@ commands:
       systemctl show ce-lab03-a -p ActiveState -p Result -p NRestarts
       sudo journalctl -u ce-lab03-a -n 15 --no-pager
     expect: >-
-      A reaches Result=start-limit-hit while the proxy still answers through B.
+      The journal shows "Start request repeated too quickly" and A stays ActiveState=failed with NRestarts=4 (on systemd 255 Result shows signal, not start-limit-hit). "No main process to kill" appears while A is between restarts or already failed. The proxy still answers through B.
   - name: Record 30 seconds of proxy HTTP codes (stop the watch first, start this before the next step)
     where: VM terminal 2
     run: !unsafe |
@@ -45,14 +88,15 @@ commands:
       done
       systemctl show ce-lab03-a ce-lab03-b -p Id -p ActiveState -p Result -p NRestarts
     expect: >-
-      Both units can show start-limit-hit; terminal 2 then records 502 responses (or 000 for timeouts).
+      Both units stay ActiveState=failed; terminal 2 then records 502 responses (or 000 for timeouts).
   - name: Recover and prove the proxy works again
     where: VM terminal 1
     run: !unsafe |
       sudo systemctl reset-failed ce-lab03-a ce-lab03-b
       sudo systemctl start ce-lab03-a ce-lab03-b
       systemctl is-active ce-lab03-a ce-lab03-b
-      curl -fsS --max-time 3 http://127.0.0.1:8003/
+      # The backends need a moment to bind, and NGINX retries a failed backend after fail_timeout=1s.
+      for i in $(seq 1 10); do curl -fsS --max-time 3 http://127.0.0.1:8003/ && break; sleep 0.5; done
   - name: Optional A/B change, remove the start limit on A, then repeat the A kill loop
     where: VM terminal 1
     run: !unsafe |

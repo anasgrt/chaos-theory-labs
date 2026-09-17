@@ -1,15 +1,58 @@
-title: 'Lab 19 — Etcd quorum loss'
+title: 'Lab 14 — Etcd quorum loss'
 concept: >-
   The control plane stores and reconciles desired cluster state; the data plane carries application requests. etcd protects agreement on stored state using Raft consensus: a leader must obtain a voting majority to commit changes. This prevents separated minorities from independently accepting conflicting writes. Losing management availability therefore need not immediately stop an already-established application traffic path.
 mechanism: >-
   Three voting members require two for quorum. After one member stops, the remaining majority can commit writes, with leader election if necessary; after two stop, it cannot. Existing processes and installed routing may continue serving HTTP while API writes fail. Probe both paths because some reads can be cached. Restoring the same members tests regained consensus, rather than backup restoration after permanent data loss.
+task:
+  question: >-
+    In a three-member etcd cluster, what still works after one member is lost, and after two: application HTTP traffic, API writes, or both?
+  brief:
+    theory:
+      - >-
+        Control plane components (Ch. 12 §12.1.1): etcd stores all cluster information; kube-apiserver is the server for all interactions and stores changes in etcd; kube-controller-manager and kube-scheduler converge state by reading and writing through kube-apiserver. On kubectl apply, the API server validates and stores the object in etcd, then the controllers and scheduler react.
+      - >-
+        Why consensus (Ch. 12 §12.1.1): fault tolerance and availability both need multiple copies of the data, and multiple copies must agree on a version of reality. etcd implements Raft: an odd number of nodes (typically three or five) elect a leader by majority, heartbeats detect a leader that stops responding, and a new election follows.
+      - >-
+        etcd's guarantees (Ch. 12 §12.1.1): strongly consistent — the guide describes writes as replicating to all nodes, and whichever node you connect to returns up-to-date data. The price is performance: three or five nodes give enough fault tolerance, and "any extra nodes just slow the cluster with little benefit."
+      - >-
+        Quorum (Ch. 12 §12.1.1): quorum is n/2 + 1 (integer division). Three nodes need two and survive one loss; four nodes need three and still survive only one, with more nodes that can fail — even-numbered etcd clusters reduce fault tolerance. In Raft a write commits once a majority stores it (not in the guide), so a cluster that keeps quorum still accepts writes.
+      - >-
+        kube-apiserver is stateless (Ch. 12 §12.1.1): because all state is in etcd, it only needs enough instances for the request load and can be load-balanced. It knows all etcd nodes but speaks to one at a time; when etcd cannot serve, every component that goes through the API server is affected.
+      - >-
+        Losing members (Ch. 12, etcd experiments 1 and 4): with one of three down, check whether kubectl works, whether clients retry another instance, and whether leader election and recovery show in monitoring. With quorum lost, ask whether kubectl works, whether pods already on the cluster keep running, and whether healing still happens.
+      - >-
+        The data plane keeps its last state (Ch. 12 §12.1.4, Key Takeaways 13–14): Service traffic is implemented on each node by kube-proxy's iptables or IPVS rules, and a dead networking daemon leaves routing stale and possibly wrong. Running pods and installed rules can therefore keep serving requests while API writes fail (lab guide, not the book).
+    in_this_lab:
+      - >-
+        The ha kind cluster has 3 control-plane nodes and 1 worker. Each control-plane node runs an etcd member and an API server that talks to its local etcd; kubectl reaches the API servers through a load-balancer container.
+      - >-
+        etcd runs as a static pod: kubelet runs whatever manifest is in /etc/kubernetes/manifests. Moving etcd.yaml out stops that member; moving it back starts it again with its data intact.
+      - >-
+        The write probe patches ConfigMap quorum-probe with a 5 s request timeout. The HTTP probe hits quorum-web (2 nginx pods) through a NodePort on ha-worker, forwarded by rules kube-proxy already installed on the node.
+      - >-
+        One member down leaves 2 of 3, so writes should succeed; a single failure can come from the stopped member's API server before the load balancer stops using it. Two down leaves 1 of 3: no leader, so writes fail or time out. On this cluster, gets also timed out, and for a few seconds after the restore requests returned timeouts or Forbidden until the API servers had reloaded their caches.
+      - >-
+        etcdctl endpoint status --cluster lists every member with IS LEADER; endpoint health reports whether each member answers.
+  predict: >-
+    The quorum-web HTTP status and whether a ConfigMap patch succeeds with 0, 1 and 2 etcd members stopped, and after restore.
+  steps:
+    - >-
+      Confirm 4 Ready nodes, HTTP 200 from quorum-web, a successful quorum-probe ConfigMap patch, and three etcd members with one leader.
+    - >-
+      Stop etcd on ha-control-plane2 by moving its static manifest; after 30 s probe HTTP and patch the ConfigMap.
+    - >-
+      Stop etcd on ha-control-plane3; probe both paths again.
+    - >-
+      Restore both manifests, wait until all endpoints are healthy, and patch state=recovered.
+  answer_with: >-
+    An HTTP result and a write result for baseline, one-down, two-down and recovery. Explain why HTTP kept working without quorum, and why a successful read does not prove quorum.
 solution: 'Use the separate ha cluster to record HTTP and ConfigMap-write baselines, stop one then two etcd members with the guide helpers, and restore both manifests before proceeding.'
 verify_note: 'The ha cluster has three control-plane nodes, an HTTP workload, and a working ConfigMap write before the fault.'
 commands:
   - name: Save the HA cluster helpers
     where: VM terminal 1
     run: !unsafe |
-      cat > ~/labs/lab19/helpers.sh <<'SH'
+      cat > ~/labs/lab14/helpers.sh <<'SH'
       h() { kubectl --kubeconfig="$HOME/labs/ha.kubeconfig" --context=kind-ha --namespace=default --request-timeout=5s "$@"; }
       stop_etcd() { docker exec "$1" mv /etc/kubernetes/manifests/etcd.yaml /root/ce-etcd.yaml; }
       start_etcd() { docker exec "$1" mv /root/ce-etcd.yaml /etc/kubernetes/manifests/etcd.yaml; }
@@ -27,7 +70,7 @@ commands:
   - name: Establish HTTP and write baselines
     where: VM terminal 1
     run: !unsafe |
-      source ~/labs/lab19/helpers.sh
+      source ~/labs/lab14/helpers.sh
       h get nodes
       h rollout status deployment/quorum-web --request-timeout=0 --timeout=180s
       PORT=$(h get svc quorum-web -o jsonpath='{.spec.ports[0].nodePort}')
@@ -58,10 +101,11 @@ commands:
       start_etcd ha-control-plane3
       sleep 30
       for _ in $(seq 1 12); do ec ha-control-plane endpoint health --cluster && break; sleep 5; done
-      h patch configmap quorum-probe --type merge -p '{"data":{"state":"recovered"}}'
-      h get configmap quorum-probe -o jsonpath='{.data.state}'; echo
+      # The API servers need a few seconds after etcd heals: expect a timeout or Forbidden before the write succeeds.
+      for _ in $(seq 1 24); do h patch configmap quorum-probe --type merge -p '{"data":{"state":"recovered"}}' && break; sleep 5; done
+      for _ in $(seq 1 12); do h get configmap quorum-probe -o jsonpath='{.data.state}' && break; sleep 5; done; echo
     expect: >-
-      With two members down, the write fails or times out while HTTP still returns 200. After restore, three healthy endpoints and state=recovered.
+      With two members down, the write times out after 5 s while HTTP still returns 200. After restore, three healthy endpoints; the first write attempts can time out or return Forbidden while the API servers reload, then state=recovered.
   - name: Independent fallback that restores the manifests without kubectl
     where: VM terminal 2
     run: !unsafe |
@@ -72,17 +116,17 @@ setup:
   - name: Create the separate HA kind cluster
     command: |
       if kind get clusters | grep -Fx chaos >/dev/null; then
-        echo 'Delete the chaos cluster before Lab 19 to preserve VM memory.' >&2
+        echo 'Delete the chaos cluster before Lab 14 to preserve VM memory.' >&2
         exit 1
       fi
-      mkdir -p "$HOME/labs/lab19"
+      mkdir -p "$HOME/labs/lab14"
       for host in registry-1.docker.io auth.docker.io dl.k8s.io; do
         timeout 5s getent ahostsv4 "$host" >/dev/null || {
-          echo "Required DNS lookup failed for $host. Docker/kind image registry DNS is unavailable in the VM; restore DNS before Lab 19." >&2
+          echo "Required DNS lookup failed for $host. Docker/kind image registry DNS is unavailable in the VM; restore DNS before Lab 14." >&2
           exit 1
         }
       done
-      cat > "$HOME/labs/lab19/kind.yaml" <<'YAML'
+      cat > "$HOME/labs/lab14/kind.yaml" <<'YAML'
       kind: Cluster
       apiVersion: kind.x-k8s.io/v1alpha4
       name: ha
@@ -92,7 +136,7 @@ setup:
       - role: control-plane
       - role: worker
       YAML
-      kind get clusters | grep -Fx ha >/dev/null || timeout 10m kind create cluster --config "$HOME/labs/lab19/kind.yaml" --kubeconfig "$HOME/labs/ha.kubeconfig" --wait 180s
+      kind get clusters | grep -Fx ha >/dev/null || timeout 10m kind create cluster --config "$HOME/labs/lab14/kind.yaml" --kubeconfig "$HOME/labs/ha.kubeconfig" --wait 180s
       "$HOME/labs/install-kubectl-for-kind.sh" ha
       "$HOME/labs/load-lab-images-into-kind.sh" ha nginx:1.27
       kubectl --kubeconfig="$HOME/labs/ha.kubeconfig" --context=kind-ha create deployment quorum-web --image=nginx:1.27 --replicas=2 --dry-run=client -o yaml | kubectl --kubeconfig="$HOME/labs/ha.kubeconfig" --context=kind-ha apply -f -

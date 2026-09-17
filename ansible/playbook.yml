@@ -19,7 +19,6 @@
       - git
       - jq
       - python3
-      - python3-venv
       - python3-redis
       - redis-server
       - build-essential
@@ -40,7 +39,6 @@
       - cloud-guest-utils
       - e2fsprogs
       - lvm2
-      - openjdk-17-jdk-headless
       - docker.io
       - docker-buildx
       - docker-compose-v2
@@ -99,6 +97,80 @@
         name: docker
         enabled: true
         state: started
+
+    # VirtualBox's IPv4 NAT resolver (10.0.2.3) can stay silent while the VM
+    # resolves through systemd-resolved's other upstreams. Containers on the
+    # default bridge only receive 10.0.2.3, so give them the host's resolver.
+    - name: Read the default Docker bridge gateway
+      ansible.builtin.command:
+        argv: [docker, network, inspect, bridge, --format, '{{ "{{" }}(index .IPAM.Config 0).Gateway{{ "}}" }}']
+      register: docker_bridge_gateway
+      changed_when: false
+
+    - name: Require a Docker bridge gateway address
+      ansible.builtin.assert:
+        that: docker_bridge_gateway.stdout is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$')
+        fail_msg: Could not read the default Docker bridge gateway.
+
+    - name: Create the systemd-resolved drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        mode: '0755'
+
+    - name: Let systemd-resolved answer on the Docker bridge gateway
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/docker-bridge.conf
+        content: |
+          [Resolve]
+          DNSStubListenerExtra={{ docker_bridge_gateway.stdout }}
+        mode: '0644'
+      register: resolved_bridge_listener
+
+    - name: Restart systemd-resolved after adding the bridge listener
+      ansible.builtin.systemd_service:
+        name: systemd-resolved
+        state: restarted
+      when: resolved_bridge_listener.changed
+
+    - name: Point default Docker DNS at the host resolver
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        content: "{{ {'dns': [docker_bridge_gateway.stdout]} | to_nice_json }}\n"
+        mode: '0644'
+      register: docker_dns_config
+
+    - name: Restart Docker after changing its DNS configuration
+      ansible.builtin.systemd_service:
+        name: docker
+        state: restarted
+      when: docker_dns_config.changed
+
+    # Every kind node runs its own kubelet and systemd; Lab 14's five node
+    # containers exceed the default 128 inotify instances, so a kubelet fails
+    # with "too many open files". These are kind's documented values.
+    - name: Raise inotify limits for multi-node kind clusters
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/60-kind-inotify.conf
+        content: |
+          fs.inotify.max_user_instances = 512
+          fs.inotify.max_user_watches = 524288
+        mode: '0644'
+      register: kind_inotify_limits
+
+    - name: Apply the inotify limits
+      ansible.builtin.command: sysctl --load /etc/sysctl.d/60-kind-inotify.conf
+      when: kind_inotify_limits.changed
+
+    - name: Read the active inotify instance limit
+      ansible.builtin.command: sysctl -n fs.inotify.max_user_instances
+      register: inotify_instances
+      changed_when: false
+
+    - name: Require the kind inotify instance limit
+      ansible.builtin.assert:
+        that: inotify_instances.stdout | int >= 512
+        fail_msg: fs.inotify.max_user_instances is below 512; multi-node kind clusters can fail.
 
     - name: Keep Redis stopped until its lab starts it
       ansible.builtin.systemd_service:
@@ -287,6 +359,10 @@
       ansible.builtin.command: docker run --rm hello-world:latest
       changed_when: false
 
+    - name: Verify DNS from a default-bridge container
+      ansible.builtin.command: docker run --rm busybox:1.36 nslookup -timeout=5 dl.k8s.io
+      changed_when: false
+
     - name: Require Docker cgroup v2
       ansible.builtin.assert:
         that: "'Cgroup Version: 2' in docker_info.stdout"
@@ -321,7 +397,6 @@
           docker version
           docker compose version
           python3 --version
-          java -version
           strace --version
           kind version
         } > "{{ lab_root }}/versions.txt" 2>&1

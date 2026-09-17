@@ -5,13 +5,14 @@
   vars:
     lab_action: setup
     lab_definition: ''
-    lab_solution_output: ''
+    # Local file for plain-text output; set by run-lab.sh.
+    lab_text_output: ''
 
   pre_tasks:
     - name: Validate the lifecycle action
       ansible.builtin.assert:
-        that: lab_action in ['setup', 'verify', 'solution', 'reset']
-        fail_msg: Use setup, verify, solution, or reset.
+        that: lab_action in ['setup', 'verify', 'question', 'solution', 'reset']
+        fail_msg: Use setup, verify, question, solution, or reset.
 
     - name: Validate the selected lab definition
       ansible.builtin.assert:
@@ -23,6 +24,18 @@
         file: "{{ lab_definition }}"
         name: selected_lab
 
+    - name: Validate the lab task
+      ansible.builtin.assert:
+        that:
+          - selected_lab.task is mapping
+          - selected_lab.task.question | default('') | length > 0
+          - selected_lab.task.brief.theory | default([]) | length > 0
+          - selected_lab.task.brief.in_this_lab | default([]) | length > 0
+          - selected_lab.task.predict | default('') | length > 0
+          - selected_lab.task.steps | default([]) | length > 0
+          - selected_lab.task.answer_with | default('') | length > 0
+        fail_msg: "{{ lab_definition }} needs task.question, task.brief.theory, task.brief.in_this_lab, task.predict, task.steps and task.answer_with."
+
   tasks:
     - name: Show the lab model before setup
       ansible.builtin.debug:
@@ -30,6 +43,7 @@
           - "{{ selected_lab.title }}"
           - "Concept: {{ selected_lab.concept }}"
           - "Mechanism: {{ selected_lab.mechanism }}"
+          - "Question: {{ selected_lab.task.question }}"
       when: lab_action == 'setup'
 
     - name: Reset prior state before setup
@@ -79,13 +93,33 @@
 
     # Rendered as plain text on the controller: debug output would JSON-escape
     # the quotes and newlines that heredocs and scripts need to stay pasteable.
+    - name: Render the lab task
+      ansible.builtin.template:
+        src: task.txt.j2
+        dest: "{{ lab_text_output }}"
+        mode: '0600'
+      delegate_to: localhost
+      check_mode: false
+      when: lab_action in ['setup', 'question'] and lab_text_output | length > 0
+
+    - name: Show the lab task
+      ansible.builtin.debug:
+        msg:
+          - "{{ selected_lab.title }}"
+          - "Question: {{ selected_lab.task.question }}"
+          - "Predict first: {{ selected_lab.task.predict }}"
+          - "Do: {{ selected_lab.task.steps }}"
+          - "Your answer must show: {{ selected_lab.task.answer_with }}"
+      when: lab_action in ['setup', 'question'] and lab_text_output | length == 0
+
     - name: Render the solution path and practical commands
       ansible.builtin.template:
         src: solution.txt.j2
-        dest: "{{ lab_solution_output }}"
+        dest: "{{ lab_text_output }}"
         mode: '0600'
       delegate_to: localhost
-      when: lab_action == 'solution' and lab_solution_output | length > 0
+      check_mode: false
+      when: lab_action == 'solution' and lab_text_output | length > 0
 
     - name: Show the solution path
       ansible.builtin.debug:
@@ -94,4 +128,4 @@
           - "Solution: {{ selected_lab.solution }}"
           - "Verify: {{ selected_lab.verify_note }}"
           - Use ansible/run-lab.sh to print the practical commands.
-      when: lab_action == 'solution' and lab_solution_output | length == 0
+      when: lab_action == 'solution' and lab_text_output | length == 0

@@ -1,8 +1,24 @@
-# Chaos Engineering (Pawlikowski) — Complete Study Guide
+# Chaos Engineering (Pawlikowski) — Complete Study Guide - Claude
+
+## Start here — navigation and study workflow
+
+Open one chapter at a time. Each chapter begins with a study route; its original section numbers remain available for cross-reference. Experiment fields follow purpose → setup → execution → interpretation → limits. Use the Master Cheat Sheet for revision; expand each review answer after attempting the question.
+
+<aside>
+
+**Supplementary explanation — Editorial verification: How to read this refactor**
+
+The linked Notion page is the canonical source for this structural refactor. Original technical prose, quotations, commands and reported outcomes are retained. Clearly labelled editorial verification notes take precedence over the specific original claims they correct. Book-derived material and existing supplementary explanations remain distinct. No experiment was executed for this edit; version-sensitive examples remain historical examples, not current compatibility guarantees.
+
+**Shell example caveat — High confidence.** Some original command listings place comments after a continuation backslash. Bash continues a line only when the unquoted backslash is immediately followed by the newline. Retained annotated listings with trailing text after `\` need syntax repair before use. Source: Bash escape character.
+
+</aside>
+
+- Navigate to a section
 
 > **Source:** *Chaos Engineering: Site Reliability through Controlled Disruption* — Mikolaj Pawlikowski (Manning, 2021). 426 pages, 13 chapters, 4 appendices. Forewords by Casey Rosenthal and Nora Jones.
+**Scope:** eight selected core chapters (source chapters 1–3, 5–6, and 10–12), plus all appendices, the Master Cheat Sheet, Completeness Audit and Hands-on Labs. Theory and practice carry equal weight.
 >
-> **Scope:** the complete book — every chapter and appendix. Theory and practice carry equal weight.
 
 ## How to use this guide
 
@@ -27,43 +43,41 @@ This guide is a primary study and reference resource, not a summary. Use it thre
 
 </aside>
 
-<aside>
+- Chapter directory — topics at a glance
 
-**Running these commands today — compatibility with the lab VM.** The commands in this guide are the book's, written for Ubuntu 20.04, kernel 5.4, cgroup v1, OpenJDK 8, Docker 19.03 and Kubernetes 1.18. On the Ubuntu 24.04 VM used by [chaos-labs.md](chaos-labs.md) (cgroup v2, JDK 17, current Docker, kind), expect these differences:
+    ## Table of contents
 
-- **cgroup v1 paths and tools do not exist:** `/sys/fs/cgroup/cpu/…`, `/sys/fs/cgroup/memory/…`, `memory.limit_in_bytes`, `cpu.shares`, `cpu.cfs_*`, the `tasks` file and `cgcreate -g cpu:/…`. Use `cpu.max`, `cpu.weight`, `memory.max` and `cgroup.procs`, or `systemd-run -p CPUQuota=… -p MemoryMax=…`. Docker containers live under `/sys/fs/cgroup/system.slice/docker-<id>.scope`.
-- **Docker on cgroup v2 gives each container a private cgroup namespace**, so only the `user` namespace stays shared with the host by default.
-- **JDK 17:** `-XDignore.symbol.file` and `jdk.internal.org.objectweb.asm` are not usable. Compile against a standalone ASM jar (Lab 12 uses `asm-9.7.jar`) with `--release 17`.
-- **Python packages:** `sudo pip3 install` is blocked on Ubuntu 24.04 (PEP 668), and Flask 1.1.2 and `FLASK_ENV` do not work with current Python and Flask. Use a virtual environment, current Flask and `flask run --debug`.
-- **Kubernetes tooling:** download kubectl from `dl.k8s.io`, not the frozen `storage.googleapis.com/kubernetes-release` bucket. The labs use kind instead of Minikube. PowerfulSeal targets older Kubernetes and Python releases; treat its policies as a reference.
-- **Other dated details:** Toxiproxy images are published at `ghcr.io/shopify/toxiproxy`; gVisor's default platform is no longer `ptrace`; the Ubuntu 19.10 ISO used in Chapter 3 is only on `old-releases.ubuntu.com`.
+    1. **Chapter 1 — Into the World of Chaos Engineering** · definition, motivations, risk and SLI/SLO/SLA, emergent properties, the four-step model, what it is not, the FizzBuzzAAS case study
+    2. **Chapter 2 — First Cup of Chaos and Blast Radius** · the lab VM, Linux forensics (exit codes, signals, the OOM Killer), the first experiment, blast radius, the systemd restart-limit bug
+    3. **Chapter 3 — Observability** · the USE method, the resource map, `uptime`/`dmesg`, block I/O, networking, RAM, CPU, OS-level tracing, application profiling, Prometheus and Grafana
+    4. **Chapter 4 — Poking Docker** · virtualization vs. containers, the seven kernel features, chroot and union filesystems, namespaces, cgroups, Docker networking, capabilities and seccomp, a DIY container in three parts, Pumba
+    5. **Chapter 5 — Who You Gonna Call? Syscall-Busters!** · syscalls and libc, `strace` and its 100× cost, BPF/BCC, `-e inject`, seccomp the easy and the hard way
+    6. **Chapter 6 — Chaos in Kubernetes** · what Kubernetes is and why, Minikube, pods/deployments/services, RBAC, labels, killing pods, Toxiproxy and the added-degraded-replica technique
+    7. **Chapter 7 — Automating Kubernetes Experiments** · PowerfulSeal policies, match→filter→act, the clone + toxiproxy mutation, continuous SLO verification, MTTF at scale, regions and availability zones, VM-level experiments
+    8. **Chapter 8 — Under the Hood of Kubernetes** · etcd and Raft, kube-apiserver, controller-manager, scheduler, kubelet and the pause container, CRI and the runtime zoo, pod/service/ingress networking — with experiment ideas for each
+    9. **Appendices A–D** · installation, the consolidated pop-quiz answers, what the author left out and why, and the recipes
+    10. **Master Cheat Sheet** · definitions · methodology · theory summary · experiment playbook · tool and command reference · experiment-design checklist · observability checklist · failure-injection matrix · Docker mental model · Kubernetes mental model · injection-layer comparison · SLI/SLO/SLA reference · common failure patterns · production safety and blast-radius checklist · glossary · rapid exam review
+    11. **Completeness Audit**
+    12. **Hands-on Labs**
 
-[chaos-labs.md](chaos-labs.md) contains modernised, runnable versions of the core experiments.
+    ---
 
-</aside>
-
-## Table of contents
-
-1. **Chapter 1 — Into the World of Chaos Engineering** · definition, motivations, risk and SLI/SLO/SLA, emergent properties, the four-step model, what it is not, the FizzBuzzAAS case study
-2. **Chapter 2 — First Cup of Chaos and Blast Radius** · the lab VM, Linux forensics (exit codes, signals, the OOM Killer), the first experiment, blast radius, the systemd restart-limit bug
-3. **Chapter 3 — Observability** · the USE method, the resource map, `uptime`/`dmesg`, block I/O, networking, RAM, CPU, OS-level tracing, application profiling, Prometheus and Grafana
-4. **Chapter 4 — Database Trouble and Testing in Production** · finding weak links, slow disks, Traffic Control and `netem`, latency multiplication, the case for production experiments
-5. **Chapter 5 — Poking Docker** · virtualization vs. containers, the seven kernel features, chroot and union filesystems, namespaces, cgroups, Docker networking, capabilities and seccomp, a DIY container in three parts, Pumba
-6. **Chapter 6 — Who You Gonna Call? Syscall-Busters!** · syscalls and libc, `strace` and its 100× cost, BPF/BCC, `-e inject`, seccomp the easy and the hard way
-7. **Chapter 7 — Injecting Failure into the JVM** · finding the failure surface, JVM bytecode, `java.lang.instrument`, ASM, Byteman, Byte-Monkey, Chaos Monkey for Spring Boot
-8. **Chapter 8 — Application-Level Fault Injection** · building the injector into your own code, the wrapper class, the decorator, `ab` with POST, application vs. infrastructure
-9. **Chapter 9 — There's a Monkey in My Browser!** · the browser as an observability stack, overriding `XMLHttpRequest` and `fetch`, the JavaScript event model, throttling
-10. **Chapter 10 — Chaos in Kubernetes** · what Kubernetes is and why, Minikube, pods/deployments/services, RBAC, labels, killing pods, Toxiproxy and the added-degraded-replica technique
-11. **Chapter 11 — Automating Kubernetes Experiments** · PowerfulSeal policies, match→filter→act, the clone + toxiproxy mutation, continuous SLO verification, MTTF at scale, regions and availability zones, VM-level experiments
-12. **Chapter 12 — Under the Hood of Kubernetes** · etcd and Raft, kube-apiserver, controller-manager, scheduler, kubelet and the pause container, CRI and the runtime zoo, pod/service/ingress networking — with experiment ideas for each
-13. **Chapter 13 — Chaos Engineering (for) People** · the mindset, MTBF arithmetic, failing early vs. late, getting buy-in, game days, teams as distributed systems, and four team games
-14. **Appendices A–D** · installation, the consolidated pop-quiz answers, what the author left out and why, and the recipes
-15. **Master Cheat Sheet** · definitions · methodology · theory summary · experiment playbook · tool and command reference · experiment-design checklist · observability checklist · failure-injection matrix · Docker mental model · Kubernetes mental model · injection-layer comparison · SLI/SLO/SLA reference · common failure patterns · production safety and blast-radius checklist · glossary · rapid exam review
-16. **Completeness audit**
-
----
 
 # Chapter 1 — Into the World of Chaos Engineering
+
+**Study route**
+
+Concepts: §§1.1–1.4 → worked case and Experiment Card 1.1: §1.5 → Theory ↔ Practice → Key Takeaways.
+
+<aside>
+
+**Supplementary explanation — Editorial verification: Availability arithmetic and the firewall example**
+
+**Correction — High confidence.** At 99.999% availability, daily downtime is 86,400 × 0.00001 = **0.864 seconds (864 ms)**, not the original 840 ms. This also applies to cheat-sheet §12. The Google SRE availability table gives a rounded daily figure.
+
+**Command qualification — High confidence.** The original `iptables -A ${CACHE_SERVER_IP} -j DROP` and matching `-D` example omit a chain and destination selector. In iptables syntax, `-A`/`-D` take a chain; destination matching uses `-d`. A rule for locally generated egress would target the appropriate OUTPUT chain and destination, with rule ordering checked. Retained examples are not valid literal IP-targeting commands as written.
+
+</aside>
 
 ## 1.1 Theory — What chaos engineering is
 
@@ -117,9 +131,9 @@ Memorize this chain. It is the business justification for everything that follow
 | 90% (one nine) | 36.53 days | 2.4 hours |
 | 99% (two nines) | 3.65 days | 14.40 minutes |
 | 99.95% ("three and a half nines") | 4.38 hours | 43.20 seconds |
-| 99.999% (five nines) | 5.26 minutes | 864 milliseconds |
+| 99.999% (five nines) | 5.26 minutes | 840 milliseconds |
 
-The book flags that "three and a half nines" is popular but not technically correct. In error-budget terms, 99.9 → 99.95 is a factor of 2, while 99.9 → 99.99 is a factor of 10. Between them, 99.95 → 99.99 is a factor of 5. The point holds: the scale is multiplicative, not linear.
+The book flags that "three and a half nines" is popular but not technically correct. In error-budget terms, 99.9 → 99.95 is a factor of 2, while 99.9 → 99.99 is a factor of 10. (The text says "a factor of 5" for the step it describes. The point holds: the scale is multiplicative, not linear.)
 
 **Where chaos engineering plugs in.** To satisfy an SLO you engineer for sinister scenarios. The only way to know how the system behaves in those scenarios is to create them. Work *backward*: business goal → SLO → a condition you can test continuously. This is the seed of Chapter 11's continuous SLO testing.
 
@@ -171,7 +185,7 @@ No component has the property "creates infinite downtime." The system does. This
 
 This model is the spine of the book. Every later experiment is an instance of it.
 
-```text
+```jsx
 1. Observability  →  2. Steady state  →  3. Hypothesis  →  4. Run the experiment
 ```
 
@@ -264,17 +278,17 @@ Read the diagram for failure paths. That is the skill the book trains:
 
 **Postmortem and fix.** Alice asks how to be immune next time. Bob jokes about "setting some of our servers on fire once in a while." Alice takes the joke seriously: if we can simulate a broken firewall rule, we can put it in our integration tests.
 
-The book's first chaos command, written by Bob on the whiteboard, is shorthand: `iptables -A ${CACHE_SERVER_IP} -j DROP`. `iptables` needs a chain and a match, so the runnable form is:
+The book's first chaos command, written by Bob on the whiteboard:
 
 ```bash
 # Inject: silently drop all traffic to the cache server (simulates the bad firewall rule)
-sudo iptables -A OUTPUT -d "${CACHE_SERVER_IP}" -j DROP
+iptables -A ${CACHE_SERVER_IP} -j DROP
 
-# Revert: delete that exact rule again
-sudo iptables -D OUTPUT -d "${CACHE_SERVER_IP}" -j DROP
+# Revert: delete that rule again
+iptables -D ${CACHE_SERVER_IP} -j DROP
 ```
 
-What they do: `-A OUTPUT` **appends** a rule to the chain for outgoing packets; `-d` matches the destination address; `-D` **deletes** the same rule; the `-j DROP` target makes the kernel discard matching packets **silently** — no RST, no ICMP rejection. That silence reproduces a hang instead of a connection-refused error. `-j REJECT` would produce the failure mode their code already handled, which is exactly the point.
+What they do: `-A` **appends** a rule; `-D` **deletes** the same rule; the `-j DROP` target makes the kernel discard matching packets **silently** — no RST, no ICMP rejection. That silence reproduces a hang instead of a connection-refused error. `-j REJECT` would produce the failure mode their code already handled, which is exactly the point.
 
 They wired both commands into the **setup and teardown of their integration tests**, confirmed the old version broke and the new version survived, and updated their LinkedIn titles to SRE.
 
@@ -282,23 +296,75 @@ They wired both commands into the **setup and teardown of their integration test
 
 ### Experiment Card 1.1 — Cut the cache off (the FizzBuzzAAS experiment)
 
-| Field | Content |
-| --- | --- |
-| **Goal** | Prove the API keeps serving when the cache is unreachable in the *hanging* mode, not just the *refused* mode. |
-| **Relevant theory** | The four-step model (§1.3); emergent behaviour of a dependency on the request path; graceful degradation; fail-fast vs. hang. |
-| **System / setup** | Load balancer → 2 identical API server instances → cache. Injection on the API server host. |
-| **Hypothesis** | "If we drop connectivity to the cache, we continue getting a successful response." |
-| **Steady state** | The API responds successfully. |
-| **Observability signal** | Success or error of an API call. |
-| **Failure injected** | All packets to the cache server IP dropped silently (`iptables ... -j DROP`). |
-| **Blast radius** | One host's egress to one dependency, inside an integration-test environment, reverted in teardown. In the story it was first fixed by a hot-fix in production — the book presents that as the *bad* version of events. |
-| **Tools / commands** | `iptables -A OUTPUT -d ${CACHE_SERVER_IP} -j DROP` (inject) / `iptables -D OUTPUT -d ${CACHE_SERVER_IP} -j DROP` (revert), run as test setup and teardown. |
-| **Procedure** | 1. Confirm API returns success. 2. Add the DROP rule. 3. Call the API and observe. 4. Delete the DROP rule. 5. Repeat against the fixed build. |
-| **Expected behaviour (pre-fix)** | The team assumed graceful degradation, because cache-down was "handled." |
-| **Observed result** | Pre-fix: requests hang at the cache lookup and never complete, with no errors in the logs. Post-fix (time-outs added): requests complete successfully without the cache. |
-| **Why it happened** | Error handling covered *connection refused / no host*, not *no response*. With packets dropped, the socket waits; without a time-out, the request thread waits with it. |
-| **Lesson learned** | Every network call on a request path needs an explicit time-out. Handling "down" is not handling "slow" or "silent." Absence of errors in logs is not evidence of health. |
-| **Production considerations** | A DROP rule in production affects every request routed through that host. Bound the blast radius, and always script the teardown so a crashed test cannot leave the rule behind. |
+**Purpose and concepts**
+
+**Goal**
+
+Prove the API keeps serving when the cache is unreachable in the *hanging* mode, not just the *refused* mode.
+
+**Relevant theory**
+
+The four-step model (§1.3); emergent behaviour of a dependency on the request path; graceful degradation; fail-fast vs. hang.
+
+**Setup, hypothesis and boundaries**
+
+**System / setup**
+
+Load balancer → 2 identical API server instances → cache. Injection on the API server host.
+
+**Hypothesis**
+
+"If we drop connectivity to the cache, we continue getting a successful response."
+
+**Steady state**
+
+The API responds successfully.
+
+**Observability signal**
+
+Success or error of an API call.
+
+**Blast radius**
+
+One host's egress to one dependency, inside an integration-test environment, reverted in teardown. In the story it was first fixed by a hot-fix in production — the book presents that as the *bad* version of events.
+
+**Execution and tools**
+
+**Failure injected**
+
+All packets to the cache server IP dropped silently (`iptables ... -j DROP`).
+
+**Tools / commands**
+
+`iptables -A ${CACHE_SERVER_IP} -j DROP` (inject) / `iptables -D ${CACHE_SERVER_IP} -j DROP` (revert), run as test setup and teardown.
+
+**Procedure**
+
+1. Confirm API returns success. 2. Add the DROP rule. 3. Call the API and observe. 4. Delete the DROP rule. 5. Repeat against the fixed build.
+
+**Results, interpretation and lessons**
+
+**Expected behaviour (pre-fix)**
+
+The team assumed graceful degradation, because cache-down was "handled."
+
+**Observed result**
+
+Pre-fix: requests hang at the cache lookup and never complete, with no errors in the logs. Post-fix (time-outs added): requests complete successfully without the cache.
+
+**Why it happened**
+
+Error handling covered *connection refused / no host*, not *no response*. With packets dropped, the socket waits; without a time-out, the request thread waits with it.
+
+**Lesson learned**
+
+Every network call on a request path needs an explicit time-out. Handling "down" is not handling "slow" or "silent." Absence of errors in logs is not evidence of health.
+
+**Limits and follow-up**
+
+**Production considerations**
+
+A DROP rule in production affects every request routed through that host. Bound the blast radius, and always script the teardown so a crashed test cannot leave the rule behind.
 
 ---
 
@@ -328,6 +394,18 @@ They wired both commands into the **setup and teardown of their integration test
 ---
 
 # Chapter 2 — First Cup of Chaos and Blast Radius
+
+**Study route**
+
+Orient to the lab: §§2.1–2.2 → mechanisms: §2.3 → first experiment: §2.4 → blast radius: §2.5 → repeated-failure experiment and interpretation: §2.6 → connections and takeaways.
+
+<aside>
+
+**Supplementary explanation — Editorial verification: Signal exit status and OOM evidence**
+
+**Correction — High confidence.** Bash reports a signal-terminated command as 128 + signal number: **143 corresponds to SIGTERM (15); 137 corresponds to SIGKILL (9)**. The Linux 5.4 OOM killer sends SIGKILL, so the claim that its normal kill explains 143 is incorrect. A status alone does not establish who sent a signal or prove an OOM event; correlate kernel logs. This correction also applies to the chapter takeaways and review question 6. Sources: Bash exit status, Linux 5.4 OOM-killer implementation.
+
+</aside>
 
 ## 2.1 Practice — The lab environment
 
@@ -365,7 +443,7 @@ Failure paths in this diagram: the LB is the single entry point; the retry from 
 
 **The logs:**
 
-```text
+```jsx
 [14658.582809] ERROR: FizzBuzz API instance exiting, exit code 143
 [14658.582809] Restarting
 [14658.582813] FizzBuzz API version 0.0.7 is up and running.
@@ -454,7 +532,7 @@ echo $?              # 137  = 128 + 9 = SIGKILL
 
 <aside>
 
-**Pop quiz (§2.3.1):** which statement is false? *"There are 32 possible exit codes."* — false. `kill -L` already lists signals numbered up to 64 (62 signals — 32 and 33 are unused), and exit codes span 0–255.
+**Pop quiz (§2.3.1):** which statement is false? *"There are 32 possible exit codes."* — false. `kill -L` already shows 64 signals, and exit codes span 0–255.
 
 </aside>
 
@@ -472,7 +550,7 @@ top -n1 -o+%MEM        # -n1: print once and exit; -o+%MEM: sort by memory use
 
 Representative output (the VM has ~3.9 GiB):
 
-```text
+```jsx
 MiB Mem : 3942.4 total, 98.9 free, 3745.5 used, 98.0 buff/cache
 MiB Swap:    0.0 total,  0.0 free,    0.0 used.    5.3 avail Mem
 PID   USER  PR NI    VIRT   RES   SHR S %CPU %MEM     TIME+ COMMAND
@@ -481,7 +559,7 @@ PID   USER  PR NI    VIRT   RES   SHR S %CPU %MEM     TIME+ COMMAND
 
 `mystery001` holds 2.9 GB — roughly three-quarters of the VM. Free memory is near 100 MB and there is no swap. The shell then prints:
 
-```text
+```jsx
 Killed
 ```
 
@@ -491,7 +569,7 @@ Killed
 dmesg | grep -i mystery001
 ```
 
-```text
+```jsx
 [14658.582932] Out of memory: Kill process 5451 (mystery001) score 758 or sacrifice child
 [14658.582939] Killed process 5451 (mystery001) total-vm:3058268kB, anon-rss:3055776kB, file-rss:4kB, shmem-rss:0kB
 [14658.644154] oom_reaper: reaped process 5451 (mystery001), now anon-rss:0kB, file-rss:0kB, shmem-rss:0kB
@@ -521,7 +599,7 @@ cat /proc/sys/vm/oom_dump_tasks
 
 <aside>
 
-**The dead end is deliberate.** An exit code cannot tell you *who* sent the signal or *why*. 143 (SIGTERM) could be an administrator, a supervisor or a script; 137 (SIGKILL) could be `kill -9` or the OOM Killer, which always sends SIGKILL and never produces 143. The book then makes the key move: *chaos engineering still lets you make progress, because you form hypotheses about the system as a whole rather than about one process's cause of death.*
+**The dead end is deliberate.** Exit code 143 cannot separate "an admin killed it" from "the OOM Killer killed it." The book says so, then makes the key move: *chaos engineering still lets you make progress, because you form hypotheses about the system as a whole rather than about one process's cause of death.*
 
 </aside>
 
@@ -546,7 +624,7 @@ sudo systemctl start  faas001_b      # only /api/v1/ is implemented; everything 
 cat ~/src/examples/killer-whiles/nginx.loadbalancer.conf | grep -v "#"
 ```
 
-```nginx
+```jsx
 upstream backend {
     server 127.0.0.1:8001 max_fails=1 fail_timeout=1s;
     server 127.0.0.1:8002 max_fails=1 fail_timeout=1s;
@@ -575,23 +653,75 @@ The API servers are literally `python3 -m http.server 8001 --directory .../stati
 
 ### Experiment Card 2.1 — Kill both instances once each
 
-| Field | Content |
-| --- | --- |
-| **Goal** | Verify the user-visible property: killing API server instances one at a time produces no client-visible errors. |
-| **Relevant theory** | Four-step model (Ch. 1); whole-system (black-box) thinking (Fig. 2.3); "components dying is the norm." |
-| **System / setup** | NGINX on :8003 round-robin to `127.0.0.1:8001` (faas001_a) and `:8002` (faas001_b), both systemd units with `Restart=always`. |
-| **Hypothesis** | "If we kill both instances, one at a time, the users won't receive any error responses from the load balancer." |
-| **Steady state** | `ab` reports **Failed requests: 0**. |
-| **Observability** | Apache Bench (`ab`) generates load and counts failures. Single metric: `Failed requests`. |
-| **Failure injected** | `kill` (SIGTERM) to instance A, wait 2 s, `kill` to instance B. |
-| **Blast radius** | Everything on the VM matching `grep 8001` / `grep 8002` — deliberately too wide; see §2.5. |
-| **Tools / commands** | `ab -t 30 -c 10 -l http://127.0.0.1:8003/api/v1/` ; `~/src/examples/killer-whiles/cereal_killer.sh` |
-| **Procedure** | 1. Start both services + nginx. 2. Establish steady state with `ab`. 3. In window 1 run `bash ~/src/examples/killer-whiles/run_ab.sh`. 4. In window 2 run `bash ~/src/examples/killer-whiles/cereal_killer.sh`. 5. Read `Failed requests`. |
-| **Expected** | 0 failed requests. |
-| **Observed** | `Complete requests: 50000`, `Failed requests: 0`. Both instances killed and restarted (PIDs change; systemd reports `active`). Hypothesis **confirmed**. |
-| **Interpretation** | NGINX's retry to the other backend plus systemd's restart covers a *single, spaced-out* instance death. |
-| **Lesson** | A passing experiment proves resilience *to the exact conditions you chose*, nothing more. The author chose the 2-second `sleep` precisely to make the experiment pass. |
-| **Production** | `Failed requests` is the right kind of metric: user-visible, not implementation-visible. |
+**Purpose and concepts**
+
+**Goal**
+
+Verify the user-visible property: killing API server instances one at a time produces no client-visible errors.
+
+**Relevant theory**
+
+Four-step model (Ch. 1); whole-system (black-box) thinking (Fig. 2.3); "components dying is the norm."
+
+**Setup, hypothesis and boundaries**
+
+**System / setup**
+
+NGINX on :8003 round-robin to `127.0.0.1:8001` (faas001_a) and `:8002` (faas001_b), both systemd units with `Restart=always`.
+
+**Hypothesis**
+
+"If we kill both instances, one at a time, the users won't receive any error responses from the load balancer."
+
+**Steady state**
+
+`ab` reports **Failed requests: 0**.
+
+**Observability**
+
+Apache Bench (`ab`) generates load and counts failures. Single metric: `Failed requests`.
+
+**Blast radius**
+
+Everything on the VM matching `grep 8001` / `grep 8002` — deliberately too wide; see §2.5.
+
+**Execution and tools**
+
+**Failure injected**
+
+`kill` (SIGTERM) to instance A, wait 2 s, `kill` to instance B.
+
+**Tools / commands**
+
+`ab -t 30 -c 10 -l http://127.0.0.1:8003/api/v1/` ; `~/src/examples/killer-whiles/cereal_killer.sh`
+
+**Procedure**
+
+1. Start both services + nginx. 2. Establish steady state with `ab`. 3. In window 1 run `bash ~/src/examples/killer-whiles/run_ab.sh`. 4. In window 2 run `bash ~/src/examples/killer-whiles/cereal_killer.sh`. 5. Read `Failed requests`.
+
+**Results, interpretation and lessons**
+
+**Expected**
+
+0 failed requests.
+
+**Observed**
+
+`Complete requests: 50000`, `Failed requests: 0`. Both instances killed and restarted (PIDs change; systemd reports `active`). Hypothesis **confirmed**.
+
+**Interpretation**
+
+NGINX's retry to the other backend plus systemd's restart covers a *single, spaced-out* instance death.
+
+**Lesson**
+
+A passing experiment proves resilience *to the exact conditions you chose*, nothing more. The author chose the 2-second `sleep` precisely to make the experiment pass.
+
+**Limits and follow-up**
+
+**Production**
+
+`Failed requests` is the right kind of metric: user-visible, not implementation-visible.
 
 The `ab` flags:
 
@@ -641,7 +771,7 @@ Any process whose `ps` line merely *contains* the string `8001` dies — includi
 | Selector | Blast radius |
 | --- | --- |
 | `grep 8001` | Anything mentioning 8001 anywhere in its `ps` line, including unrelated PIDs. Widest. |
-| `grep python \| grep 8001` | Only Python processes mentioning 8001. Narrower. |
+| `grep python | grep 8001` | Only Python processes mentioning 8001. Narrower. |
 | `grep "python3 -m http.server 8001"` | Only the exact target command line. Narrowest. |
 
 Other fixes for this case: fetch PIDs from systemd, or use `systemctl restart` directly.
@@ -681,7 +811,7 @@ systemctl status faas001_a --no-pager
 
 **Result:**
 
-```text
+```jsx
 Active: failed (Result: start-limit-hit) since ...
 systemd[1]: faas001_a.service: Service RestartSec=100ms expired, scheduling restart.
 systemd[1]: faas001_a.service: Scheduled restart job, restart counter is at 6.
@@ -693,7 +823,7 @@ systemd[1]: faas001_a.service: Failed with result 'start-limit-hit'.
 
 **Root cause.** The unit file looks sufficient:
 
-```ini
+```
 [Unit]
 Description=FizzBuzz as a Service API prototype - instance A
 
@@ -704,7 +834,7 @@ Restart=always
 
 `Restart=always` does *not* mean always. From systemd's documentation:
 
-```text
+```jsx
 DefaultStartLimitIntervalSec= defaults to 10s
 DefaultStartLimitBurst=       defaults to 5
 ```
@@ -736,22 +866,71 @@ sudo systemctl start faas001_b
 
 ### Experiment Card 2.2 — Repeated kills (six in a row, 1.25 s apart)
 
-| Field | Content |
-| --- | --- |
-| **Goal** | Test whether the system survives *repeated, rapid* instance death, not just isolated death. |
-| **Relevant theory** | Steady state and hypothesis with concrete numbers; blast radius (narrowed selector); emergent behaviour from NGINX ejection + systemd restart limits. |
-| **System / setup** | Same as Card 2.1. |
-| **Hypothesis** | "If we kill instance A six times in a row, spaced by 1.25 s, then do the same to B, we continue seeing no errors." |
-| **Steady state** | `Failed requests: 0`. |
-| **Observability** | `ab` failed-request count; `systemctl status`; systemd journal lines. |
-| **Failure injected** | 6 × SIGTERM per instance at 1.25 s intervals. |
-| **Blast radius** | Narrowed to `grep killer-whiles \| grep python \| grep <port>`. |
-| **Tools / commands** | `killer_while.sh`; `systemctl status --no-pager`; `systemctl daemon-reload`. |
-| **Observed result** | Hypothesis **refuted**. Both units enter `failed (start-limit-hit)`; clients see errors. |
-| **Why** | systemd's `DefaultStartLimitIntervalSec=10s` / `DefaultStartLimitBurst=5`: more than 5 starts in 10 s stops the unit permanently. `Restart=always` is bounded by that rate limit. |
-| **Lesson** | Read the *defaults* of your supervisor, not just the directive you wrote. A restart policy has an implicit give-up threshold, and a crash loop is exactly the condition that trips it. |
-| **Fix** | `StartLimitIntervalSec=0` in the `[Unit]` section, then `daemon-reload`. |
-| **Production considerations** | Unlimited restarts mask a crashing application. Pair the fix with alerting on restart counts and keep the crash on a dashboard. The Kubernetes equivalent trap is `CrashLoopBackOff` exponential back-off (Ch. 10–12). |
+**Purpose and concepts**
+
+**Goal**
+
+Test whether the system survives *repeated, rapid* instance death, not just isolated death.
+
+**Relevant theory**
+
+Steady state and hypothesis with concrete numbers; blast radius (narrowed selector); emergent behaviour from NGINX ejection + systemd restart limits.
+
+**Setup, hypothesis and boundaries**
+
+**System / setup**
+
+Same as Card 2.1.
+
+**Hypothesis**
+
+"If we kill instance A six times in a row, spaced by 1.25 s, then do the same to B, we continue seeing no errors."
+
+**Steady state**
+
+`Failed requests: 0`.
+
+**Observability**
+
+`ab` failed-request count; `systemctl status`; systemd journal lines.
+
+**Blast radius**
+
+Narrowed to `grep killer-whiles | grep python | grep <port>`.
+
+**Execution and tools**
+
+**Failure injected**
+
+6 × SIGTERM per instance at 1.25 s intervals.
+
+**Tools / commands**
+
+`killer_while.sh`; `systemctl status --no-pager`; `systemctl daemon-reload`.
+
+**Results, interpretation and lessons**
+
+**Observed result**
+
+Hypothesis **refuted**. Both units enter `failed (start-limit-hit)`; clients see errors.
+
+**Why**
+
+systemd's `DefaultStartLimitIntervalSec=10s` / `DefaultStartLimitBurst=5`: more than 5 starts in 10 s stops the unit permanently. `Restart=always` is bounded by that rate limit.
+
+**Lesson**
+
+Read the *defaults* of your supervisor, not just the directive you wrote. A restart policy has an implicit give-up threshold, and a crash loop is exactly the condition that trips it.
+
+**Fix**
+
+`StartLimitIntervalSec=0` in the `[Unit]` section, then `daemon-reload`.
+
+**Limits and follow-up**
+
+**Production considerations**
+
+Unlimited restarts mask a crashing application. Pair the fix with alerting on restart counts and keep the crash on a dashboard. The Kubernetes equivalent trap is `CrashLoopBackOff` exponential back-off (Ch. 10–12).
 
 ---
 
@@ -768,7 +947,7 @@ sudo systemctl start faas001_b
 
 1. A process dies three ways that matter: it faulted, something signalled it, or the OOM Killer chose it. Exit code `128 + n` decodes the signal; `dmesg` reveals the OOM Killer.
 2. `echo $?`, `kill -L`, `ps f`, `pkill [-N]`, `top -n1 -o+%MEM` and `dmesg | grep` are the minimum forensic kit.
-3. Exit codes are conventions, not evidence. 143 (SIGTERM) could be an admin, a supervisor or a script; 137 (SIGKILL) could be `kill -9` or the OOM Killer — only `dmesg` tells those two apart.
+3. Exit codes are conventions, not evidence. 143 could be an admin, a supervisor, or the OOM Killer.
 4. When the cause of death is ambiguous, stop asking "why did this process die" and start asking "does the system still serve users when it does."
 5. **Blast radius = the maximum number of things your experiment can affect.** Control it implementationally (precise targeting) and strategically (small subsets, QA first, automate, care with randomness).
 6. A passing experiment proves resilience only to the conditions you chose. Vary the parameters — especially timing and repetition — before believing it.
@@ -780,7 +959,22 @@ sudo systemctl start faas001_b
 
 # Chapter 3 — Observability
 
+**Study route**
+
+Start with USE: §§3.1–3.2 → resource-by-resource mechanisms and commands: §3.3 → application profiling: §3.4 → time-series monitoring: §3.5 → connections and takeaways.
+
+<aside>
+
+**Supplementary explanation — Editorial verification: Load averages and CPU controls**
+
+**Correction — High confidence.** Exponential averaging describes time weighting; it does not make the displayed load-average scale logarithmic. Linux load averages count runnable and uninterruptible tasks, so CPU count and I/O context matter. Sources: proc_loadavg, Brendan Gregg’s explanation.
+
+**Correction — High confidence.** CPU shares are relative weights under contention, not an absolute allocation or a reserved core. CPU quota/period controls impose a bandwidth ceiling; CPU placement is a different control. This also qualifies Chapter 5 and review answer 15. Sources: Linux CFS group scheduling, Docker CPU resource controls.
+
+</aside>
+
 > The book's framing: "Observability is the cornerstone of chaos engineering — it makes the difference between doing science and guessing."
+>
 
 ## 3.1 Theory — Why "my app is slow" is the hard case
 
@@ -810,7 +1004,7 @@ Crucial nuance: **high saturation is not automatically bad.** In a batch-process
 
 **The flowchart (Figure 3.1):**
 
-```text
+```jsx
 Start → Identify resources (CPU, RAM, block I/O, networking, filesystem, software resources…)
       → Pick resource
         → Errors?        yes → Investigate
@@ -844,7 +1038,7 @@ Three caveats stated with the flowchart:
 
 The mental model the chapter navigates:
 
-```text
+```jsx
 ┌───────────────────────────────────────┐
 │ Application        Runtimes           │   ← app metrics, cProfile, pythonstat/pythonflow
 │                    Libraries          │
@@ -865,7 +1059,7 @@ Four physical components sit at the bottom. The OS layer sits above and *provide
 
 It prints the time to compute 3000 digits of pi, in a loop:
 
-```text
+```jsx
 Calculating pi's 3000 digits...
 3.141592653589793238462643383279502884197169399375105820974944592307\
 real  0m4.183s
@@ -887,7 +1081,7 @@ uptime
 ```
 
 - The three numbers are moving-window sum averages of processes competing for CPU time over **1, 5 and 15 minutes**.
-- They are **exponentially damped** moving averages: recent samples weigh more, so the three numbers react at different speeds. They are not scaled to your core count — a load of 4 saturates a 4-core machine but overloads a 2-core one.
+- They are **exponentially scaled**. Twice the number does not mean twice the load.
 - Here 2.45 / 1.00 / 0.43 means load is **rising**.
 
 <aside>
@@ -958,7 +1152,7 @@ In the book's run, `sda` shows ~744 MB/s writes at 46% `%util` — busy, but ins
 **`biotop`** is "block I/O top", part of **BCC**. It shows *which processes* drive disk load.
 
 ```bash
-sudo biotop-bpfcc          # add -C to stop it clearing the screen each refresh
+sudo biotop-bpfcc          # -C prevents clearing the screen each refresh
 # PID   COMM          D MAJ MIN DISK  I/O  Kbytes  AVGms
 # 5137  kworker/u4:3  W 8   0   sda   677  611272   3.37
 # 246   jbd2/sda1-8   W 8   0   sda     2     204   0.20
@@ -987,7 +1181,7 @@ sudo service sysstat restart
 
 <aside>
 
-**Interval and count.** `sar`, and many BCC tools, take two optional positional parameters: `[interval] [count]` — how often to print, and how many times before exiting. Without them, `sar` reports the history already collected today, and most BCC tools print continuously until you press Ctrl-C. The book uses `1 1` to print one set of stats and exit.
+**Interval and count.** `sar`, and many BCC tools, take two optional positional parameters: `[interval] [count]` — how often to print, and how many times before exiting. The default is usually 1 second and infinite count. The book uses `1 1` to print one set of stats and exit.
 
 </aside>
 
@@ -1133,7 +1327,7 @@ top -d 0.5           # press m a couple of times for memory progress bars
 perl -e 'while (1) { $a .= "A" x 1024; }'
 ```
 
-```text
+```jsx
 06:49:11 Triggered by PID 3968 ("perl"), OOM kill of PID 3968 ("perl"), 1009258 pages, loadavg: 0.00 0.23 1.22 3/424 3987
 ```
 
@@ -1220,22 +1414,71 @@ done
 
 ### Experiment Card 3.1 — The busy-neighbour experiment
 
-| Field | Content |
-| --- | --- |
-| **Goal** | Explain why the pi-calculating application became slow, and confirm the cause is CPU contention. |
-| **Relevant theory** | USE method; resource contention; steady state measured over time; the four-step model. |
-| **System / setup** | Two-core VM. Foreground workload: `bc` computing 3000 digits of pi in a loop. Background: `stress --cpu 2 -m 1 -d 1` cycling every 35 s after a 20 s delay. |
-| **Observability (step 1)** | Wall-clock time per pi iteration (from `time`). Supporting: `top`, `mpstat -P ALL 1`, `uptime`. |
-| **Steady state (step 2)** | "Around 5 seconds per iteration" (the first runs show ~4.18 s). |
-| **Hypothesis (step 3)** | "When other processes are running, the speed should remain the same." |
-| **Failure injected** | Resource starvation — a competing CPU/memory/disk load on the same host. |
-| **Blast radius** | The whole VM, deliberately. Every process on the box contends. |
-| **Tools / commands** | `~/src/examples/busy-neighbours/mystery002`; `top`; `mpstat -P ALL 1`; `cat /proc/cpuinfo`; `stress`. |
-| **Observed result (step 4)** | **Hypothesis refuted.** Iterations take much longer and vary more. `top` shows four `stress` processes taking 52.9 / 23.5 / 23.5 / 17.6 %CPU while `bc` gets only 17.6 %CPU. `%Cpu(s)` shows 0% idle. |
-| **Why it happened** | `bc` is single-threaded and competes on equal terms with `stress` workers for two cores. The kernel's default scheduler shares CPU fairly among runnable processes; "fair" here means the application loses. |
-| **Lesson learned** | Slowness is often *not* a bug in your code. It is a neighbour. Find it with per-process tooling (`top`, `mpstat`, `biotop`, `tcptop`) before you touch the application. |
-| **Fix applied** | See below — **cgroups**, not niceness. |
-| **Production considerations** | On shared hosts, and on every container platform, this is the default condition rather than an exception. The fix belongs in the platform layer (cgroup limits, Kubernetes requests and limits), not in the application. |
+**Purpose and concepts**
+
+**Goal**
+
+Explain why the pi-calculating application became slow, and confirm the cause is CPU contention.
+
+**Relevant theory**
+
+USE method; resource contention; steady state measured over time; the four-step model.
+
+**Setup, hypothesis and boundaries**
+
+**System / setup**
+
+Two-core VM. Foreground workload: `bc` computing 3000 digits of pi in a loop. Background: `stress --cpu 2 -m 1 -d 1` cycling every 35 s after a 20 s delay.
+
+**Observability (step 1)**
+
+Wall-clock time per pi iteration (from `time`). Supporting: `top`, `mpstat -P ALL 1`, `uptime`.
+
+**Steady state (step 2)**
+
+"Around 5 seconds per iteration" (the first runs show ~4.18 s).
+
+**Hypothesis (step 3)**
+
+"When other processes are running, the speed should remain the same."
+
+**Blast radius**
+
+The whole VM, deliberately. Every process on the box contends.
+
+**Execution and tools**
+
+**Failure injected**
+
+Resource starvation — a competing CPU/memory/disk load on the same host.
+
+**Tools / commands**
+
+`~/src/examples/busy-neighbours/mystery002`; `top`; `mpstat -P ALL 1`; `cat /proc/cpuinfo`; `stress`.
+
+**Results, interpretation and lessons**
+
+**Observed result (step 4)**
+
+**Hypothesis refuted.** Iterations take much longer and vary more. `top` shows four `stress` processes taking 52.9 / 23.5 / 23.5 / 17.6 %CPU while `bc` gets only 17.6 %CPU. `%Cpu(s)` shows 0% idle.
+
+**Why it happened**
+
+`bc` is single-threaded and competes on equal terms with `stress` workers for two cores. The kernel's default scheduler shares CPU fairly among runnable processes; "fair" here means the application loses.
+
+**Lesson learned**
+
+Slowness is often *not* a bug in your code. It is a neighbour. Find it with per-process tooling (`top`, `mpstat`, `biotop`, `tcptop`) before you touch the application.
+
+**Fix applied**
+
+See below — **cgroups**, not niceness.
+
+**Limits and follow-up**
+
+**Production considerations**
+
+On shared hosts, and on every container platform, this is the default condition rather than an exception. The fix belongs in the platform layer (cgroup limits, Kubernetes requests and limits), not in the application.
 
 **Why `nice` is the wrong fix and cgroups are the right one.** Niceness sets a *relative* priority. Its drawback, in the book's words: "it's hard to control precisely how much CPU they would get." **Control groups (cgroups)** are a kernel feature that specifies **exact amounts** of resources — CPU, memory, I/O — that the kernel allocates to a group of processes.
 
@@ -1260,7 +1503,7 @@ do
 done
 ```
 
-`cgcreate -g cpu:/<name>` creates a CPU-controlled cgroup. `cgexec -g cpu:/<name> <cmd>` runs a command inside it. **By default each control group gets 1024 `cpu.shares` — a relative weight, not a cap.** Two groups with equal shares split contended CPU time equally, so on this two-core VM each group ends up with about one core's worth. Result in `top`: `bc` gets ~80% of a CPU while all four `stress` processes share the other at ~26.7% each.
+`cgcreate -g cpu:/<name>` creates a CPU-controlled cgroup. `cgexec -g cpu:/<name> <cmd>` runs a command inside it. **By default each control group gets 1024 shares, effectively one core.** Result in `top`: `bc` gets ~80% of a CPU while all four `stress` processes share the other at ~26.7% each.
 
 <aside>
 
@@ -1326,7 +1569,7 @@ curl localhost:8001                            # generate some work first
 
 The instructive line in the output:
 
-```text
+```jsx
 36   17.682  0.491  17.682  0.491 {method 'poll' of 'select.poll' objects}
 ```
 
@@ -1404,7 +1647,6 @@ scrape_configs:
 **Step 3 — run Prometheus:**
 
 ```bash
-# with --net=host Docker ignores -p (and warns); Prometheus listens on the host's port 9090 directly
 docker run \
     -p 9090:9090 \
     --net="host" \
@@ -1450,390 +1692,30 @@ Further pointers: PromQL documentation, and the Grafana dashboard library at `gr
 6. `top`'s `%Cpu(s)` row decomposes CPU time into `us/sy/ni/id/wa/hi/si/st`. `st` (steal) shows that a hypervisor is taking your cycles.
 7. `mpstat -P ALL 1`, or `1` in `top`, exposes per-core imbalance that aggregate numbers hide. This matters most for single-threaded workloads.
 8. BCC/eBPF tools (`biotop`, `tcptop`, `oomkill`, `opensnoop`, `execsnoop`, `pythonstat`, `pythonflow`) answer "**which process**" with negligible overhead. Aggregate metrics cannot answer that question.
-9. `nice` sets a per-process relative priority. **cgroups apply weights (`cpu.shares`) or hard caps (quota/period) to a whole group of processes.** Prefer cgroups when you need a guarantee.
+9. `nice` sets relative priority. **cgroups set absolute allocations.** Prefer cgroups when you need a guarantee.
 10. A resource-contention problem often has nothing to do with your code. Look for the neighbour before you refactor.
 11. Manual tools do not scale to continuous practice. Push USE metrics into a time-series database (Node Exporter → Prometheus → Grafana) so a steady state becomes a query instead of a memory.
 
 ---
 
-# Chapter 4 — Database Trouble and Testing in Production
+# Chapter 4 — Poking Docker
 
-## 4.1 Practice — The system under test: WordPress + MySQL
+**Study route**
 
-The book deliberately chooses **ordinary, widely deployed software**: WordPress, which by some estimates serves more than a third of all pages on the internet and most CMS-backed websites, paired with MySQL.
-
-**Architecture (Figures 4.1 and 4.2):**
-
-- **Apache2** handles incoming HTTP traffic.
-- **WordPress (PHP)** processes requests and generates responses.
-- **MySQL** stores the blog data.
-
-The request path:
-
-1. Client sends `GET /hello?q=XYZ HTTP/1.1` to Apache2.
-2. Apache2 decodes HTTP, extracts the request, and **calls the PHP interpreter** running WordPress.
-3. WordPress **connects to MySQL** to fetch the data it needs.
-4. WordPress generates the response HTML.
-5. Apache2 returns `HTTP/1.1 200 OK` with that body.
-
-Start it in the VM:
-
-```bash
-sudo systemctl stop nginx        # from chapter 2
-sudo systemctl start mysql
-sudo systemctl start apache2
-# then configure at http://localhost/blog
-```
+Orient to the scenario: §5.1 → virtualization and kernel mechanisms: §§5.2–5.9 → applied diagnosis and Pumba: §§5.10–5.11 → operational pitfalls: §5.12 → connections and takeaways.
 
 <aside>
 
-Read the diagram for what it *hides*. Step 3 is drawn as one arrow, but WordPress makes **many** database round trips per page. That single misread arrow destroys the hypothesis in Experiment 2.
+**Supplementary explanation — Editorial verification: CPU weights and the memory experiment**
+
+**Study cross-reference.** Apply the CPU-shares correction in Chapter 3 when reading the cgroup examples here.
+
+**Unresolved explanation — Unknown confidence in the original causal claim.** The reported VIRT/RES values alone do not establish why the memory-stress command completed. The original claim that `stress` never touches its allocation has not been verified against the demonstrated binary and environment. Docker memory and swap configuration must also be considered; see Docker memory resource controls. Preserve the reported observation, but do not memorize that proposed cause as established. This also applies to review answer 24.
 
 </aside>
-
----
-
-## 4.2 Theory — Finding weak links
-
-<aside>
-
-**The book's heuristic:** "Finding weak links is often equal measures science and art. Based on an often-incomplete mental picture of how a system works, the starting points for chaos experiments are effectively **educated guesses** on where fragility might reside… which you'll then turn into actual science through chaos experiments."
-
-**Remember this one: the parts of the system responsible for storing state are often the most fragile ones.**
-
-</aside>
-
-The database is the suspect, and it produces two guesses:
-
-1. The database may need good disk I/O speeds. What happens when they slow down?
-2. How much slowness can you accept in networking between the app server and the database?
-
-Each becomes a full experiment.
-
----
-
-### 4.2.1 Experiment 1 — Slow disks
-
-**Step 1: Observability.** Metric = **successful requests per second (RPS)**. It is one number, easy to work with, and Apache Bench measures it.
-
-**Step 2: Steady state.** Run `ab` against an untouched system.
-
-```bash
-ab -t 30 -c 1 -l http://localhost/blog/      # NOTE the trailing slash, or you get a redirect
-```
-
-```text
-Concurrency Level:    1
-Time taken for tests: 30.023 seconds
-Complete requests:    2592
-Failed requests:      0
-Requests per second:  86.33 [#/sec] (mean)
-Time per request:     11.583 [ms] (mean)
-```
-
-**Steady state = ~86 RPS, ~11.6 ms per request, 0 failures.** The book ran it a dozen times to confirm the values repeat.
-
-**Step 3: Hypothesis.** *"If the disk I/O is 95% used, the successful requests per second won't drop by more than 50%."*
-
-This models a real scenario: another process, such as a log cleaner or rotator, starts and consumes disk I/O for a period. The book states that 95% and 50% are **arbitrary starting values**: "In the real world, they would come from the SLOs you are trying to satisfy."
-
-**Calibration — you cannot inject "95%" until you know what 100% is.** Take two independent measurements:
-
-```bash
-# terminal 1 — watch throughput every 3 seconds
-iostat 3
-
-# terminal 2 — one disk-writing worker for 35 seconds
-stress --timeout 35 --hdd 1
-```
-
-```text
-Device   tps     kB_read/s  kB_wrtn/s   kB_read  kB_wrtn
-sda      1005.00      0.00  1017636.00        0  2035272      # ~1 GB/s
-```
-
-Cross-check with `dd`:
-
-```bash
-dd if=/dev/zero of=/tmp/file1 bs=512M count=15
-# 8053063680 bytes (8.1 GB) copied, 8.06192 s, 998 MB/s
-```
-
-`dd` explained: `if=` input file (`/dev/zero`, an infinite stream of zero bytes), `of=` output file, `bs=512M` block size, `count=15` number of blocks — 7.5 GB written.
-
-**Sanity check against theory.** Apple does not publish SSD numbers, but internet benchmarks suggest ~2.5 GB/s. Measuring under half that inside a default-configured VM is plausible. `stress --hdd 1` consumes about 95% of the measured 1 GB/s — exactly the injection level the hypothesis called for.
-
-<aside>
-
-**"Deus ex machina" — the book's footnote on the convenience.** If you need a different fraction, say 50% of 1 GB/s = 512 MB/s, **use cgroups v2 to limit the `stress` command's I/O to that value**. Remember this: cgroups are not only for CPU and memory. They are the general-purpose knob for calibrated resource injection.
-
-</aside>
-
-**Step 4: Run.**
-
-```bash
-# terminal 1 (start first; 35 s gives you 5 s of headroom)
-stress --timeout 35 --hdd 1
-# terminal 2
-ab -t 30 -c 1 -l http://localhost/blog/
-```
-
-```text
-Complete requests:   1618
-Failed requests:     0
-Requests per second: 53.92 [#/sec] (mean)
-Time per request:    18.547 [ms] (mean)
-```
-
-### Experiment Card 4.1 — Slow disks under WordPress
-
-| Field | Content |
-| --- | --- |
-| **Goal** | Quantify how WordPress degrades when a neighbouring process saturates disk write throughput. |
-| **Relevant theory** | USE (block I/O utilization/throughput); "stateful parts are the most fragile"; calibrating an injection against a measured 100%. |
-| **System / setup** | Single VM running Apache2 + WordPress (PHP) + MySQL, plus the load generator and the fault injector. |
-| **Hypothesis** | "If the disk I/O is 95% used, the successful RPS won't drop by more than 50%." |
-| **Steady state** | ~86 RPS; ~11.6 ms mean response; 0 failed requests. |
-| **Observability** | `ab` (RPS, mean time per request, failed requests); `iostat 3` to verify the injected load. |
-| **Failure injected** | ~95% of measured disk write throughput consumed by `stress --hdd 1`. |
-| **Blast radius** | Whole VM. Everything shares one host — deliberately simple, deliberately unrealistic. |
-| **Tools / commands** | `ab -t 30 -c 1 -l <url>`, `stress --timeout 35 --hdd 1`, `iostat 3`, `dd if=/dev/zero of=/tmp/file1 bs=512M count=15`. |
-| **Observed result** | **53.92 RPS, a 38% decrease. 0 errors. Mean request time 12 ms → 19 ms. Hypothesis confirmed** (38% < 50%). |
-| **Interpretation** | A 7 ms increase "is unlikely to be noticed by any human." The system tolerates a noisy disk neighbour. |
-| **Lesson** | Calibrate the injection to a *measured* baseline of the resource, not to an assumed spec sheet. |
-| **Production considerations** | The result is specific to write-heavy contention on one host with these caches. Do not generalise it to a different disk type, filesystem or traffic shape. |
-
-**The discussion section — read this twice. It is the best methodology lesson in the chapter.** The author criticises his own experiment:
-
-- **Everything runs on one host.** The app server, the application, the database, `stress` and `ab` all share the VM. Writing to disk **costs CPU time**, so CPU contention may drive the slowdown more than the writes do. And if writing *is* the main factor, *which component does it hurt most?* This setup cannot answer that. The author states the trade-off openly: "I chose to sacrifice realism for ease of use to help the learning process."
-- **Average RPS is a poor metric.** Like any average it discards the distribution. Averaging a 1 ms and a 1 s request gives ~0.5 s and says nothing about either. **A 90th, 95th or 99th percentile is much more useful.** Percentiles arrive in later chapters.
-- **Writes were chosen arbitrarily.** What about reads? How does filesystem caching change the picture? Which filesystem optimises the result? Would **NVMe**, which reads and writes partly in parallel, behave like SATA? What about a mixed read/write pattern?
-- **Concurrency of 1 is unrealistic.** Real traffic is **bursty**, and a different usage pattern may stress the disk differently and give different results.
-
-<aside>
-
-The generalisable point: "often you will be uncovering new layers as you implement the experiment and realize the importance of other variables." An experiment's *first* result is usually a prompt for a better experiment, not a conclusion.
-
-</aside>
-
----
-
-### 4.2.2 Experiment 2 — Slow connection to the database
-
-**"Slow" is contextual.** The book's illustration: 45 minutes choosing something on Netflix, versus 45 minutes waiting for an organ delivery. In computing, a high-frequency trading fund cares about every millisecond; a cat video that takes an extra second does not matter.
-
-For Meower, current best practice says a site should load in **under 3 seconds**, or the probability of users leaving rises significantly. Allowing for the user's own download time, the target becomes **average response time ≤ 2.5 seconds**.
-
-**Step 1: Observability.** Same metric — successful RPS via `ab`. The author repeats the averages caveat and accepts it for teaching purposes.
-
-**Step 2: Steady state.** Reuse the baseline: `ab -t 30 -c 1 -l http://localhost/blog/` → mean ~11.583 ms per request.
-
-**Step 3: Hypothesis.** *"If the networking between WordPress and MySQL experiences a delay of 2 seconds, the average response time remains less than 2.5 seconds."*
-
-The implicit model in that hypothesis: **one round trip per page.** Hold that thought.
-
----
-
-### Theory + Practice — `tc` (Traffic Control)
-
-**What it is.** `tc` shows and manipulates traffic-control settings. It **changes how the Linux kernel schedules packets**. The book is candid: "`tc` is many things, but easy to use is not one of them."
-
-<aside>
-
-**`qdisc` = queueing discipline** — a packet scheduler. **Nothing to do with disks.** This is the most common misreading of `tc`.
-
-</aside>
-
-**Learn it on `ping` first.** `ping` uses ICMP: it sends an `ECHO_REQUEST` datagram and expects an `ECHO_RESPONSE`.
-
-```bash
-ping -c 3 google.com
-# rtt min/avg/max/mdev = 4.281/14.292/28.263/10.183 ms
-```
-
-**Add a blanket 500 ms delay to an entire interface:**
-
-```bash
-sudo tc qdisc add dev eth0 root netem delay 500ms
-ping -c 3 google.com
-# rtt min/avg/max/mdev = 512.369/521.219/527.814/6.503 ms
-```
-
-**Remove it:**
-
-```bash
-sudo tc qdisc del dev eth0 root
-```
-
-Decoding the command: `qdisc add` attaches a queueing discipline; `dev eth0` selects the interface; `root` places it at the root of the hierarchy; `netem` is the **network emulator** qdisc (delay, loss, duplication, corruption, reordering); `delay 500ms` is its parameter.
-
-<aside>
-
-**Pop quiz:** what can `tc` **not** do? Give you permission for landing the aircraft. It *can* introduce both slowness and failure on network devices — Chapter 5 exploits that through Pumba, and Chapter 10 through network-disruption experiments.
-
-</aside>
-
-**Targeting one program instead of the whole interface.** The book does it the hard way on purpose — "I would like you to see it so you can appreciate how much easier it will be when you use higher-level tools in later chapters."
-
-**The hierarchy (Figure 4.3):**
-
-```text
-    root 1:   (prio qdisc — three bands)
-   /     |     \
-1:1     1:2     1:3
- |       |       └── unused (no packets routed here; don't care)
- |       └── "match everything else" → sfq (doesn't shape; a no-op for us)
- └── match IP, destination port 3306 (MySQL) → netem delay 2000ms
-```
-
-```bash
-# 1. Replace the root with a prio qdisc, creating bands 1:1, 1:2, 1:3
-sudo tc qdisc add dev lo root handle 1: prio
-
-# 2. Band 1:1 — only IP traffic whose destination port is 3306 (MySQL)
-sudo tc filter add dev lo \
-  protocol ip parent 1: prio 1 u32 \
-  match ip dport 3306 0xffff flowid 1:1
-
-# 3. Band 1:2 — everything else
-sudo tc filter add dev lo \
-  protocol all parent 1: prio 2 u32 \
-  match ip dst 0.0.0.0/0 flowid 1:2
-
-# 4. Attach the 2000 ms delay to band 1:1
-sudo tc qdisc add dev lo parent 1:1 handle 10: netem delay 2000ms
-
-# 5. Attach Stochastic Fairness Queueing to band 1:2 (a no-op for our purposes)
-sudo tc qdisc add dev lo parent 1:2 handle 20: sfq
-```
-
-Command anatomy worth memorising: **`prio`** creates classes (bands) by priority; **`filter … u32 match …`** is the packet classifier (`u32` matches raw 32-bit fields; `dport 3306 0xffff` means destination port 3306 with a full 16-bit mask); **`flowid 1:1`** names the band a match goes to; **`netem`** applies the impairment; **`sfq`** interleaves flows fairly without shaping them. Note `dev lo` — the loopback interface, because in this VM everything talks over localhost. Further reading: `https://lartc.org/howto/lartc.qdisc.classful.html`.
-
-**Verify the targeting before you trust the result.** This step is the craftsmanship:
-
-```bash
-telnet 127.0.0.1 80      # Apache2  → connects with no delay
-telnet 127.0.0.1 3306    # MySQL    → takes 2 seconds to connect
-```
-
-**Run the experiment:**
-
-```bash
-ab -t 30 -c 1 -l http://localhost/blog/
-# apr_pollset_poll: The timeout specified has expired (70007)
-```
-
-`ab` times out before it produces any statistics. A 30-second test cannot complete a single response. Measure one request directly:
-
-```bash
-time curl localhost/blog/
-# real 0m54.330s
-```
-
-**54 seconds**, for a page that took **11 ms**.
-
-```bash
-sudo tc qdisc del dev lo root
-time curl localhost/blog/       # immediate again
-```
-
-### Experiment Card 4.2 — 2-second latency to MySQL only
-
-| Field | Content |
-| --- | --- |
-| **Goal** | Determine whether WordPress stays within a 2.5 s response budget when the database connection gains 2 s of latency. |
-| **Relevant theory** | Latency compounding across round trips; the "stateful component is the weak link" heuristic; selective (targeted) fault injection as blast-radius control. |
-| **System / setup** | Apache2 + WordPress + MySQL on one VM, all traffic over `lo`. |
-| **Hypothesis** | "If the networking between WordPress and MySQL experiences a delay of 2 seconds, the average response time remains less than 2.5 seconds." |
-| **Steady state** | ~11.6 ms mean response time (`ab -t 30 -c 1 -l`). |
-| **Observability** | `ab`; then `time curl` when `ab` could not complete. `telnet` verified the injection hit only the intended port. |
-| **Failure injected** | `netem delay 2000ms` applied **only** to IP traffic with destination port 3306, via a `prio` qdisc with a `u32` filter. |
-| **Blast radius** | Deliberately narrowed: one port on one interface. All other traffic (port 80) untouched — verified with `telnet`. |
-| **Tools / commands** | `tc qdisc add … prio` / `tc filter add … u32 match ip dport 3306 0xffff` / `tc qdisc add … netem delay 2000ms` / `tc qdisc del dev lo root`; `telnet`; `ab`; `time curl`. |
-| **Expected** | ~2.0–2.5 s responses. |
-| **Observed result** | **Hypothesis refuted, dramatically. 54.33 seconds** per response; `ab` timed out entirely (`apr_pollset_poll: The timeout specified has expired`). |
-| **Why it happened** | **WordPress communicates with the database many times per page**, and the delay applies to *every* round trip. The book's verification: re-run with `delay 100ms` and **the total is a multiple of the 100 ms you add**. *(Supplementary arithmetic, not stated in the book: 54 s ÷ 2 s ≈ 27 delayed client→MySQL packet exchanges per page render. The filter delays packets, not queries, so this is not a SQL query count.)* |
-| **Lesson learned** | **Latency does not add — it multiplies by the number of round trips.** An architecture's chattiness is invisible in normal conditions and dominant under latency. Injected latency is also an excellent **round-trip counter**. |
-| **Interpretation / fixes** | Two options: (a) sweep delay values to find empirically what the system *can* withstand; (b) **change the application to minimise round trips**, making it less fragile to delay. |
-| **Production considerations** | A cross-AZ or cross-region database move adds only a few ms per round trip, which a page with ~27 delayed exchanges multiplies into something users feel. Test the chatty path before you move the database, not after. |
-
----
-
-## 4.3 Theory — Testing in production
-
-The natural reaction to a 54-second response is "fortunately, it's not in production." The book agrees that is fair, **and then argues for production testing anyway.**
-
-<aside>
-
-**The core claim:** "whatever testing we do outside the production environment is **by definition incomplete**."
-
-</aside>
-
-Why production always differs:
-
-- **Data** will almost always be different.
-- **Scale** will almost invariably be different.
-- **User behavior** will be different.
-- **Environment configurations** will tend to drift away.
-
-**The worked illustration — an internet bank.** Its lifecycle: write unit tests → write feature code to comply → integration tests → deploy to a test stage → end-to-end testing by QA → promote to production → route traffic to the new software in **5% increments over a few days**.
-
-Now suppose a release contains a bug that appears **only under rare network slowness**. Chaos engineering is exactly the tool for that, but it fails when confined to test stages:
-
-- Test-stage hardware is a **previous generation of servers with a different networking stack**, so the experiment that would catch the bug in production does not catch it in test.
-- **Usage patterns in test differ from real user traffic**, so the same experiment can pass in test and fail in production.
-
-**"The only way to be 100% sure something works with production traffic is to use production traffic."**
-
-**The decision framing — reuse this sentence in your own organisation:** it "boils down to whether you prefer the risk of hurting a portion of production traffic **now**, or potentially running into the bug **later**." Uncovering a problem sooner may be cheaper even when some users hit an issue. Failing on purpose may equally be unacceptable for public-image reasons. "As with any sufficiently complex question, the answer is, 'It depends.'"
-
-<aside>
-
-**The explicit guardrail:** "None of this is to say that you should skip testing your code and ship it directly in production. But with correct preemptive measures in place (**to limit the blast radius**), running a chaos experiment in production is a real option."
-
-The habit to adopt: **every time you design a chaos experiment, ask "Should I do that in the production environment?"**
-
-</aside>
-
-<aside>
-
-**Pop quiz — when should you test in production?** "When you've done your homework, tested in other stages, applied common sense, and see the benefits outweighing the potential problems."
-
-**Pop quiz — which statement is true?** "Chaos engineering is a methodology to improve your software beyond the existing testing methodologies." Not: it replaces other testing. Not: it only makes sense in production. Not: it is about randomly breaking things.
-
-</aside>
-
----
-
-## Theory ↔ Practice connections for Chapter 4
-
-- **"Stateful components are fragile" (§4.2) ↔ both experiments:** the heuristic chose the target, and the second experiment proved the guess right in a way nobody predicted.
-- **Blast radius (Ch. 2) ↔ the `tc` filter hierarchy (§4.2.2):** matching only `dport 3306` is a textbook implementational blast-radius control, and `telnet` on ports 80 and 3306 verifies it worked. Compare with the blanket `dev eth0 root netem delay` used for learning — same tool, radically different blast radius.
-- **USE (Ch. 3) ↔ calibration (§4.2.1):** you cannot inject "95% utilization" without first measuring utilization. `iostat` and `dd` are the measurement half of the experiment.
-- **Emergent properties (Ch. 1) ↔ latency multiplication (§4.2.2):** no component has the property "turns 2 s into 54 s." The interaction does.
-- **`tc` here ↔ Pumba (Ch. 5) ↔ PowerfulSeal (Ch. 10–11):** the same `netem` mechanism reappears wrapped in progressively friendlier tools. Understanding the raw form lets you trust the wrappers.
-- **Averages criticised here ↔ percentiles used later (Ch. 8, 9, 11):** the book flags the flaw now and fixes it later.
-
----
-
-## Key Takeaways — Chapter 4
-
-1. Educated guesses are a legitimate starting point. Turn them into science with an experiment; do not wait for a complete mental model.
-2. **Heuristic: stateful components are usually the most fragile.** Start there.
-3. Calibrate injections against a **measured** 100%, using at least two independent measurements (`stress` + `dd`, cross-checked with `iostat`), then sanity-check against published benchmarks.
-4. `tc` manipulates kernel packet scheduling. `qdisc` = queueing discipline, not disk. `netem delay Nms` is the latency primitive. `prio` + `u32 filter` + `flowid` is how you target one port.
-5. **Always verify that your injection hit only its intended target** before you believe the result (`telnet` on both ports).
-6. **Latency compounds with the number of round trips.** 2 s of database latency became 54 s of page load because every MySQL-bound packet exchange on the page's critical path absorbs the full delay — roughly 27 of them, which is not the same as 27 SQL queries. Injected latency doubles as a round-trip counter.
-7. Averages hide distributions. Move to p90/p95/p99 for anything you will act on.
-8. One-host experiments confound resources: writing to disk also costs CPU. Know which confounders your setup contains, and say so.
-9. Testing outside production is by definition incomplete. Data, scale, user behaviour and configuration all drift.
-10. Production testing is a risk trade: hurt some traffic now, or meet the bug later. It never substitutes for the earlier stages, and it is only defensible with blast-radius controls in place.
-
----
-
-# Chapter 5 — Poking Docker
 
 > The author calls this "one of my favorite chapters of the book." It goes from a vague idea of what Docker is, to reimplementing a container from scratch, then breaks both the application *and* Docker itself.
+>
 
 ## 5.1 Practice — The scenario: Meower USA
 
@@ -1957,17 +1839,12 @@ Docker does not implement containers. The kernel does. Docker adds **convenience
 ## 5.4 Practice — Under the hood: chroot and filesystems
 
 ```bash
-# --name       name it
-# -ti          keep stdin open + allocate a pseudo-TTY (note: SINGLE hyphen)
-# --rm         delete the container when you exit
-# alpine:3.11  image:tag — Alpine, a minimal distro popular in containers (5.61 MB)
-# /bin/sh      what to execute inside
 docker run \
-  --name firstcontainer \
-  -ti \
-  --rm \
-  alpine:3.11 \
-  /bin/sh
+  --name firstcontainer \    # name it
+  -ti \                      # keep stdin open + allocate a pseudo-TTY (note: SINGLE hyphen)
+  --rm \                     # delete the container when you exit
+  alpine:3.11 \              # image:tag — Alpine, a minimal distro popular in containers (5.61 MB)
+  /bin/sh                    # what to execute inside
 ```
 
 **The first demonstration — same path, different content:**
@@ -2001,7 +1878,7 @@ The `GraphDriver` section:
 
 | Key | Meaning |
 | --- | --- |
-| `LowerDir` | The read-only layers of the **image** the container is based on (a colon-separated list, topmost first) |
+| `LowerDir` | The top layer of the **image** the container is based on (read-only) |
 | `UpperDir` | The **read-write layer of the container** |
 | `MergedDir` | The **merged (union) view** of the two |
 | `WorkDir` | overlay2's internal working directory |
@@ -2081,21 +1958,67 @@ Note what mounting `/proc` means for isolation: you just gave the "container" a 
 
 ### Experiment Card 5.1 — Can one container prevent another from writing to disk?
 
-| Field | Content |
-| --- | --- |
-| **Goal** | Test whether container filesystems, being chroot'ed locations on the host's filesystem, allow one container to starve another of disk space. |
-| **Relevant theory** | chroot + union filesystems (§5.4.1); "the isolation is really thin"; cgroups do *not* cover storage by default. |
-| **System / setup** | Two containers built from `ubuntu:focal-20200423`: `control` (writes a 50 MB file, deletes it, repeats every 2 s) and `failure` (allocates 50 MB files forever). |
-| **Hypothesis** | "If another `failure` container writes to disk until it can't, the `control` container won't be able to write to disk anymore." |
-| **Steady state** | The `control` container prints "OK wrote the file" every two seconds. |
-| **Observability** | The `control` container's own success/failure message; `df -h` on the host. |
-| **Failure injected** | Disk exhaustion by a second container. |
-| **Blast radius** | The entire host filesystem — that is precisely what is being tested. |
-| **Observed result** | **Hypothesis confirmed.** `failure` writes ~475 files then hits `fallocate: fallocate failed: No space left on device`. Within the same seconds, `control` also fails. `df -h` shows `/dev/sda1  32G  32G  0  100% /`. Stopping `failure` (with `--rm`) frees its storage and `control` resumes. |
-| **Why it happened** | Containers' filesystems are layers on the **same host filesystem**. Nothing in the default Docker configuration limits per-container storage. |
-| **Lesson learned** | **Running programs in containers does not automatically prevent one process from stealing disk space from another.** |
-| **Fix / caveat** | Docker exposes `--storage-opt size=X`, **but with the `overlay2` driver it requires an `xfs` filesystem mounted with the `pquota` option** for Docker's data root (`/var/lib/docker`), which a default Ubuntu install does not provide. "Therefore, allowing Docker containers to be limited in storage requires extra effort, which means that there is a good chance that **many systems will not limit it at all.**" |
-| **Production considerations** | Storage-driver setup "requires careful consideration and will be important to the overall health of your systems." See §5.12.2 for the second-order failures: an app that crashes on ENOSPC that Docker then cannot restart *because* the disk is full. |
+**Purpose and concepts**
+
+**Goal**
+
+Test whether container filesystems, being chroot'ed locations on the host's filesystem, allow one container to starve another of disk space.
+
+**Relevant theory**
+
+chroot + union filesystems (§5.4.1); "the isolation is really thin"; cgroups do *not* cover storage by default.
+
+**Setup, hypothesis and boundaries**
+
+**System / setup**
+
+Two containers built from `ubuntu:focal-20200423`: `control` (writes a 50 MB file, deletes it, repeats every 2 s) and `failure` (allocates 50 MB files forever).
+
+**Hypothesis**
+
+"If another `failure` container writes to disk until it can't, the `control` container won't be able to write to disk anymore."
+
+**Steady state**
+
+The `control` container prints "OK wrote the file" every two seconds.
+
+**Observability**
+
+The `control` container's own success/failure message; `df -h` on the host.
+
+**Blast radius**
+
+The entire host filesystem — that is precisely what is being tested.
+
+**Execution and tools**
+
+**Failure injected**
+
+Disk exhaustion by a second container.
+
+**Results, interpretation and lessons**
+
+**Observed result**
+
+**Hypothesis confirmed.** `failure` writes ~475 files then hits `fallocate: fallocate failed: No space left on device`. Within the same seconds, `control` also fails. `df -h` shows `/dev/sda1  32G  32G  0  100% /`. Stopping `failure` (with `--rm`) frees its storage and `control` resumes.
+
+**Why it happened**
+
+Containers' filesystems are layers on the **same host filesystem**. Nothing in the default Docker configuration limits per-container storage.
+
+**Lesson learned**
+
+**Running programs in containers does not automatically prevent one process from stealing disk space from another.**
+
+**Fix / caveat**
+
+Docker exposes `--storage-opt size=X`, **but with the `overlay2` driver it requires an `xfs` filesystem mounted with the `pquota` option** for Docker's data root (`/var/lib/docker`), which a default Ubuntu install does not provide. "Therefore, allowing Docker containers to be limited in storage requires extra effort, which means that there is a good chance that **many systems will not limit it at all.**"
+
+**Limits and follow-up**
+
+**Production considerations**
+
+Storage-driver setup "requires careful consideration and will be important to the overall health of your systems." See §5.12.2 for the second-order failures: an app that crashes on ENOSPC that Docker then cannot restart *because* the disk is full.
 
 **The two scripts and Dockerfiles:**
 
@@ -2122,13 +2045,10 @@ fallocate -l $FILESIZE $new_name \
 (( count++ ))
 ```
 
-```dockerfile
-# base image, pinned by tag
-FROM ubuntu:focal-20200423
-# copy from the build context
-COPY run.sh /run.sh
-# what runs when the container starts
-ENTRYPOINT ["/run.sh"]
+```docker
+FROM ubuntu:focal-20200423       # base image, pinned by tag
+COPY run.sh /run.sh              # copy from the build context
+ENTRYPOINT ["/run.sh"]           # what runs when the container starts
 ```
 
 ```bash
@@ -2160,8 +2080,8 @@ Read the build output this way: each Dockerfile line **produces a new intermedia
 | **Interprocess Communication (`ipc`)** | System V IPC objects and POSIX message queues |
 | **UTS (`uts`)** | Host and domain names |
 | **User ID (`user`)** | User identification and privilege isolation |
-| **Control group (`cgroup`)** | Hides the real identity of the cgroup the processes belong to |
-| **Time (`time`)** | Different times in different namespaces — **introduced in kernel 5.6, March 2020**; the book's VM (Ubuntu 20.04, kernel 5.4) does not have it |
+| **Control group (`cname`)** | Hides the real identity of the cgroup the processes belong to |
+| **Time (`time`)** | Different times in different namespaces — **introduced in kernel 5.6, March 2020**; the book's VM (4.18) does not have it |
 
 Linux starts with a single namespace of each type and creates new ones on the fly.
 
@@ -2185,7 +2105,7 @@ The links use the format `<namespace type>:[<namespace number>]`. Under the hood
 
 **What Docker creates.** Start `docker run --name probe -ti --rm ubuntu:focal-20200423`, get its PID with `docker inspect` (`.State.Pid`), then run `sudo lsns --task <PID>`:
 
-```text
+```jsx
         NS TYPE   NPROCS   PID USER COMMAND
 4026531835 cgroup    210     1 root /sbin/init      <-- SHARED with the host
 4026531837 user      210     1 root /sbin/init      <-- SHARED with the host
@@ -2198,35 +2118,74 @@ The links use the format `<namespace type>:[<namespace number>]`. Under the hood
 
 <aside>
 
-**Docker creates a new namespace of each type EXCEPT `cgroup` and `user`** (on cgroup v1 hosts, as in the book; on cgroup v2 hosts Docker also gives each container a private `cgroup` namespace). By default the container is therefore *not* isolated in the user namespace: root inside the container maps to root on the host. This is the root of most "container escape" concerns, and one command reveals it.
+**Docker creates a new namespace of each type EXCEPT `cgroup` and `user`.** By default the container is therefore *not* isolated in the user namespace: root inside the container maps to root on the host. This is the root of most "container escape" concerns, and one command reveals it.
 
 </aside>
 
 ### Experiment Card 5.2 — Killing a process in a different PID namespace
 
-| Field | Content |
-| --- | --- |
-| **Goal** | Confirm that PID namespaces prevent a container from signalling host processes — and confirm you understand *how* they prevent it. |
-| **Relevant theory** | PID namespaces as visibility filters (§5.4.4). |
-| **System / setup** | Host runs `pid-printer.sh`, a loop printing `Hi, I'm PID $$` every 2 s. A container runs `ubuntu:focal-20200423` interactively. |
-| **Hypothesis** | "If we issue a `kill` command from inside the container, for a process outside the container, it should fail." |
-| **Steady state** | The target process is running and printing. |
-| **Observability** | Whether the process keeps printing; the error message from `kill`. |
-| **Failure injected** | `kill -9 <host PID>` issued from inside the container. |
-| **Observed result** | **Hypothesis confirmed** — `bash: kill: (9000) - No such process`. The target keeps running. |
-| **Why — the important part** | The failure mode is **not "permission denied"; it is "no such process."** `ps a` inside the container lists only PID 1 (`/bin/bash`) and the `ps` itself. The host's PID does not exist in that namespace. |
-| **Lesson** | Namespaces isolate by **making things invisible**, not by refusing access. Error messages tell you which mechanism stopped you: a permission error means capabilities or DAC; a "not found" means namespaces. |
-| **Production considerations** | This isolation holds *from inside*. From the host, nothing stops you entering the namespace (below), so host access is container access. |
+**Purpose and concepts**
+
+**Goal**
+
+Confirm that PID namespaces prevent a container from signalling host processes — and confirm you understand *how* they prevent it.
+
+**Relevant theory**
+
+PID namespaces as visibility filters (§5.4.4).
+
+**Setup, hypothesis and boundaries**
+
+**System / setup**
+
+Host runs `pid-printer.sh`, a loop printing `Hi, I'm PID $$` every 2 s. A container runs `ubuntu:focal-20200423` interactively.
+
+**Hypothesis**
+
+"If we issue a `kill` command from inside the container, for a process outside the container, it should fail."
+
+**Steady state**
+
+The target process is running and printing.
+
+**Observability**
+
+Whether the process keeps printing; the error message from `kill`.
+
+**Execution and tools**
+
+**Failure injected**
+
+`kill -9 <host PID>` issued from inside the container.
+
+**Results, interpretation and lessons**
+
+**Observed result**
+
+**Hypothesis confirmed** — `bash: kill: (9000) - No such process`. The target keeps running.
+
+**Why — the important part**
+
+The failure mode is **not "permission denied"; it is "no such process."** `ps a` inside the container lists only PID 1 (`/bin/bash`) and the `ps` itself. The host's PID does not exist in that namespace.
+
+**Lesson**
+
+Namespaces isolate by **making things invisible**, not by refusing access. Error messages tell you which mechanism stopped you: a permission error means capabilities or DAC; a "not found" means namespaces.
+
+**Limits and follow-up**
+
+**Production considerations**
+
+This isolation holds *from inside*. From the host, nothing stops you entering the namespace (below), so host access is container access.
 
 **Entering a container's namespace — `nsenter`:**
 
 ```bash
 # attach-pid-namespace.sh
 CONTAINER_PID=$(docker inspect -f '{{ .State.Pid }}' experiment2)
-# --pid --target: enter the PID namespace of this process
 sudo nsenter \
-    --pid \
-    --target $CONTAINER_PID \
+    --pid \                       # enter the PID namespace...
+    --target $CONTAINER_PID \     # ...of this process
     /bin/bash /home/chaos/src/examples/poking-docker/experiment2/pid-printer.sh
 ```
 
@@ -2244,12 +2203,10 @@ ps          # your bash reports PID 1
 # container-ish.sh
 bash $CURRENT_DIRECTORY/new-filesystem.sh $FILESYSTEM_NAME     # step 1: the chroot tree
 cd $FILESYSTEM_NAME
-# --fork: REQUIRED for a PID namespace change to take effect
-# --pid: new PID namespace; chroot .: change the filesystem root
 sudo unshare \
-     --fork \
-     --pid \
-     chroot . \
+     --fork \                       # forking is REQUIRED for a PID namespace change to take effect
+     --pid \                        # new PID namespace
+     chroot . \                     # change the filesystem root
      /bin/bash -c "mkdir -p /proc && /bin/mount -t proc proc /proc && exec /bin/bash"
 ```
 
@@ -2269,7 +2226,7 @@ The kernel exposes a pseudo-filesystem, **cgroupfs**, usually mounted at **`/sys
 
 <aside>
 
-**v1 vs v2.** v1 "evolved over the years in a mostly uncoordinated, organic fashion". **v2 was introduced to reorganize, simplify and remove inconsistencies.** At the time of writing most of the ecosystem still used v1 or defaulted to it; runc's v2 work is tracked at `github.com/opencontainers/runc/issues/2315`. The book sticks to v1. In the listing, **`unified`** is where cgroups v2 is mounted. *(Compatibility: current distributions, including the Ubuntu 24.04 lab VM, mount only cgroup v2, so the v1 paths in this section do not exist there — see the compatibility note at the top.)*
+**v1 vs v2.** v1 "evolved over the years in a mostly uncoordinated, organic fashion". **v2 was introduced to reorganize, simplify and remove inconsistencies.** At the time of writing most of the ecosystem still used v1 or defaulted to it; runc's v2 work is tracked at `github.com/opencontainers/runc/issues/2315`. The book sticks to v1. In the listing, **`unified`** is where cgroups v2 is mounted.
 
 </aside>
 
@@ -2299,7 +2256,7 @@ ls -l /sys/fs/cgroup/cpu/docker
 | `cgroup.procs` / `tasks` | The PIDs in this cgroup |
 | `cpuacct.*` | Accounting: usage totals, per-CPU, user/sys split |
 
-Example: 50% of a CPU = `cpu.cfs_period_us=100000`, `cpu.cfs_quota_us=50000`. (The quota cannot be set below 1000 µs, so a 1000/500 pair is rejected.)
+Example: 50% of a CPU = `cpu.cfs_period_us=1000`, `cpu.cfs_quota_us=500`.
 
 **Docker's defaults for a fresh container:** `cpu.cfs_period_us=100000`, `cpu.cfs_quota_us=-1`, `cpu.shares=1024`. That is **no hard limit, default weight**.
 
@@ -2338,20 +2295,63 @@ echo 20971520 | sudo tee /sys/fs/cgroup/memory/docker/$CONTAINER_ID/memory.limit
 
 ### Experiment Card 5.3 — Using all the CPU you can find (`--cpus`)
 
-| Field | Content |
-| --- | --- |
-| **Goal** | Verify that Docker's `--cpus` hard limit actually caps CPU consumption. |
-| **Relevant theory** | cgroup CPU quota/period vs. shares; hard vs. soft limits. |
-| **System / setup** | Image `stressful` = `ubuntu:focal-20200423` + `apt-get install -y stress`. Two-CPU VM. |
-| **Hypothesis** | "If we run `stress` in CPU mode, in a container started with `--cpus=0.5`, it will use no more than 0.5 processor on average." |
-| **Steady state** | CPU utilization close to 0 (`%idle` ≈ 99.75). |
-| **Observability** | `mpstat -u -P ALL 2`; cross-check via `/sys/fs/cgroup/cpu/docker/$CONTAINER_ID/cpu.stat`. |
-| **Failure injected** | `stress --cpu 1 --timeout 30` inside a `--cpus=0.5` container. |
-| **Blast radius** | One container's cgroup — this is the *point* of the experiment. |
-| **Observed result** | **Hypothesis confirmed.** One CPU at ~49%, the other ~0%, total ~24.5% of two CPUs = half a CPU. `cpu.stat` shows `nr_periods 311`, `nr_throttled 304`, `throttled_time 15096182921` and rising. |
-| **Why** | `--cpus=0.5` sets `cpu.cfs_period_us=100000` and `cpu.cfs_quota_us=50000`. The kernel throttles the group once the quota is spent in each period. `cpu.shares` stays 1024. |
-| **Lesson** | `--cpus=N` ≡ period 100000 / quota N×100000. **`throttled_time` and `nr_throttled` prove throttling is happening.** Check them first when a containerised app is mysteriously slow. |
-| **Production considerations** | With a higher `--cpu` worker count the load spreads across both CPUs, but the *average* stays capped. A CPU-limited container does not report "out of CPU" anywhere except `cpu.stat`. |
+**Purpose and concepts**
+
+**Goal**
+
+Verify that Docker's `--cpus` hard limit actually caps CPU consumption.
+
+**Relevant theory**
+
+cgroup CPU quota/period vs. shares; hard vs. soft limits.
+
+**Setup, hypothesis and boundaries**
+
+**System / setup**
+
+Image `stressful` = `ubuntu:focal-20200423`  • `apt-get install -y stress`. Two-CPU VM.
+
+**Hypothesis**
+
+"If we run `stress` in CPU mode, in a container started with `--cpus=0.5`, it will use no more than 0.5 processor on average."
+
+**Steady state**
+
+CPU utilization close to 0 (`%idle` ≈ 99.75).
+
+**Observability**
+
+`mpstat -u -P ALL 2`; cross-check via `/sys/fs/cgroup/cpu/docker/$CONTAINER_ID/cpu.stat`.
+
+**Blast radius**
+
+One container's cgroup — this is the *point* of the experiment.
+
+**Execution and tools**
+
+**Failure injected**
+
+`stress --cpu 1 --timeout 30` inside a `--cpus=0.5` container.
+
+**Results, interpretation and lessons**
+
+**Observed result**
+
+**Hypothesis confirmed.** One CPU at ~49%, the other ~0%, total ~24.5% of two CPUs = half a CPU. `cpu.stat` shows `nr_periods 311`, `nr_throttled 304`, `throttled_time 15096182921` and rising.
+
+**Why**
+
+`--cpus=0.5` sets `cpu.cfs_period_us=100000` and `cpu.cfs_quota_us=50000`. The kernel throttles the group once the quota is spent in each period. `cpu.shares` stays 1024.
+
+**Lesson**
+
+`--cpus=N` ≡ period 100000 / quota N×100000. **`throttled_time` and `nr_throttled` prove throttling is happening.** Check them first when a containerised app is mysteriously slow.
+
+**Limits and follow-up**
+
+**Production considerations**
+
+With a higher `--cpu` worker count the load spreads across both CPUs, but the *average* stays capped. A CPU-limited container does not report "out of CPU" anywhere except `cpu.stat`.
 
 ```bash
 docker run --cpus=0.5 -ti --rm --name experiment3 stressful
@@ -2370,20 +2370,63 @@ Docker's two CPU controls mirror the cgroup ones: **`--cpus`** = hard limit; **`
 
 ### Experiment Card 5.4 — Using too much RAM (`--memory`)
 
-| Field | Content |
-| --- | --- |
-| **Goal** | Find out what actually happens when a container reaches its memory limit. |
-| **Relevant theory** | cgroup memory limits; the OOM Killer (Ch. 2); virtual vs. resident memory. |
-| **System / setup** | Same `stressful` image, started with `--memory=128m`. `--memory` accepts `b`, `k`, `m`, `g`. |
-| **Hypothesis** | "If we run `stress` in RAM mode, trying to consume 512 MB, in a container started with `--memory=128m`, it will use no more than 128 MB of RAM." |
-| **Steady state** | No OOM-kill logs in `dmesg` (`dmesg \| egrep "Kill\|oom"` — note existing timestamps first). |
-| **Observability** | `top` (VIRT vs RES); `dmesg \| grep Kill`; `watch -n 1 sudo cat /sys/fs/cgroup/memory/docker/$CONTAINER_ID/memory.usage_in_bytes`. |
-| **Failure injected** | `stress --vm 1 --vm-bytes 512M --timeout 30`; then `--vm 3`; then a **fork bomb**. |
-| **Observed result** | **Hypothesis fails — in an instructive way.** `stress` shows **VIRT 528152 KiB but RES 127400 KiB**, just under the limit, and **completes successfully**: `successful run completed in 30s`. With `--vm 3`, all three workers show 512 MB virtual but their resident total is ~115 MB, still under the limit. |
-| **Why** | The book's explanation: "**Just allocating the memory doesn't trigger the OOM Killer**." *Correction:* `stress --vm` does write to its memory (`--vm-stride` touches a byte every 4096 bytes by default), so untouched pages do not explain the result. The likely cause is **swap**: `--memory=128m` without `--memory-swap` lets the container swap, and on kernels without swap accounting that swap is not limited. RES stays at the limit while the rest is paged out. Check swap usage, or add `--memory-swap=128m` to see the OOM kill. |
-| **The fork bomb** | `boom () { boom \| boom & }; boom` — recursive self-calls exhausting resources. Now `memory.usage_in_bytes` oscillates **slightly above 128 MB**; `top` shows **~89% system CPU time**; inside the container `bash: fork: Cannot allocate memory`; `dmesg \| grep Kill` shows `Memory cgroup out of memory: Kill process 1929 (bash) score 2 or sacrifice child`. |
-| **Three lessons the book draws** | 1. Allocating memory does not trigger the OOM Killer; you can allocate far more than the cgroup allows. 2. Under a fork bomb the **total memory used was slightly higher than the container's limit** — useful for capacity planning. 3. **Running the OOM Killer against a fork bomb costs a non-negligible amount of CPU**; consider `--oom-kill-disable` for a container if you have done your capacity maths. |
-| **Production considerations** | A memory limit is enforced against **resident** memory, and enforcement arrives as a kill, not as an error your app can handle. Budget headroom above the limit and expect a CPU spike during OOM reaping. |
+**Purpose and concepts**
+
+**Goal**
+
+Find out what actually happens when a container reaches its memory limit.
+
+**Relevant theory**
+
+cgroup memory limits; the OOM Killer (Ch. 2); virtual vs. resident memory.
+
+**Setup, hypothesis and boundaries**
+
+**System / setup**
+
+Same `stressful` image, started with `--memory=128m`. `--memory` accepts `b`, `k`, `m`, `g`.
+
+**Hypothesis**
+
+"If we run `stress` in RAM mode, trying to consume 512 MB, in a container started with `--memory=128m`, it will use no more than 128 MB of RAM."
+
+**Steady state**
+
+No OOM-kill logs in `dmesg` (`dmesg | egrep "Kill|oom"` — note existing timestamps first).
+
+**Observability**
+
+`top` (VIRT vs RES); `dmesg | grep Kill`; `watch -n 1 sudo cat /sys/fs/cgroup/memory/docker/$CONTAINER_ID/memory.usage_in_bytes`.
+
+**Execution and tools**
+
+**Failure injected**
+
+`stress --vm 1 --vm-bytes 512M --timeout 30`; then `--vm 3`; then a **fork bomb**.
+
+**The fork bomb**
+
+`boom () { boom | boom & }; boom` — recursive self-calls exhausting resources. Now `memory.usage_in_bytes` oscillates **slightly above 128 MB**; `top` shows **~89% system CPU time**; inside the container `bash: fork: Cannot allocate memory`; `dmesg | grep Kill` shows `Memory cgroup out of memory: Kill process 1929 (bash) score 2 or sacrifice child`.
+
+**Results, interpretation and lessons**
+
+**Observed result**
+
+**Hypothesis fails — in an instructive way.** `stress` shows **VIRT 528152 KiB but RES 127400 KiB**, just under the limit, and **completes successfully**: `successful run completed in 30s`. With `--vm 3`, all three workers show 512 MB virtual but their resident total is ~115 MB, still under the limit.
+
+**Why**
+
+"**Just allocating the memory doesn't trigger the OOM Killer**" — `stress` does not touch all the memory it allocates, so the kernel never has to back it with physical pages. Virtual allocation is free; residency is what counts.
+
+**Three lessons the book draws**
+
+1. Allocating memory does not trigger the OOM Killer; you can allocate far more than the cgroup allows. 2. Under a fork bomb the **total memory used was slightly higher than the container's limit** — useful for capacity planning. 3. **Running the OOM Killer against a fork bomb costs a non-negligible amount of CPU**; consider `--oom-kill-disable` for a container if you have done your capacity maths.
+
+**Limits and follow-up**
+
+**Production considerations**
+
+A memory limit is enforced against **resident** memory, and enforcement arrives as a kill, not as an error your app can handle. Budget headroom above the limit and expect a CPU spike during OOM reaping.
 
 ---
 
@@ -2440,7 +2483,7 @@ docker network ls
 
 **How bridge mode works (Figure 5.12):**
 
-1. Docker creates a bridge interface called **`docker0`**. It is not attached to the host's physical interface; the host routes its traffic out and NATs it with iptables rules Docker adds.
+1. Docker creates a bridge interface called **`docker0`** and connects it to the host's logical interface.
 2. For each container, Docker creates a **net namespace**, so interfaces are accessible only to processes in that namespace.
 3. Inside that namespace Docker creates **a virtual interface connected to the `docker0` bridge** and **a local loopback device**.
 
@@ -2456,15 +2499,11 @@ ip addr
 **Creating a custom network:**
 
 ```bash
-# --driver bridge  bridge driver for host connectivity
-# --attachable     allow containers to attach manually
-# --subnet         the network's subnet
-# --ip-range       allocate container IPs only from this sub-range
 docker network create \
-  --driver bridge \
-  --attachable \
-  --subnet 10.123.123.0/24 \
-  --ip-range 10.123.123.0/25 \
+  --driver bridge \                # bridge driver for host connectivity
+  --attachable \                   # allow containers to attach manually
+  --subnet 10.123.123.0/24 \       # the network's subnet
+  --ip-range 10.123.123.0/25 \     # allocate container IPs only from this sub-range
   chaos
 ```
 
@@ -2499,7 +2538,7 @@ getpcaps $CONTAINER_PID
 
 **Docker's default capability set:**
 
-```text
+```jsx
 cap_chown, cap_dac_override, cap_fowner, cap_fsetid, cap_kill, cap_setgid,
 cap_setuid, cap_setpcap, cap_net_bind_service, cap_net_raw, cap_sys_chroot,
 cap_mknod, cap_audit_write, cap_setfcap
@@ -2526,9 +2565,9 @@ getpcaps $CONTAINER_PID          # Capabilities for `4813': =    (none)
 
 `--cap-add` and `--cap-drop` accept individual capabilities or the keyword **`ALL`**. "It's always a good idea to give the container only what it really needs."
 
-**seccomp** filters **which syscalls a process can make**. Under the hood **seccomp uses BPF** — classic BPF filter programs, the older sibling of the eBPF from Chapter 3. Docker uses seccomp to limit the default set of allowed syscalls. Profiles are JSON (the excerpt below is annotated and abridged, so it is not valid JSON as shown):
+**seccomp** filters **which syscalls a process can make**. Under the hood **seccomp uses BPF**, the same BPF from Chapter 3. Docker uses seccomp to limit the default set of allowed syscalls. Profiles are JSON:
 
-```jsonc
+```json
 {
       "defaultAction": "SCMP_ACT_ERRNO",      // by default, block all calls
       "syscalls": [
@@ -2544,7 +2583,7 @@ Use a custom one with `--security-opt seccomp=/my/profile.json`. Key point: **se
 
 ## 5.9 Docker demystified — the consolidated mental model
 
-```text
+```jsx
                       Linux kernel
 chroot          namespaces           cgroups
 ↓               ↓                    ↓
@@ -2576,7 +2615,7 @@ services:
   ghost:
     image: ghost:3.14.0-alpine
     ports:
-      - 8080:2368                       # host port : container port
+      - 8368:2368                       # host port : container port
     environment:
       database__client: mysql
       database__connection__host: db    # service name resolves to the MySQL container
@@ -2613,7 +2652,7 @@ A detail worth noticing in the book's own output: "**the ghost container will cr
 
 **Pumba** (`github.com/alexei-led/pumba`) can **kill containers, emulate network failures using `tc` under the hood, and run stress tests using stress-ng from inside a particular container's cgroup**.
 
-```text
+```jsx
 USAGE: pumba [global options] command [command options] containers (name, list of names, RE2 regex)
 COMMANDS:
      kill    kill specified containers
@@ -2630,21 +2669,14 @@ COMMANDS:
 </aside>
 
 ```bash
-# --duration 60s   how long the impairment stays
-# --tc-image       image that has tc, run in the target's net namespace
-# delay            the netem sub-command
-# --time 100       100 ms
-# --jitter 0       no random jitter — keeps the analysis clean
-# --correlation 0  no correlation between events
-# "re2:meower_db"  target by RE2 regular expression
 pumba netem \
-  --duration 60s \
-  --tc-image gaiadocker/iproute2 \
-  delay \
-  --time 100 \
-  --jitter 0 \
-  --correlation 0 \
-  "re2:meower_db"
+  --duration 60s \                      # how long the impairment stays
+  --tc-image gaiadocker/iproute2 \      # image that has tc, run in the target's net namespace
+  delay \                               # the netem sub-command
+  --time 100 \                          # 100 ms
+  --jitter 0 \                          # no random jitter — keeps the analysis clean
+  --correlation 0 \                     # no correlation between events
+  "re2:meower_db"                       # target by RE2 regular expression
 ```
 
 Proof of the mechanism afterwards:
@@ -2662,22 +2694,71 @@ Note the **pair**: one container adds the qdisc, another deletes it. The teardow
 
 ### Experiment Card 5.5 — 100 ms latency to MySQL with Pumba
 
-| Field | Content |
-| --- | --- |
-| **Goal** | Measure how Ghost's user-visible response time reacts to added latency on its database connection. |
-| **Relevant theory** | Latency compounding across round trips (Ch. 4); net namespaces (§5.8); `tc`/`netem` (Ch. 4). |
-| **System / setup** | `meower` Swarm stack: `ghost:3.14.0-alpine` on host port 8080 → `mysql:5.7`, both containers. |
-| **Hypothesis** | "If you introduce 100 ms latency to network connectivity between Ghost and MySQL, you should see the average website latency go up by 100 ms." |
-| **Steady state** | `ab -t 30 -c 1 -l http://127.0.0.1:8080/` → **26.328 ms mean, 0 failed requests**, 1140 complete requests. Concurrency 1 deliberately, since the same CPUs generate and serve the traffic. |
-| **Observability** | `ab`: mean time per request and failed requests. |
-| **Failure injected** | `pumba netem --duration 60s --tc-image gaiadocker/iproute2 delay --time 100 --jitter 0 --correlation 0 "re2:meower_db"` |
-| **Blast radius** | One container, matched by regex; 60 seconds; automatically reverted by Pumba's teardown container. |
-| **Observed result** | **Hypothesis refuted.** 62 complete requests, 0 failures, **490.128 ms mean** — 26 ms → 490 ms, a factor of more than **18**. |
-| **The control experiment** | Rerun with `--time 1`, the tool's minimum: **36.212 ms mean**. |
-| **The back-of-napkin validation** | The 1 ms run puts an **upper bound on the injector's own overhead**: 36 − 26 = **10 ms per request**. Assuming the worst case, a single packet delayed by 1 ms, the theoretical overhead is ~9 ms. The 100 ms run added 490 − 26 = **464 ms**, so even 9 ms of tooling overhead is ~2% of 490 ms. **The result is therefore plausible, not an artefact.** |
-| **Why it happened** | Ghost, like WordPress, makes many database round trips per page, and each one absorbs the full added delay. *(Supplementary arithmetic, not stated in the book: ~464 ms ÷ 100 ms ≈ 4–5 round trips per request.)* |
-| **Lesson learned** | Two: (1) the Chapter 4 finding is not a WordPress quirk — it is a property of chatty ORMs and request paths in general; (2) **always measure the overhead of your fault injector before believing a dramatic result.** The 1 ms control run is the most professional move in the chapter. |
-| **Production considerations** | With this data you can bound the acceptable database RTT for an SLO, or reduce round trips. Pumba's `--duration` gives automatic rollback; use it rather than relying on remembering to revert. |
+**Purpose and concepts**
+
+**Goal**
+
+Measure how Ghost's user-visible response time reacts to added latency on its database connection.
+
+**Relevant theory**
+
+Latency compounding across round trips (Ch. 4); net namespaces (§5.8); `tc`/`netem` (Ch. 4).
+
+**Setup, hypothesis and boundaries**
+
+**System / setup**
+
+`meower` Swarm stack: `ghost:3.14.0-alpine` on host port 8080 → `mysql:5.7`, both containers.
+
+**Hypothesis**
+
+"If you introduce 100 ms latency to network connectivity between Ghost and MySQL, you should see the average website latency go up by 100 ms."
+
+**Steady state**
+
+`ab -t 30 -c 1 -l http://127.0.0.1:8080/` → **26.328 ms mean, 0 failed requests**, 1140 complete requests. Concurrency 1 deliberately, since the same CPUs generate and serve the traffic.
+
+**Observability**
+
+`ab`: mean time per request and failed requests.
+
+**Blast radius**
+
+One container, matched by regex; 60 seconds; automatically reverted by Pumba's teardown container.
+
+**Execution and tools**
+
+**Failure injected**
+
+`pumba netem --duration 60s --tc-image gaiadocker/iproute2 delay --time 100 --jitter 0 --correlation 0 "re2:meower_db"`
+
+**The control experiment**
+
+Rerun with `--time 1`, the tool's minimum: **36.212 ms mean**.
+
+**Results, interpretation and lessons**
+
+**Observed result**
+
+**Hypothesis refuted.** 62 complete requests, 0 failures, **490.128 ms mean** — 26 ms → 490 ms, a factor of more than **18**.
+
+**The back-of-napkin validation**
+
+The 1 ms run puts an **upper bound on the injector's own overhead**: 36 − 26 = **10 ms per request**. Assuming the worst case, a single packet delayed by 1 ms, the theoretical overhead is ~9 ms. The 100 ms run added 490 − 26 = **464 ms**, so even 9 ms of tooling overhead is ~2% of 490 ms. **The result is therefore plausible, not an artefact.**
+
+**Why it happened**
+
+Ghost, like WordPress, makes many database round trips per page, and each one absorbs the full added delay. *(Supplementary arithmetic, not stated in the book: ~464 ms ÷ 100 ms ≈ 4–5 round trips per request.)*
+
+**Lesson learned**
+
+Two: (1) the Chapter 4 finding is not a WordPress quirk — it is a property of chatty ORMs and request paths in general; (2) **always measure the overhead of your fault injector before believing a dramatic result.** The 1 ms control run is the most professional move in the chapter.
+
+**Limits and follow-up**
+
+**Production considerations**
+
+With this data you can bound the acceptable database RTT for an SLO, or reduce round trips. Pumba's `--duration` gives automatic rollback; use it rather than relying on remembering to revert.
 
 ---
 
@@ -2742,7 +2823,7 @@ Reference given: "Understanding Docker Container Escapes" (Trail of Bits).
 1. **VMs virtualize hardware (own kernel, strong isolation); containers virtualize the OS (shared kernel, lightweight isolation).** VMs are more secure. Containers are cheaper and faster, and are best understood as *packaging with extra benefits*.
 2. Docker did not invent containers. It packages seven kernel features — chroot, namespaces, cgroups, capabilities, networking, union filesystems, seccomp — behind a good UX.
 3. **Namespaces = what you can SEE. cgroups = what you can USE.** Memorise this; everything else follows.
-4. Docker creates new `mnt`, `uts`, `ipc`, `pid` and `net` namespaces per container, but **shares `cgroup` and `user` with the host** by default (on cgroup v2 hosts, only `user`).
+4. Docker creates new `mnt`, `uts`, `ipc`, `pid` and `net` namespaces per container, but **shares `cgroup` and `user` with the host** by default.
 5. Container isolation is **thin**: the same inode appears inside and outside, and `nsenter` lets any host process join any container's namespace.
 6. **Disk space is not isolated by default.** `--storage-opt size=X` needs xfs plus pquota under overlay2, so most installations have no per-container storage limit at all.
 7. `--cpus=N` is a **hard** cgroup quota; `--cpu-shares` is a **soft** relative weight enforced only under contention. `cpu.stat`'s `nr_throttled` and `throttled_time` prove throttling.
@@ -2756,9 +2837,10 @@ Reference given: "Understanding Docker Container Escapes" (Trail of Bits).
 
 ---
 
-# Chapter 6 — Who You Gonna Call? Syscall-Busters!
+# Chapter 5 — Who You Gonna Call? Syscall-Busters!
 
 > The chapter's thesis: "**it's hard to find a piece of software that can't benefit from chaos engineering, even if it's closed source**." Syscalls are the universal injection point, because every program makes them.
+>
 
 ## 6.1 Practice — The scenario: legacy System X
 
@@ -2925,7 +3007,7 @@ The walk-through, condensed into a reference you can reuse on any `strace` outpu
 sudo strace -C -S calls sleep 1     # -C: print a summary; -S calls: sort it by call count
 ```
 
-```text
+```jsx
 % time  seconds  usecs/call  calls  errors  syscall
   0.00 0.000000           0      8          mmap
   0.00 0.000000           0      6          pread64
@@ -2951,7 +3033,7 @@ sudo strace -C -p $(pidof legacy_server)
 # then refresh http://127.0.0.1:8080/ in the browser
 ```
 
-```text
+```jsx
 accept(3, {sa_family=AF_INET, sin_port=htons(53698), sin_addr=inet_addr("127.0.0.1")}, [16]) = 4
 read(4, "GET / HTTP/1.1\r\nHost: 127.0.0.1:"..., 2048) = 333
 write(4, "HTTP/1.0 200 OK\r\nContent-Type: t"..., 122) = 122
@@ -2964,7 +3046,7 @@ close(4) = 0
 
 **The profile of the black box, discovered in one command:**
 
-```text
+```jsx
 % time  seconds  usecs/call  calls  errors  syscall
  98.34 0.002903          10    292          write
   0.68 0.000020          20      1          close
@@ -2991,7 +3073,7 @@ From `man strace(1)`, under **BUGS**: "**A traced process runs slowly.**"
 The measurement, borrowed from Brendan Gregg's "strace Wow Much Syscall" post:
 
 ```bash
-# baseline: 500k (dd means 500 × 1024 = 512,000) one-byte read+write pairs
+# baseline: 500,000 one-byte read+write pairs
 dd if=/dev/zero of=/dev/null bs=1 count=500k
 # 512000 bytes copied, 0.509962 s, 1.0 MB/s
 
@@ -3053,7 +3135,7 @@ The rule the book states: "**As always, when designing your chaos experiment, pi
 ### 6.3.5 Other options
 
 - **SystemTap** — dynamically instruments running Linux systems using a DSL that resembles AWK or C. Probes are compiled and inserted into a running kernel. It overlaps with BPF; there is even a BPF backend, **`stapbpf`**.
-- **Ftrace** — another kernel tracing framework, with static and dynamic events, in the kernel codebase since 2008. It requires a kernel built with ftrace support (`CONFIG_FTRACE`).
+- **Ftrace** — another kernel tracing framework, with static and dynamic events, in the kernel codebase since 2008. It requires a kernel built with ftracer support.
 
 ---
 
@@ -3061,7 +3143,7 @@ The rule the book states: "**As always, when designing your chaos experiment, pi
 
 **The `-e inject` interface — the fault-injection API of this chapter:**
 
-```text
+```jsx
 -e inject=set[:error=errno|:retval=value][:signal=sig][:when=expr]
 ```
 
@@ -3121,9 +3203,9 @@ Two worked examples:
 | **Hypothesis** | "If you make **every other** call to `write` fail for the System X binary, it will handle it gracefully, and transparently to the end user." |
 | **Steady state** | Same command, tracing `-e write`: 1587 complete requests, 0 failed. **Lower throughput than Experiment 1's baseline, because strace prints far more lines** — 292 writes per request versus 1 close. |
 | **Failure injected** | `sudo strace -p $(pidof legacy_server) -C -e inject=write:error=EIO:when=1+2` — fail the 1st call and every 2nd call after it. |
-| **Observed result** | **Hypothesis confirmed.** 570 complete requests, **0 failed requests**, but throughput fell by about **two-thirds** (1587 → 570 requests, −64%). |
+| **Observed result** | **Hypothesis confirmed.** 570 complete requests, **0 failed requests**, but throughput roughly **halved**. |
 | **Why — visible in the trace** | The program **retries**: `write(4, "l", 1) = -1 EIO (INJECTED)` immediately followed by `write(4, "l", 1) = 1`. Every failed write is repeated until it succeeds. |
-| **Interpretation** | "The program implements some kind of algorithm to account for failed `write` syscalls, which is good news." The visible cost of that resilience is ~64% of throughput. In real life it is unlikely every other write would fail — "even in this nightmarish scenario, System X turns out to not be as easy to break as it was with the `close` syscall." |
+| **Interpretation** | "The program implements some kind of algorithm to account for failed `write` syscalls, which is good news." The visible cost of that resilience is ~50% throughput. In real life it is unlikely every other write would fail — "even in this nightmarish scenario, System X turns out to not be as easy to break as it was with the `close` syscall." |
 | **Lesson learned** | **Resilience is uneven within one program.** The same binary is bulletproof on its hottest path and fatal on a path it takes once per request. Do not generalise from one syscall to the program. Also: measuring *availability* and measuring *throughput* give opposite verdicts here. It "all worked out" precisely because the experiment focused on whether System X keeps working rather than how quickly it responds. Choose which one your SLO cares about **before** you run the experiment. |
 | **Production considerations** | Retry-on-every-write is a throughput amplifier under a degraded disk or network — the amplification shape from Chapter 1's DNS retry storm, at a smaller scale. |
 
@@ -3143,7 +3225,7 @@ curl https://raw.githubusercontent.com/moby/moby/master/profiles/seccomp/default
   | grep -v getpid > profile.json          # delete getpid from the allow list
 ```
 
-```dockerfile
+```docker
 FROM ubuntu:focal-20200423
 COPY ./legacy_server /legacy_server
 ENTRYPOINT [ "/legacy_server" ]
@@ -3273,1257 +3355,16 @@ Further reading given: Jake Edge, "A seccomp Overview"; Michael Kerrisk, "Using 
 7. **BPF/BCC `syscount-bpfcc` gives the same syscall inventory at ~6% overhead**, host-wide or per PID — but counts only, with no arguments or return values.
 8. A single `strace` run can reveal both a bug (`fsync` on a socket returning `EINVAL`) and a pathology (292 one-byte writes) in an undocumented binary.
 9. **Resilience is uneven inside one program.** System X dies on the first `close` error but retries every failed `write`. Test each syscall on the path; do not generalise.
-10. Resilience has a measurable price: retrying every other write cut throughput by about two-thirds while keeping failures at zero.
+10. Resilience has a measurable price: retrying every other write halved throughput while keeping failures at zero.
 11. **seccomp blocks syscalls at near-zero cost** — via a modified Docker profile (`--security-opt seccomp=profile.json`) or via libseccomp in ~10 lines of C (`seccomp_init` → `seccomp_rule_add` → `seccomp_load` → `seccomp_release`). Less flexible: no "every other call", no attaching to a running process.
 12. Chaos engineering pays off even for a **single process on a single host**. Distribution is not a prerequisite.
 
 ---
 
-# Chapter 7 — Injecting Failure into the JVM
-
-> Java is consistently in the top two or three of language popularity rankings (State of the Octoverse, TIOBE), so you will meet it. The chapter's unique contribution: **rewrite a method's bytecode on the fly, without touching the source code.**
-
-## 7.1 Practice — The scenario: FizzBuzzEnterpriseEdition
-
-**FBEE = FizzBuzzEnterpriseEdition**, the real GitHub project: a deliberately over-engineered implementation of the FizzBuzz interview exercise. For 1–100: divisible by 3 → `Fizz`; by 5 → `Buzz`; by both → `FizzBuzz`; otherwise the number.
-
-```bash
-cd ~/src/examples/jvm
-ls -al ./FizzBuzzEnterpriseEdition/lib/
-# FizzBuzzEnterpriseEdition.jar + aopalliance, commons-logging, spring-aop,
-# spring-beans, spring-context, spring-core, spring-expression
-java -classpath "./FizzBuzzEnterpriseEdition/lib/*" \
-  com.seriouscompany.business.java.fizzbuzz.packagenamingpackage.impl.Main
-```
-
-`-classpath "<dir>/*"` lets `java` find all the JARs by wildcard. The last argument is the fully-qualified main class.
-
-<aside>
-
-**The methodological instruction, repeated from Chapter 6:** "in the practice of chaos engineering, you're most likely to be working with **someone else's code**, and because it's often not feasible to become intimate with the entire codebase due to its size, it would be more realistic if you didn't look into that quite yet."
-
-And the key observation: **the fact that it works in one use case tells you nothing about how resilient it is.** A correct program and a resilient program are different claims.
-
-</aside>
-
----
-
-## 7.2 Theory — Chaos engineering and Java
-
-**Everything from earlier chapters still applies to a Java application.** Treat it as a black box and trace or block its syscalls (Ch. 6). Use BCC tools such as **`javacalls`** to see which methods are called, and target the most prominent ones. Package it in Docker and apply Chapter 5's techniques.
-
-**But the JVM offers something unique**, and that is this chapter's subject: modify an existing method on the fly to throw an exception, then verify your assumptions about the system's behaviour.
-
-### 7.2.1 The technique, in three steps
-
-1. **Identify the class and method** that might throw an exception in a real-world scenario.
-2. **Design an experiment that modifies that method on the fly** to actually throw the exception.
-3. **Verify that the application behaves the way you expect** in the presence of the exception.
-
-### Finding the right exception to throw
-
-<aside>
-
-"Finding the right place to inject failure requires building an understanding of how (a subset of) the application works. This is one of the things that makes chaos engineering both **exciting** (you get to learn about a lot of different software) and **challenging** (you get to learn about a lot of different software) at the same time."
-
-</aside>
-
-**The simple, useful technique: search for the exceptions thrown.** In Java, every method must declare the **checked** exceptions its code might throw, using the `throws` keyword. Unchecked exceptions (`RuntimeException`, `Error` and their subclasses) need no declaration, so this search does not find them:
-
-```java
-public static void mightThrow(String someArgument) throws IOException {
-  // definition here
-}
-```
-
-```bash
-cd ~/src/examples/jvm/src/src/main/java/com/seriouscompany/business/java/fizzbuzz/packagenamingpackage/
-grep -n -r ") throws" .        # -n line numbers, -r recursive
-```
-
-Three hits. The third is an interface, so two candidates remain:
-
-```text
-./impl/strategies/SystemOutFizzBuzzOutputStrategy.java:21: public void output(final String output) throws IOException {
-./impl/ApplicationContextHolder.java:41:                  public void setApplicationContext(...) throws BeansException {
-./interfaces/strategies/FizzBuzzOutputStrategy.java:14:   public void output(String output) throws IOException;   // interface
-```
-
-**The target:**
-
-```java
-public class SystemOutFizzBuzzOutputStrategy implements FizzBuzzOutputStrategy {
-    @Override
-    public void output(final String output) throws IOException {
-            System.out.write(output.getBytes());
-            System.out.flush();
-    }
-}
-```
-
-**Why this one is a good target — the selection criteria, worth reusing:**
-
-- It is **reasonably uncomplicated**.
-- It is **used when you simply run the program**, so the experiment will actually exercise it.
-- It **has the potential to crash the program** if the error handling is not done properly.
-
-<aside>
-
-`grep -r ") throws"` is the cheapest possible map of a Java codebase's failure surface. Every `throws` declaration is a place the author already admitted could fail, and therefore a place where their error handling can be tested.
-
-</aside>
-
-### 7.2.2 The experiment plan
-
-1. **Observability:** the **return code** and the **standard output** of the application.
-2. **Steady state:** the application runs successfully and prints the correct output.
-3. **Hypothesis:** *if an `IOException` is thrown in the `output` method of `SystemOutFizzBuzzOutputStrategy`, the application returns an error code after its run.*
-4. **Run the experiment.**
-
-The reasoning behind the hypothesis: "If the error-handling logic is on point, it wouldn't be unreasonable to expect it to **retry the failed write** and at the very least to **log an error message and signal a failed run**."
-
-<aside>
-
-The book flags the risk before teaching the technique: "It's also easy to mess things up, because this technique gives you access to **pretty much any and all code executed in the JVM, including built-in classes**." Bytecode rewriting has no natural blast-radius boundary. The boundary is entirely in your class-name filter.
-
-</aside>
-
----
-
-### 7.2.3 Theory — JVM bytecode
-
-**Why it exists.** A key design goal of Java was portability — **write once, run anywhere (WORA)**. Source (`.java`) compiles into **Java bytecode** (`.class`), which any compatible JVM implementation can execute on any supported platform. **The bytecode is independent of the underlying hardware** (Figure 7.1: compile → load → instantiate and run).
-
-The formal specs for all Java versions are free at `docs.oracle.com/javase/specs/`. The Java 8 JVM spec describes **the format of a `.class` file**, **the instruction set**, similar to a physical processor's, and **the structure of the JVM itself**.
-
-**Reading bytecode in practice:**
-
-```java
-package org.my;
-class Example1 {
-    public static void main(String[] args) {
-        System.out.println("Hello chaos!");
-    }
-}
-```
-
-```bash
-cd ~/src/examples/jvm/
-javac ./org/my/Example1.java      # produces Example1.class next to the source; -verbose shows more
-ls -l ./org/my/                    # Example1.class appears
-java org.my.Example1               # Hello chaos!
-javap -c org.my.Example1           # PRINT THE BYTECODE in human-readable form
-```
-
-```text
-public static void main(java.lang.String[]);
-  Code:
-     0: getstatic     #2  // Field java/lang/System.out:Ljava/io/PrintStream;
-     3: ldc           #3  // String Hello chaos!
-     5: invokevirtual #4  // Method java/io/PrintStream.println:(Ljava/lang/String;)V
-     8: return
-```
-
-**Instruction format:** `relative address` `:` `instruction name` `argument` `// human-readable comment`.
-
-**Translated to English:**
-
-| Instruction | Meaning |
-| --- | --- |
-| `getstatic` | Gets a static field of type `java.io.PrintStream` out of class `java.lang.System` |
-| `ldc` | Loads a constant string `"Hello chaos!"` and **pushes it onto the operand stack** |
-| `invokevirtual` | Invokes the instance method `.println`, **popping** the value pushed onto the operand stack |
-| `return` | Ends the function call |
-
-<aside>
-
-"Why is it important from the perspective of chaos engineering? **Because this is what you're going to be modifying to inject failure in our chaos experiments.**" You do not need to memorise the instruction set. You need to know you can dump it with `javap -c` and look anything up in the spec.
-
-</aside>
-
-### Theory + Practice — `-javaagent` and `java.lang.instrument`
-
-Java ships instrumentation and code-transformation capabilities in the **`java.lang.instrument`** package, available **since JDK 1.5**. People call it **javaagent**, after the command-line argument used to attach it.
-
-**Two interfaces, both needed:**
-
-| Interface | Role |
-| --- | --- |
-| **`ClassFileTransformer`** | Classes implementing it can be **registered to transform class files** of a JVM. Requires a single method: `transform`. |
-| **`Instrumentation`** | Allows **registering** `ClassFileTransformer` instances with the JVM, to receive classes for modification **before they're used**. |
-
-**Figure 7.2 flow:** register a transformer → the JVM passes each class's bytecode to it before use → the modified class is what the JVM actually runs.
-
-<aside>
-
-The book's justification for teaching the hard way first: "Skipping straight to the higher-level stuff would be a little bit like **driving a car without understanding how the gearbox works**. It might be fine for most people, but it won't cut it for a race-car driver. When doing chaos engineering, I need you to be a race-car driver." The concrete payoff: you need to know **the limitations of your methods**, and that is hard when the tools do things you don't understand.
-
-</aside>
-
-**The four mechanical steps to a javaagent:**
-
-1. Write a class implementing **`ClassFileTransformer`** — here, `ClassPrinter`.
-2. Write another class with the special **`premain`** method that registers an instance of it — here, `Agent`.
-3. Package both into a **JAR with the `Premain-Class` attribute** pointing at the class with `premain`.
-4. Run java with **`-javaagent:/path/to/agent.jar`**.
-
-**Step 1 — the transformer, observation only at first:**
-
-```java
-package org.agent;
-import java.lang.instrument.ClassFileTransformer;
-import java.lang.instrument.IllegalClassFormatException;
-import java.security.ProtectionDomain;
-
-class ClassPrinter implements ClassFileTransformer {
-    public byte[] transform(ClassLoader loader,
-                            String className,            // name of the class to transform
-                            Class<?> classBeingRedefined,
-                            ProtectionDomain protectionDomain,
-                            byte[] classfileBuffer)      // the actual binary content of the class file
-            throws IllegalClassFormatException {
-    System.out.println("Found class: " + className + " (" + classfileBuffer.length + " bytes)");
-    return classfileBuffer;                              // return unchanged
-  }
-}
-```
-
-Only two of the arguments matter for this work: **`className`** and **`classfileBuffer`**.
-
-**Step 2 — the agent:**
-
-```java
-package org.agent;
-import java.lang.instrument.Instrumentation;
-
-class Agent {
-  public static void premain(String args, Instrumentation instrumentation){
-    ClassPrinter transformer = new ClassPrinter();
-    instrumentation.addTransformer(transformer);
-  }
-}
-```
-
-`premain` has that exact signature and **the JVM calls it before `main`**. The JVM supplies the `Instrumentation` object.
-
-**Step 3 — the manifest:**
-
-```text
-Manifest-Version: 1.0
-Premain-Class: org.agent.Agent
-```
-
-**Step 4 — build and run:**
-
-```bash
-cd ~/src/examples/jvm
-javac org/agent/Agent.java
-javac org/agent/ClassPrinter.java
-jar vcmf org/agent/manifest.mf agent1.jar org/agent    # v verbose, c create, m manifest, f file
-
-java -javaagent:./agent1.jar org.my.Example1
-```
-
-```text
-Found class: sun/launcher/LauncherHelper (14761 bytes)
-Found class: java/util/concurrent/ConcurrentHashMap$ForwardingNode (1618 bytes)
-Found class: org/my/Example1 (429 bytes)
-…
-Hello chaos!
-```
-
-Every class loaded by the JVM passes through your transformer, **in load order**, built-ins included.
-
----
-
-### 7.2.4 Practice — Implementing the injection
-
-**What instructions to inject? Copy them from a compiled example.**
-
-```java
-package org.my;
-import java.io.IOException;
-class Example2 {
-    public static void main(String[] args) throws IOException { Example2.throwIOException(); }
-    public static void throwIOException() throws IOException { throw new IOException("Oops"); }
-}
-```
-
-```bash
-javac org/my/Example2.java
-javap -c org.my.Example2
-```
-
-```text
-public static void main(java.lang.String[]) throws java.io.IOException;
-  Code:
-     0: invokestatic #2   // Method throwIOException:()V
-     3: return
-```
-
-<aside>
-
-**The trick that makes this tractable:** calling a **static method with no arguments and no return value** compiles to **exactly one `invokestatic` instruction**. `()V` in the comment means no arguments, void return. So instead of synthesising the bytecode for "construct an exception and throw it," you inject **one instruction** that calls a static helper which does the throwing in ordinary Java.
-
-</aside>
-
-**The bytecode-manipulation libraries the book lists:** **ASM**, **Javassist**, **Byte Buddy**, **Byte Code Engineering Library (BCEL)**, **cglib**. The example uses **ASM**, which **already ships with OpenJDK**.
-
-<aside>
-
-**Groovy and Kotlin both use ASM to generate their bytecode**, and so do higher-level libraries like Byte Buddy. ASM is the foundation layer of the whole ecosystem.
-
-</aside>
-
-**The injector (Listing 7.1), annotated:**
-
-```java
-package org.agent2;
-import java.io.IOException;
-import java.lang.instrument.ClassFileTransformer;
-import java.lang.instrument.IllegalClassFormatException;
-import java.security.ProtectionDomain;
-import jdk.internal.org.objectweb.asm.ClassReader;
-import jdk.internal.org.objectweb.asm.ClassWriter;
-import jdk.internal.org.objectweb.asm.tree.*;
-import jdk.internal.org.objectweb.asm.Opcodes;
-
-public class ClassInjector implements ClassFileTransformer {
-    public String targetClassName =
-     "com/seriouscompany/business/java/fizzbuzz/packagenamingpackage/impl/strategies/SystemOutFizzBuzzOutputStrategy";
-
-    public byte[] transform(ClassLoader loader, String className,
-        Class<?> classBeingRedefined, ProtectionDomain protectionDomain,
-        byte[] classfileBuffer) throws IllegalClassFormatException {
-
-      if (className.equals(this.targetClassName)){          // <-- the ENTIRE blast radius lives in this line
-         ClassNode classNode = new ClassNode();
-         new ClassReader(classfileBuffer).accept(classNode, 0);   // parse bytecode into a tree
-
-         classNode.methods.stream()
-           .filter(method -> method.name.equals("output"))        // only the output method
-           .forEach(method -> {
-             InsnList instructions = new InsnList();
-             instructions.add(new MethodInsnNode(
-                 Opcodes.INVOKESTATIC,
-                 "org/agent2/ClassInjector",
-                 "throwIOException",
-                 "()V",                                          // no args, void return
-                 false                                           // not an interface method
-             ));
-             method.maxStack += 1;                               // room for one more operand-stack slot
-             method.instructions.insertBefore(
-                 method.instructions.getFirst(), instructions);   // insert at the very start of the method
-           });
-         final ClassWriter classWriter = new ClassWriter(0);
-         classNode.accept(classWriter);
-         return classWriter.toByteArray();                       // emit the modified bytecode
-      }
-      return classfileBuffer;                                    // everything else untouched
-    }
-
-    public static void throwIOException() throws IOException {
-        System.err.println("[CHAOS] BOOM! Throwing");
-        throw new IOException("CHAOS");
-    }
-}
-```
-
-Three details that matter and are easy to get wrong:
-
-- **`method.maxStack += 1`** — the class file declares the maximum operand-stack depth per method, and code that pushes beyond it fails verification. **The book adds 1 defensively, but this particular call needs no extra slot:** a static `()V` call pops nothing and pushes nothing. Keep the line when reproducing the book; in your own agents, compute it (`ClassWriter.COMPUTE_MAXS`) instead of guessing.
-- **`insertBefore(instructions.getFirst(), …)`** — inject at method entry. For this experiment "it doesn't really matter where the exception is thrown in the body."
-- **The class name is slash-separated** (`com/seriouscompany/...`), not dot-separated. Bytecode uses internal names.
-
-**Building it — and the one non-obvious compile flag:**
-
-```java
-// org/agent2/Agent.java — same premain pattern, registering ClassInjector
-```
-
-```text
-Manifest-Version: 1.0
-Premain-Class: org.agent2.Agent
-```
-
-```bash
-cd ~/src/examples/jvm/
-javac -XDignore.symbol.file org/agent2/Agent.java          # needed to use jdk.internal packages
-javac -XDignore.symbol.file org/agent2/ClassInjector.java
-jar vcmf org/agent2/manifest.mf agent2.jar org/agent2
-```
-
-*Compatibility:* this build works only on JDK 8. From JDK 16, `jdk.internal` packages are strongly encapsulated and `-XDignore.symbol.file` no longer helps; use a standalone ASM jar as Lab 12 in [chaos-labs.md](chaos-labs.md) does.
-
----
-
-### Experiment Card 7.1 — Inject an `IOException` into `SystemOutFizzBuzzOutputStrategy.output`
-
-| Field | Content |
-| --- | --- |
-| **Goal** | Determine whether FizzBuzzEnterpriseEdition handles an `IOException` from its output path in a reasonable way — at minimum by signalling failure. |
-| **Relevant theory** | JVM bytecode and `.class` loading; `java.lang.instrument` (`ClassFileTransformer` + `Instrumentation`); exception handling as the Java weak spot. |
-| **System / setup** | OpenJDK 8; FBEE JARs on the classpath; `agent2.jar` attached via `-javaagent`. |
-| **Hypothesis** | "If an `IOException` is thrown in the `output` method of `SystemOutFizzBuzzOutputStrategy`, the application returns an error code after its run." |
-| **Steady state** | `java -classpath "./FizzBuzzEnterpriseEdition/lib/*" …impl.Main 2> /dev/null` prints the correct FizzBuzz sequence; **`echo $?` → 0**. |
-| **Observability** | Standard output (correct sequence?) **and the process return code** (`echo $?`). |
-| **Failure injected** | One `invokestatic` instruction at the entry of `output`, calling a static method that prints `[CHAOS] BOOM! Throwing` to stderr and throws `IOException("CHAOS")`. |
-| **Blast radius** | Exactly one class, matched by fully-qualified internal name, and one method within it. Everything else returns `classfileBuffer` unchanged. |
-| **Tools / commands** | `javac`, `javap -c`, `jar vcmf`, `java -javaagent:./agent2.jar …`, `echo $?`, ASM (`ClassReader`, `ClassNode`, `MethodInsnNode`, `ClassWriter`). |
-| **Expected** | No output, **non-zero return code**, ideally a logged error and/or a retry. |
-| **Observed result** | **No output at all**, which is expected, since the printing method now always throws. **But `echo $?` still returns 0.** **Hypothesis refuted.** |
-| **Why it matters** | The application **produced nothing and reported success**. Any orchestrator, cron job, CI step or supervisor watching the exit code would conclude the run was fine. This is a silent-failure bug, the worst kind to operate. |
-| **Lesson learned** | "In Java programs, **exception handling is often a weak spot**, and it's a good starting point for chaos engineering experiments, even on a codebase you're not familiar with." Swallowed exceptions convert a loud failure into a silent one. |
-| **What you accomplished** (the book's own list) | Started with an unfamiliar application; found a place that throws and designed an experiment around it; prepared and applied JVM instrumentation **with no magical tools and no external dependencies**; applied automatic bytecode modification with **no dependency beyond the ASM already in OpenJDK**; demonstrated scientifically that the application mishandles failure. |
-| **Production considerations** | Return codes are an SLI. If a job can fail and still exit 0, no amount of monitoring on exit status will ever alert. Check this property deliberately for every batch job you own. |
-
-<aside>
-
-**Pop quiz — which is NOT built into the JVM?** The enterprise-name generator. Inspecting classes as they load, modifying classes as they load, and performance metrics all are.
-
-</aside>
-
----
-
-## 7.3 Practice — Existing tools
-
-### 7.3.1 Byteman
-
-**Byteman** (`byteman.jboss.org`) modifies the bytecode of JVM classes on the fly using **the same instrumentation mechanism you just built by hand**, to trace, monitor and alter behaviour. **Its differentiator is a simple, expressive DSL** that lets you describe the modification in terms of Java source, "mostly forgetting about the actual bytecode structure."
-
-```bash
-wget https://downloads.jboss.org/byteman/4.0.11/byteman-download-4.0.11-bin.zip
-unzip byteman-download-4.0.11-bin.zip
-ls -l byteman-download-4.0.11/lib/    # byteman.jar is the one you use as -javaagent
-```
-
-**Rule skeleton:**
-
-```text
-RULE <rule name>
-CLASS <class name>
-METHOD <method name>
-BIND <bindings>
-IF <condition>
-DO <actions>
-ENDRULE
-```
-
-**The same experiment, as a Byteman rule (`throw.btm`):**
-
-```text
-RULE throw an exception at output
-CLASS SystemOutFizzBuzzOutputStrategy
-METHOD output
-AT ENTRY
-IF true
-DO
-   throw new java.io.IOException("BOOM");
-ENDRULE
-```
-
-```bash
-java \
-  -javaagent:./byteman-download-4.0.11/lib/byteman.jar=script:throw.btm \
-  -classpath "./FizzBuzzEnterpriseEdition/lib/*" \
-  com.seriouscompany.business.java.fizzbuzz.packagenamingpackage.impl.Main \
-  2>/dev/null
-```
-
-Same result — no output — "without writing or compiling any Java code or dealing with any bytecode."
-
-**Other Byteman capabilities named:** attaching to a **running JVM**, triggering rules on **complex conditions**, and adding code at **various points in methods**, not just entry.
-
-<aside>
-
-Read the DSL against what you just built by hand: `CLASS` and `METHOD` are the class-name filter and the method stream filter; `AT ENTRY` is `insertBefore(getFirst())`; `IF` is the condition you would otherwise hand-code; `DO` is the injected call. Byteman is your `ClassInjector` with the boilerplate removed, which is exactly why the book made you write it first.
-
-</aside>
-
-### 7.3.2 Byte-Monkey
-
-**Byte-Monkey** (`github.com/mrwilson/byte-monkey`) also uses `-javaagent` and ASM. **Its unique proposition: it offers only actions useful for chaos engineering.** Four modes, verbatim from its README:
-
-| Mode | Effect |
-| --- | --- |
-| **Fault** | Throw exceptions from methods that declare those exceptions |
-| **Latency** | Introduce latency on method calls |
-| **Nullify** | Replace the first non-primitive argument to the method with `null` |
-| **Short-circuit** | Throw corresponding exceptions at the very beginning of `try` blocks |
-
-```bash
-wget https://github.com/mrwilson/byte-monkey/releases/download/1.0.0/byte-monkey.jar
-
-java \
--javaagent:byte-monkey.jar=mode:fault,rate:0.5,filter:com/seriouscompany/business/java/fizzbuzz/packagenamingpackage/impl/strategies/SystemOutFizzBuzzOutputStrategy/output \
--classpath "./FizzBuzzEnterpriseEdition/lib/*" \
-com.seriouscompany.business.java.fizzbuzz.packagenamingpackage.impl.Main \
-2>/dev/null
-```
-
-**`rate:0.5` throws the exception only 50% of the time.** The output shows roughly half the lines printed and half missing, run together:
-
-```text
-1314FizzBuzz1619
-Buzz
-22Fizz29Buzz
-```
-
-<aside>
-
-**`rate` is a blast-radius dial** — the JVM-level equivalent of `strace`'s `when=n+step` (Ch. 6) and of "roll out on a subset of traffic" (Ch. 2). **Partial failure is also more realistic than total failure**, and it produces a different, often nastier result: here, *corrupted output* rather than *no output*.
-
-</aside>
-
-### 7.3.3 Chaos Monkey for Spring Boot
-
-If your application uses **Spring Boot**, this framework's differentiator is that **it understands Spring Boot** and offers failure — called **assaults** — on high-level abstractions. It can also **expose an API to add, remove and reconfigure assaults on the fly over HTTP or JMX**.
-
-| Assault | Effect |
-| --- | --- |
-| **Latency assault** | Injects latency into a request |
-| **Exception assault** | Throws exceptions at runtime |
-| **AppKiller assault** | Shuts down the app on a call to a particular method |
-| **Memory assault** | Uses up memory |
-
-### Tool comparison
-
-|  | **Hand-written javaagent + ASM** | **Byteman** | **Byte-Monkey** | **Chaos Monkey for Spring Boot** |
-| --- | --- | --- | --- | --- |
-| **Control** | Total — any class, any instruction | Very high, via DSL | Four chaos-specific modes | Four assaults on Spring abstractions |
-| **Effort** | High (write, compile, package, manifest) | Low (a text rule) | Lowest (one flag) | Low, if you already use Spring Boot |
-| **Partial failure** | You code it | `IF <condition>` | **`rate:` built in** | Configurable |
-| **Attach to a running JVM** | Yes, via `agentmain` (see §7.4) | **Yes** | No | Runtime reconfiguration via HTTP/JMX |
-| **Understands your framework** | No | No | No | **Yes (Spring Boot)** |
-
----
-
-## 7.4 Further reading (the book's own list)
-
-- **ChaosMachine** (KTH Royal Institute of Technology, `github.com/KTH/royal-chaos`) — analyses the **exception-handling hypotheses** of three popular Java projects (tTorrent, BroadleafCommerce, XWiki) and **produces actionable reports for developers automatically**, using the same `-javaagent` mechanism.
-- **TripleAgent** (KTH) — automatically **monitors, injects failure, and improves resilience** of existing JVM software; evaluated on BitTorrent and HedWig.
-- **"Exception Handling Analysis and Transformation Using Fault Injection"** (University of Lille / INRIA) — analyses nine open source projects and shows that **39% of catch blocks executed during test-suite execution can be made more resilient.**
-
-<aside>
-
-**An important capability the chapter only mentions at the end:** `java.lang.instrument` can also **attach to a running JVM and instrument classes that have already been loaded**, by implementing the **`agentmain`** method instead of `premain`. That makes JVM fault injection usable on a live service rather than only at startup.
-
-</aside>
-
----
-
-## Theory ↔ Practice connections for Chapter 7
-
-- **`grep -r ") throws"` (§7.2.1) ↔ `man 2 <syscall>` ERRORS (Ch. 6):** the same move at a different layer. **Let the system tell you which failures it already admits are possible**, then inject exactly those.
-- **Bytecode theory (§7.2.3) ↔ the ASM injector (§7.2.4):** you cannot write `MethodInsnNode(INVOKESTATIC, …, "()V")` without knowing what `javap -c` showed you. The `Example2` detour exists to *derive* the instruction rather than guess it.
-- **Class-name filter in `transform` ↔ blast radius (Ch. 2):** with access to every class in the JVM including built-ins, the `if (className.equals(targetClassName))` line **is** the blast-radius control. Nothing else limits it.
-- **Byte-Monkey's `rate:0.5` ↔ strace's `when=1+2` (Ch. 6) ↔ Pumba's `--duration` (Ch. 5):** every mature injection tool exposes a knob for *partial* or *time-bounded* failure. Look for that knob first in any new tool.
-- **Return code as the SLI (§7.2.4) ↔ Chapter 2's exit codes:** Chapter 2 read exit codes forensically; Chapter 7 shows an application that lies with one.
-- **Exception handling as the weak spot ↔ Chapter 1's FizzBuzzAAS cache bug:** both are "the error path was never exercised." The INRIA finding — 39% of executed catch blocks could be more resilient — is the published version of the same claim.
-- **The `-javaagent` mechanism ↔ Chapter 8:** having injected failure from *outside* the application, Chapter 8 asks when it is better to build failure injection *into* the application on purpose.
-
----
-
-## Key Takeaways — Chapter 7
-
-1. Everything from earlier chapters — syscalls, containers, BCC's `javacalls` — still applies to Java. The JVM adds a unique capability: **rewriting code on the fly**.
-2. **`grep -r ") throws"` maps a Java codebase's admitted failure surface in one command.** Pick a target that is simple, actually executed, and plausibly fatal.
-3. Java compiles to portable **bytecode**. `javac` produces it, **`javap -c` prints it in readable form**, and the JVM spec defines every instruction.
-4. **`java.lang.instrument`** (JDK 1.5+) gives you `ClassFileTransformer` (the `transform` method) and `Instrumentation` (`addTransformer`). The four steps: transformer class → `premain` class → JAR with `Premain-Class` in the manifest → `-javaagent:...`.
-5. To find the bytecode you need, **write the Java you want and compile it**. A static, no-arg, void method call is a single `invokestatic` — the cheapest possible injection.
-6. With ASM: `ClassReader` → `ClassNode` → filter methods → build an `InsnList` → **`maxStack += 1`** → `insertBefore(getFirst())` → `ClassWriter.toByteArray()`. Compile with **`-XDignore.symbol.file`** to use `jdk.internal` packages.
-7. **FizzBuzzEnterpriseEdition printed nothing and still exited 0.** A silent failure is worse than a loud one. Verify that your jobs' exit codes reflect their outcomes.
-8. **Byteman** gives you a DSL (`RULE / CLASS / METHOD / AT ENTRY / IF / DO / ENDRULE`) and can attach to a running JVM. **Byte-Monkey** gives four chaos-specific modes with a **`rate`** for partial failure. **Chaos Monkey for Spring Boot** gives framework-aware assaults, reconfigurable over HTTP/JMX.
-9. Bytecode rewriting reaches **every class in the JVM, built-ins included**. Your class-name filter is the only blast-radius control you have.
-10. Learn the mechanism before the tool. You need to know the **limitations** of your injection method, and you cannot know them through an abstraction you have never opened.
-
----
-
-# Chapter 8 — Application-Level Fault Injection
-
-> Every previous chapter worked with **source code outside your control**. This one covers the case where you own the code, and when that is the right place to inject failure.
-
-## 8.1 Practice — The scenario: a session-based recommendation system
-
-An e-commerce company runs a system that recommends products based on previous queries.
-
-**Design decisions and their reasoning:**
-
-- Users may not be logged in, so track them with a **cookie holding a session ID**.
-- **Latency is the business constraint:** "if the website doesn't feel quick and responsive to customers, they will buy from your competitors." That constraint drives the implementation *and* makes latency the first target for a chaos experiment.
-- To minimise added latency, use **Redis**, an in-memory key-value store, as the session cache, holding only the **last three queries**.
-- Those queries feed a recommendation engine on every search, producing a "You Might Be Interested In" box.
-
-**The flow (Figure 8.1):** customer visits → no session ID cookie → generate a random one and store it → customer searches "apple" → interests = `["apple"]` → recommend "apple juice" → customer searches "laptop" → interests = `["apple","laptop"]` → recommend "macbook pro". This is **cross-selling**.
-
-**Architecture (Figure 8.2) — the search page:** browser sends the SID cookie → server calls `get_interests` → `GET SID` from Redis → `["apple"]` → server appends → `SET SID` `["apple","laptop"]` → renders results plus recommendations.
-
-<aside>
-
-Read Figure 8.2 for failure paths and you already have both experiments: **the cache is touched twice per request** (one `GET`, one `SET`), and **`get_interests` has no exception handling of its own**. The first fact sets up the latency experiment; the second sets up the failure experiment.
-
-</aside>
-
-### The application (Listing 8.1, `app.py`) — three endpoints
-
-| Route | Function | Does |
-| --- | --- | --- |
-| `/` | `index` | Returns static HTML with the search form and **sets the session ID cookie** |
-| `/search` (GET + POST) | `search` | Reads the SID cookie and the query, stores the query via `store_interests`, renders results + recommendations |
-| `/reset` | `reset` | Replaces the SID cookie with a new one — **for testing convenience only** |
-
-```python
-import uuid, json, redis, flask
-COOKIE_NAME = "sessionID"
-
-def get_session_id():
-    return flask.request.cookies.get(COOKIE_NAME)
-
-def set_session_id(response, override=False):
-    session_id = get_session_id()
-    if not session_id or override:
-        session_id = uuid.uuid4()
-    response.set_cookie(COOKIE_NAME, str(session_id))
-
-CACHE_CLIENT = redis.Redis(host="localhost", port=6379, db=0)
-
-# Chaos experiment 1 - uncomment this to add latency to Redis access
-#import chaos
-#CACHE_CLIENT = chaos.attach_chaos_if_enabled(CACHE_CLIENT)
-
-# Chaos experiment 2 - uncomment this to raise an exception every other call
-#import chaos2
-#@chaos2.raise_rediserror_every_other_time_if_enabled
-def get_interests(session):
-    """ Retrieve interests stored in the cache for the session id """
-    return json.loads(CACHE_CLIENT.get(session) or "[]")
-
-def store_interests(session, query):
-    """ Store last three queries in the cache backend """
-    stored = get_interests(session)          # <-- read (Redis GET)
-    if query and query not in stored:
-        stored.append(query)
-    stored = stored[-3:]
-    CACHE_CLIENT.set(session, json.dumps(stored))   # <-- write (Redis SET)
-    return stored
-
-def recommend_other_products(query, interests):
-    if interests:
-        return {"this amazing product": "https://youtube.com/watch?v=dQw4w9WgXcQ"}
-    return {}
-```
-
-And the handler that decides what the user sees when Redis misbehaves:
-
-```python
-@app.route("/search", methods=["POST", "GET"])
-def search():
-    session_id = get_session_id()
-    query = flask.request.form.get("query")
-    try:
-        new_interests = store_interests(session_id, query)
-    except redis.exceptions.RedisError as exc:
-        print("LOG: redis error %s" % str(exc))
-        new_interests = None                      # <-- degrade, don't fail
-    recommendations = recommend_other_products(query, new_interests)
-    return flask.make_response(flask.render_template_string(...))
-```
-
-<aside>
-
-**The chaos hooks are already in the source, commented out.** That is the chapter's design pattern in one glance: the injection points live in the codebase, inert by default, activated by an environment variable.
-
-</aside>
-
-**Running it:**
-
-```bash
-# Compatibility: on Ubuntu 23.04+ use a virtualenv; Flask 1.1.2 and FLASK_ENV need an old Python/Flask stack
-sudo pip3 install redis==3.5.3 Flask==1.1.2
-redis-server                                    # terminal 2, default port 6379
-
-cd ~/src/examples/app
-# FLASK_ENV=development: detailed stack traces + auto-reload on change
-# the app listens on http://127.0.0.1:5000/
-FLASK_ENV=development \
-FLASK_APP=app.py \
-  python3 -m flask run
-```
-
----
-
-## 8.2 Experiment 1 — Redis latency
-
-**Why this differs from earlier latency work.** Chapter 4 used `tc`; Chapter 5 used Docker plus Pumba. "In the previous scenarios, we tried hard to modify the behavior of the system **without modifying the source code**. This time… how easy it is to add chaos engineering **when you are in control of the application's design**."
-
-### The plan
-
-The hypothesis comes from reading the code, not from guessing: **the session cache is accessed twice per request** — read the previous queries, write the new set. Added latency should therefore appear **doubled** in the page latency.
-
-1. **Observability:** generate traffic and observe latency with `ab`.
-2. **Steady state:** latency without any chaos changes.
-3. **Hypothesis:** *if you add a 100 ms latency to each interaction with the session cache, reads and writes, the overall latency of `/search` should increase by 200 ms.*
-4. **Run.**
-
-### Practice — `ab` with POST, headers and a body
-
-This is the chapter's practical `ab` upgrade. To simulate the browser posting the search form you need four things: the **POST** method; the **`Content-type`** the browser uses for an HTML form (`application/x-www-form-urlencoded`); the **form data as the request body**; and the **session ID cookie**.
-
-| Flag | Effect |
-| --- | --- |
-| `-H "Header: value"` | Set a custom header. **Can be repeated** for multiple headers. |
-| `-p post-file` | Send the file's contents as the request body — **and automatically switch to POST**. |
-| `-c 1` / `-t 10` | Concurrency 1, run for 10 seconds |
-
-```bash
-echo "query=Apples" > query.txt
-ab -c 1 -t 10 \
-    -H "Cookie: sessionID=something" \
-    -H "Content-type: application/x-www-form-urlencoded" \
-    -p query.txt \
-    http://127.0.0.1:5000/search
-```
-
-**Steady state:** 1673 complete requests, **0 failed**, **167.27 RPS**, **5.978 ms** mean.
-
-### Practice — the implementation, and its three design rules
-
-<aside>
-
-**The three guidelines for building chaos into your own application:**
-
-1. **Keep it simple.**
-2. **Make the chaos experiment parts optional and disabled by default.**
-3. **Be mindful of the performance impact the extra code has on the whole application.**
-</aside>
-
-The technique: a **wrapper class** with the same interface as the real client, delegating to it after sleeping.
-
-```python
-# Listing 8.2 — chaos.py
-import time
-import os
-
-class ChaosClient:
-    def __init__(self, client, delay):
-        self.client = client          # reference to the original cache client
-        self.delay = delay
-    def get(self, *args, **kwargs):
-        time.sleep(self.delay)        # wait, then relay
-        return self.client.get(*args, **kwargs)
-    def set(self, *args, **kwargs):
-        time.sleep(self.delay)
-        return self.client.set(*args, **kwargs)
-
-def attach_chaos_if_enabled(cache_client):
-    """ creates a wrapper class that delays calls to get and set methods """
-    if os.environ.get("CHAOS"):
-        return ChaosClient(cache_client, float(os.environ.get("CHAOS_DELAY_SECONDS", 0.75)))
-    return cache_client               # otherwise: the real client, untouched
-```
-
-Two environment variables: **`CHAOS`** (the on switch, default off) and **`CHAOS_DELAY_SECONDS`** (default 750 ms).
-
-The change to `app.py` is **two lines**:
-
-```python
-CACHE_CLIENT = redis.Redis(host="localhost", port=6379, db=0)
-import chaos
-CACHE_CLIENT = chaos.attach_chaos_if_enabled(CACHE_CLIENT)
-```
-
-### Experiment Card 8.1 — Redis latency via a wrapper client
-
-| Field | Content |
-| --- | --- |
-| **Goal** | Quantify how session-cache latency propagates into page latency, in an application you own. |
-| **Relevant theory** | Latency multiplies by round trips (Ch. 4, 5); optional, default-off instrumentation; measuring the injector's own cost. |
-| **System / setup** | Flask app on :5000, Redis on :6379, both on the same host. |
-| **Hypothesis** | "If you add a 100 ms latency to each interaction with the session cache (reads and writes), the overall latency of the `/search` page should increase by 200 ms." |
-| **Steady state** | 1673 requests in 10 s, 0 failed, **167.27 RPS, 5.978 ms** mean. |
-| **Observability** | `ab` with POST body, form content-type and session cookie. |
-| **Failure injected** | `ChaosClient` wrapper sleeping `CHAOS_DELAY_SECONDS` before each `get` and `set`. |
-| **Blast radius** | Only this process, only when `CHAOS` is set at startup. Nothing changes for any other environment. |
-| **Procedure** | Restart with `CHAOS=true CHAOS_DELAY_SECONDS=0.1 FLASK_ENV=development FLASK_APP=app.py python3 -m flask run`, then rerun the identical `ab` command. |
-| **Observed result** | 48 complete requests, **0 failed**, **4.80 RPS**, **208.395 ms** mean. |
-| **Interpretation** | 5.98 ms → 208.4 ms = **+202 ms for 2 × 100 ms injected. Hypothesis confirmed** — "for once, our hypothesis was correct." |
-| **Lesson learned** | When you own the code you can inject at exactly the boundary you care about, which makes the arithmetic of latency propagation explicit and checkable. |
-| **Production considerations** | The wrapper adds **one `if` statement** when disabled and **one extra function call** when enabled — negligible against millisecond-scale waits. That property makes it safe to ship the instrumentation. |
-
-### 8.2.5 Discussion — the honest cost of this approach
-
-<aside>
-
-**Adding chaos code to your own source is a double-edged sword.**
-
-- If your chaos code introduces a bug that breaks the program, **instead of increasing confidence in the system, you've decreased it**.
-- If you add latency to the wrong part of the codebase, the experiment yields results that don't match reality, **giving you false confidence — "arguably even worse."**
-</aside>
-
-**"Duh, I added a sleep, of course it slowed down by that amount."** The book takes the objection seriously and answers it twice:
-
-1. **Scale.** In an application larger than a few dozen lines, it is "much harder to be sure about how latencies in different components affect the system as a whole."
-2. **The pragmatic argument, which is the better one:** "**doing an experiment and confirming even the simple assumptions is often quicker than analyzing the results and reaching meaningful conclusions.**"
-
-**A design flaw the author volunteers about his own example:** reading and writing Redis as **two separate actions** does not work under concurrent access and **can lose writes**. It could instead use a **Redis set with an atomic add operation**, which would fix the race *and* remove the double network-latency penalty. He kept it simple deliberately.
-
-**On performance:** because you write the code, you control the overhead. Here the chaos path is chosen **once at startup** from environment variables. When off, the only cost is one `if`. When on, one extra function call.
-
----
-
-## 8.3 Experiment 2 — Failing requests
-
-Look again at the function. It **has no exception handling whatsoever**, so any exception from `CACHE_CLIENT` bubbles up the stack:
-
-```python
-def get_interests(session):
-    return json.loads(CACHE_CLIENT.get(session) or "[]")
-```
-
-<aside>
-
-**Where chaos engineering sits relative to the testing ladder — the chapter's clearest statement of it.** To test this function you would write **unit tests** covering the legal exceptions. That covers the function but "will tell you little about how the entire application behaves when these exceptions arise." To test the whole application you need **integration or e2e tests**: stand the app up with its dependencies and drive client traffic, so you verify **what error the user sees** rather than what exception an internal function returns. **Chaos engineering is the next step in that evolution: a kind of end-to-end testing, while injecting failure, to verify the whole reacts as you expect.**
-
-</aside>
-
-### The plan — and the design question it forces
-
-"What should happen if `get_interests` receives an exception?" **It depends on the page:**
-
-| Page | Right behaviour when the session store fails |
-| --- | --- |
-| **Search results with a recommendations sidebar** | **Skip the sidebar** — it "might make more economic sense… and allow the user to at least click on other products" |
-| **Checkout page** | Not being able to access session data may make it impossible to finish the transaction, so **return an error and ask the user to try again** |
-
-This example has no buy page, so the expected behaviour is graceful degradation. The existing `except redis.exceptions.RedisError` block in `search()` should make the failure **transparent to the user, who simply sees no recommendations**.
-
-1. **Observability:** browse to the application and see the recommended products.
-2. **Steady state:** recommended products are displayed in the search results.
-3. **Hypothesis:** *if you add a `redis.exceptions.RedisError` every other time `get_interests` is called, you should see the recommended products every other time you refresh.*
-4. **Run.**
-
-### Practice — the implementation: a Python decorator
-
-```python
-# Listing 8.3 — chaos2.py
-import os
-import redis
-
-def raise_rediserror_every_other_time_if_enabled(func):
-    """ Decorator, raises an exception every other call to the wrapped function """
-    if not os.environ.get("CHAOS"):
-        return func                      # chaos off -> return the ORIGINAL function, zero overhead
-    counter = 0
-    def wrapped(*args, **kwargs):
-        nonlocal counter
-        counter += 1
-        if counter % 2 == 0:
-            raise redis.exceptions.RedisError("CHAOS")
-        return func(*args, **kwargs)     # otherwise relay untouched
-    return wrapped
-```
-
-```python
-import chaos2
-@chaos2.raise_rediserror_every_other_time_if_enabled
-def get_interests(session):
-    return json.loads(CACHE_CLIENT.get(session) or "[]")
-```
-
-<aside>
-
-Notice **where the `if` lives**: the environment check runs **once, at decoration time**, and when chaos is off the decorator returns the original function object. The disabled path costs nothing at call time. Compare with the naive version that checks the variable inside `wrapped` on every call.
-
-</aside>
-
-<aside>
-
-The book's operational reminder: "**make sure that you undid the previous changes, or you'll be running two experiments at the same time!**" Two simultaneous injections make a result uninterpretable — the same discipline as isolating variables in Chapter 3.
-
-</aside>
-
-### Experiment Card 8.2 — Intermittent `RedisError` from `get_interests`
-
-| Field | Content |
-| --- | --- |
-| **Goal** | Verify that an exception from the session cache degrades the page gracefully rather than breaking it. |
-| **Relevant theory** | Graceful degradation; the difference between unit, e2e and chaos testing; partial (50%) failure. |
-| **System / setup** | Same Flask + Redis app; `chaos2` decorator applied to `get_interests`. |
-| **Hypothesis** | "If you add a `redis.exceptions.RedisError` every other time `get_interests` is called, you should see the recommended products every other time you refresh the page." |
-| **Steady state** | Recommended products are displayed in the search results. |
-| **Observability** | The rendered page (are recommendations present?) **and** the application log. |
-| **Failure injected** | `redis.exceptions.RedisError("CHAOS")` on every second call, via a decorator gated on `CHAOS`. |
-| **Blast radius** | One function, one process, only with `CHAOS=true`. |
-| **Procedure** | `CHAOS=true FLASK_ENV=development FLASK_APP=app.py python3 -m flask run`, then submit a search at `http://127.0.0.1:5000/` and refresh the results page (`/search`) several times. |
-| **Observed result** | **Hypothesis confirmed.** Recommendations appear every other refresh; the log shows `LOG: redis error CHAOS` interleaved with `"POST /search HTTP/1.0" 200`. |
-| **Why it worked** | The `try/except redis.exceptions.RedisError` in `search()` catches it, logs it, sets `new_interests = None`, and the page renders without recommendations. **HTTP 200 throughout** — the user never sees an error. |
-| **Lesson learned** | Graceful degradation is a property you can *verify*, not just claim. The log line matters as much as the page: a degraded response that logs nothing is indistinguishable from a healthy one. |
-| **Production considerations** | The same failure on a checkout page would be the wrong behaviour. **Degrade or fail is a per-endpoint business decision** — make it explicitly, then test that the code implements the decision you made. |
-
----
-
-## 8.4 Theory — Application vs. infrastructure
-
-<aside>
-
-**The trade-off, stated directly.**
-
-**Application level — advantages:** much easier to do; uses the tools you already know; you can get creative with how you structure the experiment code; **sophisticated scenarios tend to not be a problem**.
-
-**Application level — drawbacks:** you are writing code, so every problem of writing code applies — **you can introduce bugs, test something other than what you intend, or break the application altogether.** Some experiments simply do not fit: "if you wanted to **restrict all outbound traffic** from your application, a lot of places in your code might need changes, so **a platform-level approach might be more suitable**."
-
-</aside>
-
-|  | **Application-level injection** | **Infrastructure-level injection** |
-| --- | --- | --- |
-| **Examples in this book** | Ch. 8 (wrapper class, decorator), Ch. 7 (javaagent), Ch. 9 (browser JS) | Ch. 4 (`tc`), Ch. 5 (Pumba, cgroups, seccomp), Ch. 6 (strace/seccomp), Ch. 10–11 (Kubernetes, PowerfulSeal) |
-| **Effort to start** | Low — no extra tooling | Higher — a tool per layer |
-| **Precision** | Exactly the function or dependency you choose | The layer, not the call site |
-| **Risk** | **You can break the application with your own bug** | The application is untouched |
-| **Scope limits** | Cross-cutting concerns (all egress, whole-host resources) need changes everywhere | Naturally cross-cutting |
-| **Requires source access** | **Yes** | No |
-| **Realism** | Simulates the *effect* at your chosen boundary | Simulates the real mechanism |
-
-**The chapter's closing point:** both approaches are useful, "and chaos engineering is not only for SREs; **everyone can do chaos engineering, even if it's only on a single application.**"
-
-<aside>
-
-**Pop quiz — when is it a good idea to build chaos engineering into the application?** "When it's more convenient, easier, safer, or you have access to only the application level."
-
-**Pop quiz — what is *not* important when building chaos experiments into the application?** "Rubbing the ingenuity of your design into everyone else's faces." The other three **are** important: the experiment code runs only when switched on; you follow software-deployment best practice to roll out the change; and **you can reliably measure the effects**.
-
-</aside>
-
----
-
-## Theory ↔ Practice connections for Chapter 8
-
-- **Round trips → latency multiplication (Ch. 4 WordPress, Ch. 5 Ghost) ↔ Experiment 1:** the same law, but here you **count the round trips by reading the code** — exactly two — so the prediction is exact and it comes out right. The earlier chapters could not predict, because they could not see inside the chatty ORM.
-- **Automatic rollback (Ch. 5 Pumba `--duration`), `when=n+step` (Ch. 6), `rate:0.5` (Ch. 7) ↔ "every other call" here:** the fourth appearance of the same idea. **Partial failure is more informative and less dangerous than total failure.**
-- **The `CHAOS` environment variable ↔ blast radius (Ch. 2):** an off-by-default feature flag is a blast-radius control written in your own code. It also makes shipping the injector to production defensible.
-- **Graceful degradation ↔ Chapter 1's FizzBuzzAAS cache bug:** Chapter 1's team *thought* they handled a cache failure and did not. Chapter 8 shows how to check.
-- **Unit → integration/e2e → chaos (§8.3) ↔ Chapter 1 §1.2.2:** the testing ladder from the introduction, now argued from a concrete function with no exception handling.
-- **Wrapping a client object ↔ Chapter 9:** Chapter 9 does the same thing to the browser's `XMLHttpRequest`, in JavaScript, in someone else's application.
-
----
-
-## Key Takeaways — Chapter 8
-
-1. When you own the code, **injecting failure at the application layer is often the fastest path** — no extra tooling, familiar language, arbitrary sophistication.
-2. **Three rules for in-application chaos code:** keep it simple; make it **optional and disabled by default**; keep its performance impact negligible.
-3. Gate the injection on an **environment variable evaluated at startup** (`CHAOS`, `CHAOS_DELAY_SECONDS`). Off costs one `if`; on costs one function call.
-4. **A wrapper class** with the same interface as the real client is the cleanest latency injector: sleep, then delegate.
-5. **A decorator that returns the original function when chaos is off** is the cleanest failure injector in Python, and it has zero call-time overhead when disabled.
-6. **`ab` can drive POST forms:** `-p <file>` sends the body and implies POST; repeat `-H "Header: value"` for the content type and the session cookie.
-7. Reading the code made the hypothesis exact — two cache calls per request, so 2 × 100 ms — and the measurement confirmed it: **5.98 ms → 208.4 ms**.
-8. **A degraded response is only verifiable if it is observable.** Confirm both what the user sees (no recommendations, HTTP 200) and what the log says (`LOG: redis error CHAOS`).
-9. **Degrade or fail is a per-endpoint business decision.** A missing recommendations sidebar is fine; a checkout that silently loses session data is not.
-10. The risk of this approach is your own code. Bugs can *reduce* confidence, and injecting in the wrong place produces **false confidence, which is worse than none**.
-11. Cross-cutting failures — block all egress, exhaust host resources — belong at the platform level, not in the application.
-12. Run **one experiment at a time**. Two active injections make the result uninterpretable.
-
----
-
-# Chapter 9 — There's a Monkey in My Browser!
-
-> The layer above everything else. "If you're part of the 4.5 billion people using the internet, you're almost certainly running JS." Frontend JavaScript is another layer where failure can occur, and therefore where it can be injected.
-
-## 9.1 Practice — The scenario: pgweb
-
-A neighbouring team wants **pgweb** (`github.com/sosedoff/pgweb`), an open source PostgreSQL UI written in Go. Their manager distrusts JavaScript. Both parties ask you to evaluate pgweb's reliability from a chaos-engineering perspective, **particularly its JavaScript**.
-
-```bash
-sudo service postgresql start
-pgweb --user=chaos --pass=chaos --db=booktown
-# To view database open http://localhost:8081/ in browser
-```
-
-Credentials in the VM: user `chaos`, password `chaos`, example database `booktown`.
-
-<aside>
-
-The reframing that makes the chapter work: "As you click around the website, you will see new data being loaded. **From the chaos engineering perspective, every time data is being loaded, it means an opportunity for failure.**"
-
-</aside>
-
-### 9.1.2 Understanding the application — with the browser's own tools
-
-Open **Web Developer tools → Network** (Firefox: **Ctrl-Shift-E**, or Tools > Web Developer > Network). Click a table in pgweb's left menu and **three requests appear**. For each you see status (HTTP code), method (GET), domain (`localhost:8081`), the endpoint, **a link to the code that made the request (Initiator)**, and more. Clicking a request opens a detail pane with headers sent and received, cookies, parameters and the response.
-
-**What that reveals, before reading any source code:** the Initiator column shows the UI uses **jQuery** to call the backend.
-
-**The architecture (Figure 9.4):**
-
-1. Browser → pgweb's built-in HTTP server: `GET /` → `index.html` + `*.js`.
-2. User clicks a table → **JavaScript** issues `GET /api/.../rows`.
-3. pgweb server → PostgreSQL: `SELECT * FROM table` → rows data.
-4. Server returns **JSON data**; the browser renders it.
-
-This is a **single-page application (SPA)**: only the initial "traditional" page is served, and JavaScript renders all content afterwards by manipulating it.
-
-<aside>
-
-**The reusable method:** the Network tab is a free, zero-setup observability tool for someone else's frontend. Initiator tells you which library makes the calls. The timeline tells you whether calls are sequential or parallel. The detail pane gives you the exact contract. You can characterise an unfamiliar SPA in two minutes.
-
-</aside>
-
----
-
-## 9.2 Experiment 1 — Adding latency
-
-**Why in the browser rather than with `tc`?** You could add latency between the pgweb server and the database using Chapter 4's or Chapter 5's techniques. "But you're here to learn, so this time, let's focus on how to do that in the JavaScript application itself."
-
-**The real question:** the three requests are made in quick succession, "so it's not clear whether they're **prone to cascading delays** (whereby requests are made in a sequence, so all the delays add up)."
-
-### The plan
-
-1. **Observability:** use the browser's built-in timers to read how long the three requests take.
-2. **Steady state:** the measurements before the experiment.
-3. **Hypothesis:** *if you add a 1-second delay to all requests made from the JavaScript code, the overall time to display the new table will increase by 1 second.* That is, the requests are parallel, not sequential, which would give 3 seconds.
-4. **Run.**
-
-### Steady state — reading the Firefox timeline
-
-Clear the Network pane with the trash-can icon, then select a table. Read two things:
-
-- **The timeline column.** Each request is a bar, starting when it was issued and ending when it resolved. **Longer bar = longer request.**
-- **The "Finish" line at the bottom.** Total time between the first request starting and the last event finishing.
-
-**Steady state ≈ 25 ms** for all three requests. The book is honest about its limits: "You don't have an exact number from between the user click action and the data being visible, but you have the time from the beginning of the first request to the end of the last one."
-
-### Implementation — overriding `XMLHttpRequest.prototype.send`
-
-**JavaScript makes requests two ways:** the **`XMLHttpRequest`** built-in class and the **Fetch API**. jQuery, and therefore pgweb, uses `XMLHttpRequest`.
-
-**The five pieces of JavaScript knowledge the book supplies. They generalise, so keep them:**
-
-1. `XMLHttpRequest.send()` "sends the request. If the request is asynchronous (which is the default), this method returns as soon as the request is sent." **Modify it and you control every request.**
-2. In the browser **the global scope is `window`**, so the class is `window.XMLHttpRequest`.
-3. JavaScript is **prototype-based**. `send` is defined not on the object but on its prototype, hence `window.XMLHttpRequest.prototype.send`. Replace it and *every future instance* uses your version.
-4. Any function can be invoked with **`.apply(this, arguments)`** — a reference to the object to call it as a method of, plus the argument list. This is how you delegate to the original.
-5. **`setTimeout(fn, ms)`** introduces the delay. Note that `setTimeout` is *not* accessed through `window`. "Well, JavaScript is like that."
-
-<aside>
-
-The author's framing is also the security lesson: "surely, something this fundamental to the correct functioning of the application must not be easily changeable, right? … **Just kidding! JavaScript won't bat an eye.**" What makes this an excellent chaos-injection mechanism makes it an excellent attack surface. Anything running in the page can replace the request layer.
-
-</aside>
-
-```javascript
-// Listing 9.1 — XMLHttpRequest-3.js  (paste into the console: Ctrl-Shift-K)
-const originalSend = window.XMLHttpRequest.prototype.send;   // keep the original
-window.XMLHttpRequest.prototype.send = function(){           // override on the PROTOTYPE
-    console.log("Chaos calling", new Date());                // observability for the injection itself
-    let that = this;                                         // save the calling context
-    setTimeout(function() {
-        return originalSend.apply(that);                     // delegate after the delay
-    }, 1000);
-}
-```
-
-**The injection mechanism is the console itself:** "You can execute any valid code you want at any time in the console, and if you break something, **you can just refresh the page and all changes will be gone.**"
-
-<aside>
-
-**That refresh is the cleanest teardown in the whole book.** Compare with `iptables -D` (Ch. 1), `tc qdisc del` (Ch. 4), Pumba's `--duration` teardown container (Ch. 5), Ctrl-C on `strace` (Ch. 6). Browser-side injection is per-tab, per-session and self-reverting — an unusually small blast radius by construction.
-
-</aside>
-
-### Experiment Card 9.1 — 1-second delay on every XHR
-
-| Field | Content |
-| --- | --- |
-| **Goal** | Determine whether pgweb's three per-click requests are sequential (cascading delays) or parallel. |
-| **Relevant theory** | Latency compounding vs. parallelism; SPA request patterns; prototype overriding as an injection mechanism. |
-| **System / setup** | pgweb (Go) on :8081, PostgreSQL `booktown`, Firefox with Developer Tools. |
-| **Hypothesis** | "If you add a 1-second delay to all requests made from the JavaScript code, the overall time to display the new table will increase by 1 second." |
-| **Steady state** | Network tab "Finish" ≈ **25 ms** for the three requests. |
-| **Observability** | Firefox Network timeline (bars + Finish time); `console.log("Chaos calling", new Date())` from the injected code; the `Date` response header of each request. |
-| **Failure injected** | `setTimeout(…, 1000)` before delegating to the original `XMLHttpRequest.prototype.send`. |
-| **Blast radius** | One browser tab, one session. **Refresh reverts everything.** |
-| **Procedure** | 1. Refresh, wait for load. 2. Clear the Network pane. 3. Paste Listing 9.1 in the console, Enter. 4. Select another table. 5. Read the timeline. |
-| **Observed result** | **Hypothesis confirmed.** The three bars on the timeline are **not spaced 1 second apart** — the same spacing as the steady state — so the requests were not delayed one after another. The ~1 s added to each request happens *before* its bar starts, so the timeline itself cannot show it (next row). |
-| **The clever verification step** | The timeline cannot show the added delay, because the delay happens *before* the request starts and the timeline begins when the request starts. Rather than "override more functions to print different times," the book compares **the `Chaos calling` timestamps in the console** with **the `Date` response header of each request** — and they are **1 second apart, for all three**. |
-| **Interpretation** | The requests are issued **in parallel**, not in sequence. "This is good news, because it means that with a slower connection, the overall application should slow down in a **linear** fashion. In other words, **there doesn't seem to be a bottleneck in this part of the application.**" |
-| **Lesson learned** | Injecting a *known, large* delay is a measurement instrument. The *spacing* of the resulting requests reveals the concurrency structure of code you have never read. |
-| **Production considerations** | Parallel request fan-out degrades gracefully with connection quality; sequential fan-out multiplies. Verify which one your SPA does before assuming mobile users are fine. |
-
----
-
-## 9.3 Experiment 2 — Adding failure
-
-**The reasoning about expected behaviour:** running locally you see no connectivity issues, but in the real world you will. "**Ideally, it would have a retry mechanism where applicable, and if that fails, it would present the user with a clear error message and avoid showing stale or inconsistent data.**"
-
-1. **Observability:** whether the UI shows any errors or stale data.
-2. **Steady state:** no errors or stale data.
-3. **Hypothesis:** *if we add an error on every other request the JavaScript UI makes, you should see an error and no inconsistent data every time you select a new table.*
-4. **Run.**
-
-### Implementation — dispatching a real `error` event
-
-**The new knowledge needed: how does `XMLHttpRequest` fail in normal conditions?** From the documentation: **it uses events.**
-
-<aside>
-
-**Events in JavaScript (Figure 9.7).** An object can **emit (dispatch)** events — simple objects with a name and optionally a payload. When it does, it checks whether functions are registered to receive that name, and calls them all with the event. Any function can be registered to **listen** on an emitting object. JavaScript uses events extensively for asynchronous things such as clicks and keypresses.
-
-```javascript
-.addEventListener("timeout", myFunction);   // register
-.dispatchEvent(new Event('timeout'));       // emit -> myFunction(event) runs
-```
-
-If no function is registered, the event is discarded.
-
-</aside>
-
-From `XMLHttpRequest`'s Events section, the promising one:
-
-```text
-error — Fired when the request encountered an error. Also available via the onerror property.
-```
-
-<aside>
-
-**Why this choice is correct rather than convenient:** "It's a **legal event that can be emitted by an instance of `XMLHttpRequest`**, and it's one that **should be handled gracefully** by the pgweb application." The same test applied in Chapter 6 (`man 2 close`'s ERRORS list) and Chapter 7 (`grep ") throws"`): **inject only failures the system genuinely admits are possible.**
-
-</aside>
-
-```javascript
-// Listing 9.2 — XMLHttpRequest-4.js
-const originalSend = window.XMLHttpRequest.prototype.send;
-var counter = 0;
-
-window.XMLHttpRequest.prototype.send = function(){
-    counter++;
-    if (counter % 2 == 1){
-        return originalSend.apply(this, [...arguments]);   // pass through, unchanged
-    }
-    console.log("Unlucky " + counter + "!", new Date());
-    this.dispatchEvent(new Event('error'));                // fake a real, legal failure
-}
-```
-
-### Experiment Card 9.2 — Fail every other XHR with an `error` event
-
-| Field | Content |
-| --- | --- |
-| **Goal** | Test pgweb's frontend error handling: does a failed request produce a visible error and avoid showing stale data? |
-| **Relevant theory** | The JavaScript event model; "inject only failures the system admits are legal"; stale data as a failure mode distinct from an error. |
-| **System / setup** | Same as Experiment 1. |
-| **Hypothesis** | "If we add an error on every other request the JavaScript UI is making, you should see an error and no inconsistent data every time you select a new table." |
-| **Steady state** | No errors, no stale data. |
-| **Observability** | The UI itself (does the table refresh? is an error shown?) and the **browser console**. |
-| **Failure injected** | `this.dispatchEvent(new Event('error'))` instead of sending, on every second call. |
-| **Blast radius** | One tab; refresh reverts. |
-| **Procedure** | Refresh → clear Network pane → paste Listing 9.2 → Enter → click three different tables in a row. |
-| **Observed result** | **Hypothesis refuted, in the worse direction.** Rows and table information refresh **only every other click**. **No visual error message appears.** "So you can select a table, **see incorrect data, and not know that anything went wrong.**" |
-| **What the console shows** | `Uncaught SyntaxError: JSON.parse: unexpected character at line 1 column 1 of the JSON data` — for every other request. |
-| **Root cause (found in the open source)** | The shared error handler used for all requests accesses a property that **is not available when the error happened before the response was received**, and tries to parse it as JSON: `parseJSON(xhr.responseText)`. The resulting exception is thrown, so the error handler itself dies, and the user gets stale data with no visible error. |
-| **Lesson learned** | **The error handler was the bug.** A handler that assumes a response body exists cannot survive a transport-level failure. And **stale data with no error is a worse outcome than an error**: the user cannot tell they are looking at the wrong thing. |
-| **Effort vs. value** | "With a grand total of **10 lines of (verbose) code and about 1 minute of testing**, you were able to find issues with the error handling of a popular, good-quality open source project." |
-| **Production considerations** | Test the *error path* of an error handler. Distinguish "request failed with a response" from "request failed with no response" — the same fail-fast-vs-silent distinction as Chapter 1's cache hang. |
-
-<aside>
-
-The book is careful to add that this "doesn't take away from the awesomeness of the project itself. Rather, this is an illustration of **how little effort it sometimes takes to benefit from doing chaos engineering.**" The exact line is visible in pgweb's public repo — an advantage of open source.
-
-</aside>
-
----
-
-## 9.4 Practice — Other good-to-know topics
-
-### 9.4.1 The Fetch API
-
-A **more modern replacement for `XMLHttpRequest`**. The main interaction point is the global **`fetch`** function. Unlike `XMLHttpRequest` it returns a **`Promise`**, so you attach `.then` and `.catch`:
-
-```javascript
-fetch("/api/does-not-exist").then(function(resp) {
-    console.log(resp);          // deal with the fetched data
-}).catch(function(error) {
-    console.error(error);       // do something on failure
-});
-```
-
-And it is **just as overridable**:
-
-```javascript
-// Listing 9.3 — fetch.js
-const original = window.fetch;
-window.fetch = function(){
-    console.log("Hello chaos");
-    return original.apply(this, [...arguments]);
-}
-```
-
-Worth knowing "in case the application you work with is using this API, rather than `XMLHttpRequest`, which is increasingly more likely every day."
-
-### 9.4.2 Built-in throttling
-
-Firefox and Chrome ship network throttling. In the **Network tab**, a drop-down above the request list defaults to **No Throttling**. Change it to presets such as **GPRS, Good 2G, DSL** that emulate those connections' speeds.
-
-<aside>
-
-This is a **zero-code latency injector for the whole page**, including assets, not just XHRs. Use it to sanity-check an application on a slow connection before you write any injection code. Pop quiz answer, verbatim in spirit: to simulate a frontend loading slowly, the best option is **a modern browser**, not expensive vendor software or a two-week training course.
-
-</aside>
-
-### 9.4.3 Tooling: Greasemonkey and Tampermonkey
-
-Pasting into the console has no dependencies, but it gets tedious at volume. **Greasemonkey** and **Tampermonkey** let you **inject scripts into specific websites** more easily — that is, persist your chaos snippets per site instead of re-pasting them.
-
-<aside>
-
-**Pop quiz — pick the true statement:** "JavaScript's ubiquitous nature combined with its **lack of safeguards** makes it very easy to inject code to implement chaos experiments on the fly into existing applications." Chaos engineering does *not* apply only to backend code.
-
-</aside>
-
----
-
-## Comparison — where the four "own-code-adjacent" injection layers sit
-
-| Layer | Chapter | Mechanism | Teardown | Needs source? |
-| --- | --- | --- | --- | --- |
-| Syscall | 6 | `strace -e inject`, seccomp | Ctrl-C / restart | No |
-| JVM bytecode | 7 | `-javaagent` + ASM, Byteman, Byte-Monkey | Restart without the agent | No |
-| Application code | 8 | Wrapper class, decorator, env-var gate | Unset `CHAOS`, restart | **Yes** |
-| **Browser JavaScript** | **9** | **Override `XMLHttpRequest.prototype.send` or `window.fetch` in the console** | **Refresh the page** | **No** |
-
----
-
-## Theory ↔ Practice connections for Chapter 9
-
-- **Latency compounding (Ch. 4, 5, 8) ↔ Experiment 1:** the first case in the book where injected latency reveals **parallelism rather than multiplication**. Same instrument, opposite finding, which is why you measure instead of assuming.
-- **"Inject only legal failures" (Ch. 6 `man 2 close`, Ch. 7 `grep ") throws"`) ↔ the `error` event (§9.3.1):** the documentation's own event list is the frontend equivalent of the ERRORS section.
-- **Wrapping a client (Ch. 8 `ChaosClient`) ↔ overriding a prototype method (§9.2.3):** the same pattern — keep a reference to the original, interpose, delegate — applied to code you do not own.
-- **Partial failure: `when=n+step` (Ch. 6), `rate:0.5` (Ch. 7), every-other-call decorator (Ch. 8) ↔ `counter % 2` (§9.3.1):** the fourth implementation of the same idea in four languages.
-- **Fail-fast vs. silent failure (Ch. 1 FizzBuzzAAS) ↔ stale data with no error message (§9.3.2):** the same class of defect at the top of the stack. Chapter 1's users saw a hang; pgweb's users see plausible, wrong data, which is worse.
-- **Graceful degradation verified in your own code (Ch. 8) ↔ graceful degradation refuted in someone else's (Ch. 9):** together they make the point that this property must be tested, never assumed.
-- **Blast radius (Ch. 2) ↔ "just refresh the page":** the browser gives you an experiment environment that is isolated and self-reverting by construction.
-
----
-
-## Key Takeaways — Chapter 9
-
-1. Frontend JavaScript is a genuine chaos-engineering layer, sitting above infrastructure and application code. **Every data load is an opportunity for failure.**
-2. **The browser's Developer Tools are the observability stack.** The Network tab's timeline shows request durations and spacing, "Finish" gives the total, Initiator names the calling library, and the detail pane gives headers, cookies and payloads — all without reading source.
-3. JavaScript makes requests two ways: **`XMLHttpRequest`**, used by jQuery and so by pgweb, and the **Fetch API**. Both are trivially overridable.
-4. **The injection pattern:** save the original (`const originalSend = window.XMLHttpRequest.prototype.send`), replace the prototype method, and delegate with **`.apply(this, [...arguments])`**. `setTimeout(fn, ms)` adds latency; `dispatchEvent(new Event('error'))` adds failure.
-5. **The console is the injection mechanism and the page refresh is the teardown.** No tooling, no dependencies, no residue.
-6. Injecting a known delay **measures concurrency**. pgweb's three requests kept their steady-state spacing (all within ~25 ms) under a 1 s delay each, proving they run in **parallel**, so the app degrades **linearly** with connection quality.
-7. When the timeline cannot see your injection, **correlate timestamps** — the injected `console.log` time against the response `Date` header — rather than building more instrumentation.
-8. **Inject only failures the platform genuinely emits.** `XMLHttpRequest`'s documented `error` event is legal, so handling it is fair to demand.
-9. pgweb's error handler called `parseJSON(xhr.responseText)` on a transport-level failure, threw, and left **stale data on screen with no visible error**. The handler itself was the defect.
-10. **Stale data without an error is worse than an error.** Users cannot detect it.
-11. Browsers ship **built-in throttling presets** (GPRS, Good 2G, DSL) — a free, whole-page slow-connection simulator.
-12. **Greasemonkey and Tampermonkey** persist injection scripts per site when console-pasting becomes tedious.
-13. Ten lines of code and one minute found a real error-handling defect in a popular, good-quality open source project. The effort-to-value ratio at this layer is extraordinary.
-
----
-
-# Chapter 10 — Chaos in Kubernetes
+# Chapter 6 — Chaos in Kubernetes
 
 > Kubernetes "solves (or at least makes it easier to solve) a lot of problems that arise when running software across a fleet of machines… But, like everything else, it's not perfect, and **it adds its own complexity to the system — complexity that needs to be understood and managed**."
+>
 
 ## The plan for Part 3 (three chapters, one arc)
 
@@ -4544,12 +3385,10 @@ You inherit the "High-Profile Project" after its technical lead left to breed ll
 **The documentation, verbatim:**
 
 > **ICANT**: International, Crypto-fueled, AI-powered, Next-generation market Tracking
+**Mission:** Build a massively scalable, distributed system for tracking cryptocurrency flows with cutting-edge AI for technologically advanced clients all over the world.
+**Current status:** First we approached the "distributed" part. We're running Kubernetes, so we set up **Goldpinger**, which makes connections between all the nodes to simulate the crypto traffic.
+**To do:** The AI stuff, the crypto stuff, and market stuff.
 >
-> **Mission:** Build a massively scalable, distributed system for tracking cryptocurrency flows with cutting-edge AI for technologically advanced clients all over the world.
->
-> **Current status:** First we approached the "distributed" part. We're running Kubernetes, so we set up **Goldpinger**, which makes connections between all the nodes to simulate the crypto traffic.
->
-> **To do:** The AI stuff, the crypto stuff, and market stuff.
 
 The entire project is an off-the-shelf network diagnostic tool, deployed and left.
 
@@ -4589,7 +3428,7 @@ Kubernetes self-describes as "an open source system for automating deployment, s
 
 ### A very brief history
 
-**Kubernetes** — Greek for *helmsman* or *governor* — was open-sourced by **Google in 2014** (v1.0 followed in July 2015) as a reimplementation of its internal scheduler **Borg**. Google donated it to the newly formed **Cloud Native Computing Foundation (CNCF)**, creating a neutral home and attracting investment from other companies.
+**Kubernetes** — Greek for *helmsman* or *governor* — was released by **Google in 2015** as a reimplementation of its internal scheduler **Borg**. Google donated it to the newly formed **Cloud Native Computing Foundation (CNCF)**, creating a neutral home and attracting investment from other companies.
 
 The strategic note the book adds: it worked. In five years it became **the de facto API for scheduling containers**, and by driving adoption Google "managed to pull people away from investing more into solutions specific to AWS." The CNCF also gained auxiliary projects: **Prometheus**, **containerd**, and many more.
 
@@ -4630,7 +3469,7 @@ minikube start --driver=virtualbox
 kubectl get pods -A         # list pods in ALL namespaces
 ```
 
-```text
+```jsx
 NAMESPACE     NAME                              READY  STATUS   RESTARTS  AGE
 kube-system   coredns-66bff467f8-62g9p          1/1    Running  0         5m44s
 kube-system   etcd-minikube                     1/1    Running  0         5m49s
@@ -4783,7 +3622,7 @@ spec:
 **Deploying and verifying:**
 
 ```bash
-kubectl apply -f goldpinger-rbac.yaml
+kubectl apply -f goldpinger-rbac.yml
 kubectl apply -f goldpinger.yml
 kubectl get pods                      # three pods in Running
 kubectl describe svc goldpinger       # check the Endpoints field
@@ -4821,17 +3660,13 @@ Accessing a service is the one thing Kubernetes does **not** standardise. Every 
 ```bash
 #!/bin/bash
 # Listing 10.3 — kube-thanos.sh
-# -l app=goldpinger: only pods with this label; -o name: print names only
-# sort --random-sort: shuffle; head -n 1: take one; xargs kubectl delete: delete it
 kubectl get pods \
-  -l app=goldpinger \
-  -o name \
-    | sort --random-sort \
-    | head -n 1 \
-    | xargs kubectl delete
+  -l app=goldpinger \          # only pods with this label
+  -o name \                    # print names only
+    | sort --random-sort \     # shuffle
+    | head -n 1 \              # take one
+    | xargs kubectl delete     # delete it
 ```
-
-Abridged: the book's script wraps this pipeline in `while :; do date; …; sleep 10; done`, so it deletes a random pod every 10 seconds until you stop it.
 
 ### Experiment Card 10.1 — Kill a random Goldpinger pod
 
@@ -4992,17 +3827,15 @@ TOXIPROXY_URL=$(minikube service --url goldpinger-chaos) # --url prints only the
 toxiproxy-cli -h $TOXIPROXY_URL list                     # -h is HOST, not help
 # "no proxies"
 
-# -l: listen where peers expect; -u: relay to the real Goldpinger
 toxiproxy-cli -h $TOXIPROXY_URL create chaos \
-    -l 0.0.0.0:8080 \
-    -u localhost:9090
+    -l 0.0.0.0:8080 \        # listen where peers expect
+    -u localhost:9090        # relay to the real Goldpinger
 # -> refresh the UI: all four nodes green
 
-# --a latency=250: 250 ms; --upstream: toward the Goldpinger instance
 toxiproxy-cli -h $TOXIPROXY_URL toxic add \
     --type latency \
-    --a latency=250 \
-    --upstream \
+    --a latency=250 \        # 250 ms
+    --upstream \             # toward the Goldpinger instance
     chaos
 
 toxiproxy-cli -h $TOXIPROXY_URL inspect chaos
@@ -5047,7 +3880,7 @@ toxiproxy-cli -h $TOXIPROXY_URL inspect chaos
 ## Key Takeaways — Chapter 10
 
 1. Kubernetes automates what a growing fleet forces you to do by hand: deployment, supervision and restart, rollouts and rollbacks, and resource-aware placement. It is **declarative** — you state desired state and the control plane converges to it.
-2. Kubernetes came from Google's **Borg**, was open-sourced in 2014 (v1.0 in 2015) and donated to the **CNCF**, and became the de facto container-scheduling API.
+2. Kubernetes came from Google's **Borg**, was open-sourced in 2015 and donated to the **CNCF**, and became the de facto container-scheduling API.
 3. **Pod** = co-located containers sharing an IP. **Deployment** = a blueprint plus lifecycle management for pods. **Service** = a stable IP resolving to a matched set of pods.
 4. **RBAC** = ClusterRole (verbs on resources) + ServiceAccount (identity for workloads) + ClusterRoleBinding (the link). Grant exactly the verbs needed.
 5. **Labels drive everything**: deployment-to-pod ownership, service-to-pod routing, and application-level peer discovery. Multiple labels AND together.
@@ -5062,9 +3895,10 @@ toxiproxy-cli -h $TOXIPROXY_URL inspect chaos
 
 ---
 
-# Chapter 11 — Automating Kubernetes Experiments
+# Chapter 7 — Automating Kubernetes Experiments
 
 > "In the previous chapter, you set up experiments manually to build an understanding of how to implement the experiment. But now I want to show you how much more quickly you can go when using the right tools."
+>
 
 ## 11.1 Theory — Automation, and PowerfulSeal
 
@@ -5160,7 +3994,7 @@ powerfulseal autonomous --policy-file experiment1b.yml
 
 On Minikube the kubectl config at `~/.kube/config` is picked up automatically, so `--policy-file` is the only flag needed. The log is itself the audit trail:
 
-```text
+```jsx
 Matched 3 pods for selector app=goldpinger in namespace default
 Initial set length: 3
 Filtered set length: 1
@@ -5227,7 +4061,7 @@ scenarios:
 powerfulseal autonomous --policy-file experiment2b.yml
 ```
 
-```text
+```jsx
 Clone deployment created successfully
 Sleeping for 120 seconds
 Scenario finished
@@ -5288,7 +4122,7 @@ The happy path is pending → running. Before that happens, several variable-dur
 - **Preparing dependencies** — potentially large volumes, configuration files, and so on.
 - **Actually running the containers** — this varies with how busy the host is.
 
-On a not-so-happy path a pod stays **pending** while an image pull fails and is retried, or its containers crash and restart while the pod is **running**. (*Failed* is a terminal phase: a failed pod is replaced, never revived.) "The point is that **you can't easily predict how long it's going to take**… So the next best thing you can do is to **continuously test it and alert when it gets too close to the threshold you care about.**"
+On a not-so-happy path a pod can go **pending → failed → running**. "The point is that **you can't easily predict how long it's going to take**… So the next best thing you can do is to **continuously test it and alert when it gets too close to the threshold you care about.**"
 
 ### Experiment 3 — Verify pods are ready within *n* seconds
 
@@ -5369,7 +4203,7 @@ kubectl get pods --watch                                  # terminal 1
 powerfulseal autonomous --policy-file experiment3.yml     # terminal 2, Ctrl-C to stop
 ```
 
-```text
+```jsx
 Starting scenario 'Verify pod start SLO' (3 steps)
 pod/slo-test created  service/slo-test created
 Return code: 0
@@ -5396,7 +4230,7 @@ Sleeping for 8 seconds
 | **Blast radius** | One throwaway pod and service per cycle, auto-deleted. |
 | **Observed result** | Pod goes `Pending → ContainerCreating → Running` in ~1 s; `/healthz` responds; scenario passes; cleanup verified in the `--watch` output. |
 | **Lesson learned** | "With about **50 lines of verbose YAML**, you can describe an ongoing experiment and detect when starting a pod takes longer than 30 seconds." |
-| **Making it realistic** | Use an image that **resembles what the platform actually runs**; Goldpinger's image is small. Run **multiple scenarios for multiple image types**. To push toward the worst case, set **`imagePullPolicy: Always`** in the pod template. It forces a registry check on every start, but cached layers are still reused, so a genuinely cold pull also needs a node that does not hold the image. |
+| **Making it realistic** | Use an image that **resembles what the platform actually runs**; Goldpinger's image is small. Run **multiple scenarios for multiple image types**. To always test the worst case, a cold image pull, set **`imagePullPolicy: Always`** in the pod template. |
 | **Other SLOs to verify the same way** | **Pod healing:** if you kill a pod, how long until it is rescheduled and ready? **Scaling:** if you scale a deployment, how long until the new pods are available? |
 | **Production considerations** | This is the shape of an experiment that lives permanently in your cluster, wired to your alerting — the practical realisation of Chapter 1's "work backward from the business goal to an SLO you can continuously test against." |
 
@@ -5557,7 +4391,7 @@ Both policies work with **any supported cloud provider** unchanged.
 6. **One passing run proves only that the system behaved that way, that once.** Absence of a counterexample proves nothing, which is the argument for **continuous** experiments.
 7. **Pod-start time is inherently variable**: image download (remote, retryable), dependency preparation, and host load. Pod phases: pending, running, succeeded, failed, unknown.
 8. A continuous SLO experiment is **`kubectl` (with `autoDelete`) → `wait` → `probeHTTP`**, looped with `minSecondsBetweenRuns` and `maxSecondsBetweenRuns`. Alert on an **internal SLO tighter than the contractual SLA**.
-9. Make it realistic: use representative images, several of them, and **`imagePullPolicy: Always`** plus an uncached node to approach the cold-pull worst case. Extend the same pattern to pod-healing and scaling SLOs.
+9. Make it realistic: use representative images, several of them, and **`imagePullPolicy: Always`** to test the cold-pull worst case. Extend the same pattern to pod-healing and scaling SLOs.
 10. **MTTF arithmetic:** a 5-year MTTF gives roughly a 0.05% daily failure chance per server — ~1% at 20 servers, ~10% at 200, daily at thousands. **Hardware failure is a scheduled event, not a surprise.**
 11. **Regions** are geographically and utility-independent. **Availability zones** separate redundant components within a region. Use **affinity and anti-affinity** to spread. Providers state SLOs in these terms.
 12. Test four failure shapes: single machines, groups, whole zones and regions, and network partitions that merely *look* like unavailability.
@@ -5565,9 +4399,10 @@ Both policies work with **any supported cloud provider** unchanged.
 
 ---
 
-# Chapter 12 — Under the Hood of Kubernetes
+# Chapter 8 — Under the Hood of Kubernetes
 
 > "To understand its weak points, you need to know how it works." This chapter is a component-by-component anatomy. Each section ends in concrete experiment ideas rather than worked labs.
+>
 
 <aside>
 
@@ -5613,7 +4448,7 @@ Consequences for chaos engineering: (a) **every component's failure mode is "sto
 
 **Why consensus at all? Four words: availability and fault tolerance.**
 
-- **Fault tolerance:** with a single copy of the data, when it's gone, it's gone. Recall Chapter 11's MTTF math: at 20 servers you are playing Russian roulette at ~1% a day (0.05% per server).
+- **Fault tolerance:** with a single copy of the data, when it's gone, it's gone. Recall Chapter 11's MTTF math: at 20 servers you are playing Russian roulette at 0.05% a day.
 - **Availability:** with a single server, when it's down, your system is down.
 - You cannot get either without **multiple copies**, and multiple copies must **agree on a version of reality**. That is consensus.
 
@@ -5628,17 +4463,17 @@ That is "pretty much exactly how Raft (and by extension, etcd) works": run an **
 **The properties that matter operationally:**
 
 - etcd holds **pretty much all of the data** about a Kubernetes cluster.
-- It is **strongly consistent**: a write is committed once a majority of members have stored it, and **whichever node you connect to, you get up-to-date data** (linearizable reads are confirmed with the leader).
+- It is **strongly consistent**: writes replicate to all nodes, and **whichever node you connect to, you get up-to-date data**.
 - **The price is performance.** Three or five nodes is typical because that gives enough fault tolerance, and "**any extra nodes just slow the cluster with little benefit**."
 
 <aside>
 
-**Why odd numbers — the counter-intuitive bit worth memorising.** Quorum is `floor(n/2) + 1`.
+**Why odd numbers — the counter-intuitive bit worth memorising.** Quorum is `n/2 + 1`.
 
 - **3 nodes** → majority of 2 → you can lose **1** node.
 - **4 nodes** → majority of 3 → you can *still* lose only **1** node, but **there are now more nodes that can fail**.
 
-"**Even numbers of members actually decrease fault tolerance.**" Precisely: the number of failures you can tolerate stays the same, but there are more members that can fail, so losing quorum becomes more likely. The extra node bought nothing.
+"**Even numbers of members actually decrease fault tolerance.**" Adding a node made you worse off.
 
 </aside>
 
@@ -5702,7 +4537,7 @@ Both the notification mechanism — **called a `watch` in Kubernetes** — and t
 
 </aside>
 
-**Leader election.** Like kube-apiserver it runs in multiple copies. **Unlike kube-apiserver, only one copy does work at a time.** Instances agree on the leader by **acquiring a lease** — a **lock: a distributed mutex with an expiration date**. *(Precision: the lease is a Kubernetes `Lease` object — older releases used an annotation on an Endpoints or ConfigMap object — written through kube-apiserver with optimistic concurrency and stored in etcd. The controllers do not call etcd's lock API directly.)* Three instances try simultaneously, one succeeds, and the lease must be **renewed before it expires**. If the leader stops working or disappears, **the lease expires and another copy acquires it**. "Once again, etcd comes in handy and allows for **offloading a difficult problem (leader election)** and keeping the component relatively simple."
+**Leader election.** Like kube-apiserver it runs in multiple copies. **Unlike kube-apiserver, only one copy does work at a time.** Instances agree on the leader by **acquiring a lease in etcd** — etcd's API allows acquiring a **lock: a distributed mutex with an expiration date**. Three instances try simultaneously, one succeeds, and the lease must be **renewed before it expires**. If the leader stops working or disappears, **the lease expires and another copy acquires it**. "Once again, etcd comes in handy and allows for **offloading a difficult problem (leader election)** and keeping the component relatively simple."
 
 ### Experiment ideas — kube-controller-manager
 
@@ -5747,7 +4582,7 @@ Like kube-controller-manager, multiple copies run but **only the leader schedule
 
 <aside>
 
-**Image locality is the priority that connects this chapter to Chapter 11's SLO experiment.** The scheduler *prefers* nodes that already hold the image precisely because pulling it is slow and failure-prone, which is why `imagePullPolicy: Always` (a registry check on every start) plus a node without the cached image is how you approach the worst case in an SLO test.
+**Image locality is the priority that connects this chapter to Chapter 11's SLO experiment.** The scheduler *prefers* nodes that already hold the image precisely because pulling it is slow and failure-prone, which is why `imagePullPolicy: Always` is how you force the worst case in an SLO test.
 
 </aside>
 
@@ -5793,7 +4628,7 @@ This is why a crash-looping container keeps its IP address, and it is Chapter 5'
 
 | # | Experiment | What you learn |
 | --- | --- | --- |
-| **1** | **After Kubelet dies, how long until pods are rescheduled elsewhere?** | When Kubelet stops reporting, the node is marked **NotReady** after a **configurable grace period (`--node-monitor-grace-period`, 40 seconds by default in v1.18)**. **Pods are not immediately removed**; the control plane waits **another configurable timeout (5 minutes by default: `--pod-eviction-timeout` in v1.18, NoExecute `tolerationSeconds: 300` in current releases)** before assigning them elsewhere. So **if a node disappears — for example the hypervisor crashes — there is a minimum wait before pods run somewhere else.** |
+| **1** | **After Kubelet dies, how long until pods are rescheduled elsewhere?** | When Kubelet stops reporting readiness, after a **configurable timeout (default 5 minutes at the time of writing)** the node is marked **NotReady**. **Pods are not immediately removed**; the control plane waits **another configurable timeout** before assigning them elsewhere. So **if a node disappears — for example the hypervisor crashes — there is a minimum wait before pods run somewhere else.** |
 | **1b** | **Kubelet dies or is partitioned while the pod keeps running** | "You're going to end up with a node **running whatever it was running before the event**, and it won't get any updates. One of the possible side effects is to **run extra copies of your software with potentially stale configuration.**" |
 | **2** | **Does Kubelet restart correctly after crashing?** | Kubelet "typically runs directly on the host to minimize the number of dependencies. If it crashes, it should be restarted." **"As you saw in chapter 2, sometimes setting things up to get restarted is harder than it initially looks"** — test consecutive crashes, time-spaced crashes, and other patterns. "This takes little time and can avoid pretty bad outages." |
 
@@ -5826,7 +4661,7 @@ Support for new runtimes was initially baked into Kubernetes internals. To stand
 
 **And underneath them all:** both containerd — and therefore Docker — and CRI-O share code via **runc**, which manages the lower-level aspects of running a Linux container (Figure 12.6):
 
-```text
+```jsx
             Kubernetes
                  |
 Container Runtime Interface (CRI)
@@ -5867,7 +4702,7 @@ Three parts to understand: **pod-to-pod**, **service**, and **ingress** networki
 
 ### Pod-to-pod networking
 
-Where does a pod's IP come from? "The answer is simple: **it's a made-up IP address that's assigned to the pod by Kubelet when it starts.**" A range is configured for the cluster, **subranges are given to every node**, and Kubelet knows its subrange and gives each pod it creates an address from it. From inside the pod, that address looks like the address of its network interface. *(Precision: in practice the address is allocated by the CNI plugin's IPAM, which Kubelet invokes through the container runtime, from the node's pod CIDR.)*
+Where does a pod's IP come from? "The answer is simple: **it's a made-up IP address that's assigned to the pod by Kubelet when it starts.**" A range is configured for the cluster, **subranges are given to every node**, and Kubelet knows its subrange and gives each pod it creates an address from it. From inside the pod, that address looks like the address of its network interface.
 
 <aside>
 
@@ -5880,7 +4715,7 @@ Where does a pod's IP come from? "The answer is simple: **it's a made-up IP addr
 1. **All pods can communicate with all other pods on the cluster directly.**
 2. **Processes running on a node can communicate with all pods on that node.**
 
-This is typically done with an **overlay network**: nodes are configured to route the fake IP addresses among themselves and deliver them to the right containers. The interface is standardised as the **Container Network Interface (CNI)**, and the official docs listed **29 options** at the time of writing.
+This is typically done with an **overlay network**: nodes are configured to route the fake IP addresses among themselves and deliver them to the right containers. The interface is standardised as the **Container Networking Interface (CNI)**, and the official docs listed **29 options** at the time of writing.
 
 **Flannel, as the simplest example (Figure 12.8):** a daemon (**`flanneld`**) runs on each node; the daemons **agree on subranges** and **store that information in etcd**; each daemon ensures packets for other ranges are **forwarded to the respective node**; the receiving `flanneld` **delivers them to the right container**. Forwarding uses a supported backend, such as **VXLAN**.
 
@@ -5900,7 +4735,7 @@ Service IP addresses are **also completely made up**. They are implemented by **
 
 **With the `iptables` backend**, kube-proxy creates rules forwarding packets to particular pod IPs, each with a probability, and **the first matching rule wins**. For a service with three pods:
 
-```text
+```jsx
 1. If IP == SERVICE_IP, forward to pod A with probability 33%
 2. If IP == SERVICE_IP, forward to pod B with probability 50%
 3. If IP == SERVICE_IP, forward to pod C with probability 100%
@@ -5966,7 +4801,7 @@ An **ingress** is a natively supported Kubernetes resource describing **a set of
 | **kube-controller-manager** | Implements the infinite loop converging the current state toward the desired one |
 | **kube-scheduler** | Schedules pods onto nodes, trying to find the best fit |
 | **kube-proxy** | Implements the networking for Kubernetes **services** |
-| **Container Network Interface (CNI)** | Implements **pod-to-pod** networking — for example Flannel, Calico |
+| **Container Networking Interface (CNI)** | Implements **pod-to-pod** networking — for example Flannel, Calico |
 | **Kubelet** | Starts and stops containers on hosts, using a container runtime |
 | **Container runtime** | Actually runs the processes (containers, VMs) on a host — Docker, containerd, CRI-O, Kata, gVisor |
 
@@ -5999,7 +4834,7 @@ An **ingress** is a natively supported Kubernetes resource describing **a set of
 
 - **Namespaces (Ch. 5) ↔ the pause container (§12.1.2):** the pod's shared IP *is* a shared network namespace, and `pause` exists to hold it while your container crash-loops. Chapter 5's theory, load-bearing.
 - **cgroups (Ch. 5) ↔ "the CPU limit applies to each container separately":** namespaces are shared within a pod; cgroup limits are not.
-- **`ptrace` overhead (Ch. 6) ↔ gVisor (§12.1.3):** the same capture mechanism and the same kind of performance penalty (not the same measured size), now as a production isolation choice.
+- **`ptrace` overhead (Ch. 6) ↔ gVisor (§12.1.3):** the same mechanism, the same performance penalty, now as a production isolation choice.
 - **systemd restart limits (Ch. 2) ↔ Kubelet Experiment 2 (§12.1.2):** identical defect class, far higher stakes.
 - **Retry amplification (Ch. 1 DNS storm) ↔ ingress Experiment 2 (§12.1.4):** mismatched timeouts manufacture retries at the front door.
 - **MTTF math (Ch. 11 §11.3) ↔ etcd's reason for existing (§12.1.1):** fault tolerance and availability are the *answers* to the arithmetic Chapter 11 did.
@@ -6014,327 +4849,18 @@ An **ingress** is a natively supported Kubernetes resource describing **a set of
 1. Kubernetes is **a set of loosely coupled components using etcd as the storage for all data**, coordinating through **asynchronous, eventually consistent loops**. Most failures therefore show up as **staleness and latency, not errors**.
 2. **kube-apiserver sits at the centre.** Everything talks to it, it alone talks to etcd, and it is stateless and therefore easy to scale and load-balance. It is also the shared dependency whose degradation degrades everything.
 3. **etcd** gives fault tolerance and availability through **Raft consensus**: odd-sized clusters of 3 or 5, leader election by majority, heartbeats to detect a dead leader, and strong consistency at the cost of performance.
-4. **Even-numbered etcd clusters add risk without adding fault tolerance.** Quorum is `floor(n/2) + 1`; four nodes tolerate the same single failure as three while adding a node that can fail.
+4. **Even-numbered etcd clusters reduce fault tolerance.** Quorum is `n/2 + 1`; four nodes tolerate the same single failure as three while adding a node that can fail.
 5. **kube-controller-manager** is a collection of per-resource control loops. Deployment → ReplicaSet → Pods is a cascade of separate controllers, notified by `watch` through kube-apiserver. This separation **is** Kubernetes' self-healing.
-6. **Leader election for controller-manager and scheduler is a lease — a distributed mutex with an expiry — a `Lease` object written through kube-apiserver and stored in etcd.** Shorter leases mean faster recovery and more load on etcd and kube-apiserver.
+6. **Leader election for controller-manager and scheduler is a lease — a distributed mutex with an expiry — held in etcd.** Shorter leases mean faster recovery and more load on etcd and kube-apiserver.
 7. **kube-scheduler** filters (resources, host ports, hostname, affinity and anti-affinity, memory and disk pressure) then ranks (most free resources for spreading; CPU/memory balance; anti-affinity; **image locality**).
 8. **Kubelet turns a machine into a cluster node**, downloads images, creates containers, reports actual state, and restarts crashed containers. It is **a per-node single point of failure**: when it is gone, your changes are accepted and never applied.
 9. **The `pause` container holds the pod's shared resources — above all its IP, via the network namespace — while the real containers crash and restart.**
-10. Node loss is **not** fast: a **NotReady grace period (40 s by default)** plus **an eviction timeout (5 min by default)** before pods move. Plan SLOs accordingly.
+10. Node loss is **not** fast: a **NotReady timeout (default 5 min)** plus **a second eviction timeout** before pods move. Plan SLOs accordingly.
 11. **CRI** decoupled Kubernetes from Docker. Docker → containerd → runc; CRI-O → runc; plus **Kata Containers** and **Firecracker** (lightweight and micro **VMs**) and **gVisor** (user-space kernel, `ptrace`-based, with a real performance cost). **Know your runtime before designing container-level experiments.** **OCI** standardised the runtime and image specifications.
-12. **Pod IPs are made up**, allocated from a per-node subrange when Kubelet sets up the pod (via the CNI plugin's IPAM). Kubernetes only requires that **all pods can reach all pods**, and **node processes can reach that node's pods**. The **CNI** plugin — Flannel, Calico and ~27 others — makes it true, usually via an overlay with encapsulation.
+12. **Pod IPs are made up**, assigned by Kubelet from a per-node subrange. Kubernetes only requires that **all pods can reach all pods**, and **node processes can reach that node's pods**. The **CNI** plugin — Flannel, Calico and ~27 others — makes it true, usually via an overlay with encapsulation.
 13. **Service IPs are also made up**, implemented by **kube-proxy** via **iptables** (probability rules, evaluated in order, with overhead growing with service and pod count) or **IPVS**, which scales better.
 14. **A dead networking daemon leaves routing stale *and possibly wrong*.** Alert on traffic reaching the wrong destination, not only on traffic failing.
 15. **Ingress resources do nothing without an ingress controller.** Reloads can drop connections, and **a proxy timing out faster than its upstream manufactures retry storms**.
-
----
-
-# Chapter 13 — Chaos Engineering (for) People
-
-> "In many ways, **human beings and the networks we form are more complex, dynamic, and harder to diagnose and debug than the software we write.** Talking about chaos engineering without including all that human complexity would therefore be incomplete."
-
-Three facets: **the mindset** an effective practitioner needs; **getting buy-in**; and **treating human teams as distributed systems**.
-
----
-
-## 13.1 Theory — The chaos engineering mindset
-
-**The setup.** Much of what you consider "you" happens without your explicit knowledge. The **conscious brain** is "much like implementing things in software — easy to adapt to any type of problem, but **costlier and slower**" — as opposed to the "quicker, cheaper, and **more-difficult-to-change** logic implemented in the hardware" of the subconscious.
-
-**Where that bites:** our perception of risk and reward. "We are capable of making the conscious effort to think about and estimate risks, but a lot of this estimation is done **automatically, without even reaching the level of consciousness**. And the problem is that some of these automatic responses might still be **optimized for surviving in the harsh environments the early human was exposed to — and not doing computer science.**"
-
-<aside>
-
-**The definition to keep:** "**The chaos engineering mindset is all about estimating risks and rewards with partial information, instead of relying on automatic responses and gut feelings.** This mindset requires doing things that feel counterintuitive at first — like introducing failure into computer systems — **after careful consideration of the risk-reward ratio**. It necessitates a scientific, evidence-based approach, coupled with a keen eye for potential problems."
-
-</aside>
-
-<aside>
-
-**The trolley problem, as a warning about your own arithmetic.** A trolley will kill five people tied to the tracks; pulling a lever diverts it to a track with one person. You might think most people would compute that one death beats five and pull the lever. "**But the reality is that most people wouldn't do it. There is something about it that makes the basic arithmetic go out the window.**" If you think you're good at risk mathematics, think again.
-
-</aside>
-
-### 13.1.1 Failure is not a maybe: it will happen
-
-**MTBF (mean time between failure)** is the quality measure. Take servers with a **10-year MTBF**:
-
-- Daily failure probability per machine = `1 / (10 × 365.25)` ≈ **0.0003 = 0.03%**.
-- "If we're talking about the laptop I'm writing these words on, I am only **0.03% worried** it will die on me today."
-
-**But small samples give a false impression of reliability:**
-
-| Fleet size | Expected failures per day |
-| --- | --- |
-| 1 laptop | 0.0003 (ignorable) |
-| **3,333 servers** | **≈ 1 per day** |
-| **10,000 servers** | **≈ 3 per day** |
-
-"The scale of modern systems we're building makes small error rates like this more pronounced, but as you can see, **you don't need to be Google or Facebook to experience them.**"
-
-**The same arithmetic applied to people — the example worth quoting in a planning meeting:**
-
-- A "mythical, all-star team" ships **bug-free code 98% of the time**.
-- On a **weekly release cycle**, that means shipping bugs **more than once a year**.
-- **25 such teams** in the company → **a problem every other week**, on average.
-
-<aside>
-
-"In the practice of chaos engineering, it's important to look at things from this perspective — **a calculated risk** — and to plan accordingly."
-
-Note the deliberate pairing with Chapter 11's **MTTF** math. Chapter 11 computed the same thing for hardware; Chapter 13 extends it to **team output quality**. The point in both: at any realistic scale, **failure is a scheduled event**.
-
-</aside>
-
-### 13.1.2 Failing early vs. failing late
-
-**The blocker, stated in its own words:** "*It's currently working, its lifespan is X years, so chances are that even if it has bugs that would be uncovered by chaos engineering, we might not run into them within this lifespan.*"
-
-**Why people think this:** punitive company culture around mistakes; experience of software running for years where bugs surfaced only at decommissioning; low confidence in their own or someone else's code.
-
-**The universal reason, and the cognitive bias underneath it:** "we have a hard time comparing **two probabilities we don't know how to estimate**. Because an outage is an unpleasant experience, **we're wired to overestimate how likely it is to happen**."
-
-<aside>
-
-**The shark statistic.** In 2019, **two people in the entire world died of shark attacks**. Against a population of ~7.5 billion, that is **1 in 3,750,000,000**. "But because people watched the movie *Jaws*, if interviewed on the street, they will estimate that likelihood very high."
-
-The practical conclusion: "**instead of trying to convince people to swim more in shark waters, let's change the conversation.**" Do not argue about probabilities nobody can estimate. Argue about **costs**, which people can compare.
-
-</aside>
-
-**The reframing: cost of failing early vs. cost of failing late.**
-
-- Best case, from an outage perspective rather than a learning one: the experiment finds nothing, all is good.
-- Worst case: the software is faulty. Experiment **now** and you may cause a failure **within your blast radius** — *failing early*. Don't experiment and "**it's still likely to fail, but possibly much later**" — *failing late*.
-
-**Why early wins — four reasons:**
-
-1. **Engineers are actively looking for bugs**, with tools ready to diagnose and fix. "Failing late might happen at a **much less convenient time**."
-2. **Context switch cost.** "The further in the future from the code being written, the **bigger the context switch** the person fixing the bug will have to execute."
-3. **Rising expectations.** "As a product (or company) matures, usually the users **expect to see increased stability** and decreased issues over time."
-4. **Growing coupling.** "Over time, **the number of dependent systems tends to increase**." The same bug therefore has a bigger blast radius later.
-
----
-
-## 13.2 Practice — Getting buy-in
-
-Two audiences: **management** and **team members**.
-
-### 13.2.1 Talking to management
-
-"Put yourself in your manager's shoes. **The more projects you're responsible for, the more likely you are to be risk-averse.** After all, what you want is to **minimize the number of fires to extinguish**, while achieving your long-term goals."
-
-<aside>
-
-**"So to play some music to your manager's ears, perhaps don't start with breaking things on purpose in production."**
-
-</aside>
-
-| Argument | The pitch |
-| --- | --- |
-| **Good return on investment** | "A relatively cheap investment (**even a single engineer can experiment on a complex system in a single-digit number of days if the system is well documented**) with a big potential payoff." **A win-win:** if the experiments find nothing, you get (a) increased confidence and (b) **a set of automated tests that can be rerun to detect regressions later**. If they find a problem, it can be fixed. |
-| **Controlled blast radius** | "You're not going to be randomly breaking things, but conducting a **well-controlled experiment with a defined blast radius**… The idea is not to set the world on fire and see what happens. Rather, it's to take **a calculated risk for a large potential payoff**." |
-| **Failing early** | "The cost of resolving an issue found earlier is generally lower… **faster response time to an issue found on purpose, rather than at an inconvenient time**." |
-| **Better-quality software** | "Your engineers, **knowing that the software will undergo experiments, are more likely to think about the failure scenarios early** in the process and write more resilient software." |
-| **Team building** | Increased awareness of interaction and knowledge sharing has the potential to make teams stronger. |
-| **Increased hiring potential** | "**All companies talk about the quality of their product. Only a subset puts their money where their mouth is** when it comes to funding engineering efforts in testing." Solid software → fewer out-of-hours calls → happier engineers. Plus **the shininess factor**: modern techniques attract engineers who want them on their CVs. |
-
-<aside>
-
-**The "better-quality software" argument is the strongest and the most often forgotten.** The value of chaos engineering is not only the bugs it finds. It is that **engineers who expect their code to be attacked write different code.** That is a permanent change in output quality, not a one-off finding.
-
-</aside>
-
-### 13.2.2 Talking to team members
-
-Many of the same arguments apply. "But often **what really resonates with the team is simply the potential of getting called less.**"
-
-| Angle | The pitch |
-| --- | --- |
-| **Failing early and during work hours** | "If there is an issue, it's better to trigger it **before you're about to go pick up your kids from school or go to sleep** in the comfort of your own home." |
-| **Destigmatizing failure** | "Even for a rock-star team, **failure is inevitable**. Thinking about it and actively seeking problems can **remove or minimize the social pressure of not failing**. **Learning from failure always trumps avoiding and hiding failure.**" And for a poorly performing team, chaos engineering **in preproduction** is an extra layer of testing that makes unexpected failures rarer. |
-| **A new, learnable skill** | "Personal improvement will be a reward in itself for some. And it's a new item on a CV." |
-
-### 13.2.3 Game days
-
-"**Game days are a good tool for getting buy-in from the team.** They are a little bit like those events at your local car dealership. Big, colorful balloons, free cookies, plenty of test drives… and boom — all of a sudden you need a new car. **It's like a gateway drug, really.**"
-
-<aside>
-
-**The rules, such as they are:**
-
-- **"Game days can take any form. The form is not important."**
-- **The goal:** get the entire team to **interact**, **brainstorm ideas of where the weaknesses of the system might lie**, and **have fun** with chaos engineering.
-- Recurring, or a single introductory event. Fancy cards for experiment ideas, or sticky notes.
-- "Whatever you think will get your team to appreciate the benefits, **without feeling like it's forced upon them**, will do. **Make them feel they're not wasting their time. Don't waste their time.**"
-</aside>
-
----
-
-## 13.3 Theory — Teams as distributed systems
-
-**The definition being borrowed:** a distributed system is "a system whose components are located on different networked computers, which **communicate and coordinate their actions by passing messages** to one another."
-
-"If you think about it, **a team of people behaves like a distributed system**, but instead of computers, we have individual humans doing things and passing messages to one another."
-
-### The worked example — an airline ticket-purchasing team
-
-**Required competences:**
-
-| Competence | Scope |
-| --- | --- |
-| **Microsoft SQL cluster management** | Where all purchase data lands — crucial to ticket sales. Includes installing and configuring Windows on VMs. |
-| **Full-stack Python development** | Backend for availability queries and purchase orders; packaging and deploying on Linux VMs, so **basic Linux administration too**. |
-| **Frontend JavaScript development** | Rendering and displaying the user-facing UI |
-| **Design** | Artwork to be integrated by the frontend developers |
-| **Integration with third-party software** | The airline can sell flights operated by other airlines, so integrations with other airlines' systems must be maintained. "What it entails varies from case to case." |
-
-**The six people and their overlaps (Figures 13.1 and 13.2):**
-
-| Person | Skills |
-| --- | --- |
-| **Alice** | Windows + SQL, **and some integrations** |
-| **Bob** | Windows + SQL |
-| **Caroline** | Full stack, **and integrations** |
-| **David** | Full stack + Linux, **and integrations** |
-| **Esther** | Frontend, **and some design** |
-| **Franklin** | Design |
-
-<aside>
-
-**Read the Venn diagram exactly as you read an architecture diagram.**
-
-- **Esther is a single point of failure:** "if Esther has a large backlog, **no one else on the team can pick it up**, because no one else has the skills."
-- **Caroline and David have redundancy between them:** "if [one] is distracted with something else, the other one can cover."
-
-"People need holidays, they get sick, and they change teams and companies, so in order for the team to be successful long term, **identifying and fixing single points of failure is very important**."
-
-</aside>
-
-**Why this is hard in practice:** "**teams rarely come nicely packaged with a Venn diagram attached to the box.** Hundreds of different skills (hard and soft), constantly shifting technological landscapes, evolving requirements, personnel turnaround, and the sheer scale of some organizations are all factors in how hard it can be to ensure no single points of failure. **If only there was a methodology to uncover systemic problems in a distributed system… oh, wait!**"
-
-<aside>
-
-**Attribution and framing.** The games below are "heavily inspired by **Dave Rensin**, who described them in his talk, **'Chaos Engineering for People Systems'**" — the book strongly recommends watching it. And a crucial delivery note: **"they are also best sold to the team as *games* rather than experiments. Not everyone wants to be a guinea pig, but a game sounds like a lot of fun and can be a team-building exercise if done right. You could even have prizes!"**
-
-</aside>
-
----
-
-### Game 1 — Staycation: finding knowledge single points of failure
-
-| Field | Content |
-| --- | --- |
-| **Goal** | See what happens to the team in the absence of a person — that is, find knowledge SPOFs. |
-| **System analogue** | Killing a pod (Ch. 10) or a VM (Ch. 11) and watching whether the rest of the system converges. |
-| **Method** | "Nominate a person and ask them to **not answer any queries related to their responsibilities**, and work on something different than they had scheduled for the day." |
-| **Steady state** | The team continues working at full remaining capacity. |
-| **Hypothesis** | Work continues without waiting on the absent person. |
-| **A passing result** | "If the team continues working fine at full (remaining) capacity, that's great. **It means the team is doing a really good job of spreading knowledge.**" |
-| **A failing result** | Others must wait for the person to come back — because of **work in progress that wasn't documented well enough**, **an area of expertise that suddenly became relevant**, or **tribal knowledge the newer people don't have yet**. "**Congratulations: you've just discovered how to make your team stronger as a system!**" |
-| **Safety rule** | "**Should an actual emergency arise, it's called off and all hands are on deck.**" |
-| **Variables you can tune** | **Surprise or announced:** running it by surprise "will simulate someone **falling sick**, rather than taking a holiday." **Tell the team or not:** telling them lets them proactively transfer knowledge; not telling them is closer to real life "but might be seen as a distraction." **Timing:** "if team members are working hard to meet a deadline, they might not enjoy playing games that eat up their time. Or, if they are very competitive, they might like that." |
-| **The non-negotiable step** | "**Make sure you take the time to discuss the findings with the team**, lest they might find the game unhelpful." |
-
-### Game 2 — Liar, Liar: misinformation and trust
-
-**The theory first.** "In a team, information flows from one team member to another. **A certain amount of trust must exist** among members for effective cooperation and communication — **but also a certain amount of distrust**, so that we double-check and verify things, instead of just taking them at face value. **After all, to err is human.**"
-
-And trust is legitimately **contextual**: "You reading this book shows some trust in my chaos engineering expertise, but that doesn't mean you should trust my carrot cake." **"These checks should be in place so that wrong information can be eventually weeded out. We want that property of the team, and we want it to be strong."**
-
-| Field | Content |
-| --- | --- |
-| **Goal** | Test how well the team deals with **false information circulating**. |
-| **System analogue** | Injecting a wrong response rather than a failure — compare kube-proxy routing to the *wrong* service (Ch. 12), or pgweb showing **stale data with no error** (Ch. 9). |
-| **Method** | "Nominate a person who's going to spend the day **telling very plausible lies** when asked about work-related stuff." |
-| **Safety measures** | **Write down the lies.** If they weren't discovered by others, **straighten them out at the end of the day**. "In general **be reasonable** with them. **Don't create a massive outage by telling another person to click Delete on the whole system.**" |
-| **What it uncovers** | "Situations in which other team members **skip the mental effort of validating their inputs** and just take what they heard at face value. Everyone makes a mistake, and **it's everyone's job to reality-check what you heard before you implement it.**" |
-| **Tuning** | **Choose the liar wisely** — "the more the team relies on their expertise, the bigger the blast radius, but also the bigger the learning potential." **Acting skills matter** — keeping it up all day "should have a pretty strong wow effect." **Have an observer:** "you might want to have another person on the team know about the liar, to observe and potentially step in… **At a minimum, the team leader should always know about this!**" |
-
-### Game 3 — Life in the Slow Lane: finding bottlenecks
-
-**The theory:** "everyone has a **maximum throughput** of what they can process. Bottlenecks form as some team members need to wait for others before they can continue with their work. In the complex network of social interactions, it's often **difficult to predict and observe these bottlenecks, until they become obvious**."
-
-| Field | Content |
-| --- | --- |
-| **Goal** | Find who is a bottleneck, in different contexts. |
-| **System analogue** | Explicitly **injecting latency** — `tc netem delay` (Ch. 4), Pumba (Ch. 5), Toxiproxy (Ch. 10). "You don't need to remember the syntax of `tc` to implement it!" |
-| **Method** | "**Add latency** to a designated team member by asking them to take **at least X minutes to respond** to queries from other team members." |
-| **Why it works** | "By artificially increasing the response time, you will be able to **discover bottlenecks more easily: they will be more pronounced, and people might complain about them directly!**" |
-| **Practical tips** | **Working from home** during the game "limits the amount of social interaction and might make it a bit less weird." **Don't go silent** — "going silent when others are asking for help is suspicious, might make you uncomfortable, and **can even be seen as rude**." Instead say "I'll get back to you on this; sorry, I'm really busy with something else right now." |
-| **Caveats** | "**Sometimes resolving found bottlenecks might be the tricky bit.** Policies might be in place, cultural norms or other constraints may need to be taken into account, **but even just knowing about the potential bottlenecks can help planning ahead.**" And: "**Sometimes the manager of the team will be a bottleneck.** Reacting to that might require a little bit more self-reflection and maturity, but it can provide invaluable insights." |
-
-### Game 4 — Inside Job: testing your processes
-
-**The theory:** every team has rules for dealing with problems — "well structured and written down, tribal knowledge in the collective mind of the team, or **as is the case for most teams, somewhere between the two**. Whatever they are, these 'procedures' should be reliable. **After all, that's what you rely on in stressful times.**"
-
-| Field | Content |
-| --- | --- |
-| **Goal** | Test whether your remediation procedures actually work. |
-| **System analogue** | A full game-day-style experiment against the incident-response system rather than the software. |
-| **Method** | "An occasional act of **controlled sabotage** by secretly breaking a subsystem **you reasonably expect the team to be able to fix using the existing procedures**, and then sit and watch them fix it." |
-| **Caveats — "this is a big gun"** | **Be reasonable about what you break.** "Don't break anything that would get you in trouble." **Pick the inside group wisely** — let the stronger people in on the secret and let them "help out" while others follow the procedures. **Consider sending some people to training or a side project**, "to make sure that the issue can be solved even with some people out." **Double-check that the existing procedures are up-to-date *before* you break the system.** **Take notes while observing**: what takes up their time, what part of the procedure is prone to mistakes, **and who might be a single point of failure during the incident**. **It doesn't have to be a serious outage** — a moderate-severity issue that must be remediated before it becomes serious will do. |
-| **Payoff** | "It **increases the confidence in the team's ability to fix an issue of a certain type**. And again, it's much nicer to be dealing with an issue **just after lunch, rather than at 2 a.m.**" |
-| **In production?** | "The answer will depend on many factors we covered earlier in **chapter 4** and on the **risk/reward calculation**. In the worst-case scenario, you create an issue that the team fails to fix in time, **the game needs to be called off and the issue fixed. You learn that your procedures are inadequate and can take action on improving them.** In many situations, this might be perfectly good odds." |
-
-<aside>
-
-"You can come up with **an infinite number of other games** by applying the chaos engineering principles to the human teams and interaction within them… **human systems have a lot of the same characteristics as computer systems.**"
-
-</aside>
-
----
-
-## 13.4 Where to go from here (the book's own reading list)
-
-**Resources that update faster than a book:** the **Awesome Chaos Engineering** list — `github.com/dastergon/awesome-chaos-engineering`. The author's newsletter: `chaosengineering.news`.
-
-**Adjacent disciplines** — "the line between chaos engineering and other disciplines is a fine one. In my experience, **coloring outside these lines from time to time tends to make for better craftsmanship**":
-
-| Area | Recommended |
-| --- | --- |
-| **SRE** | *Site Reliability Engineering*; *The Site Reliability Workbook*; *Building Secure & Reliable Systems* (all from Google, `landing.google.com/sre/books/`) |
-| **System performance** | Brendan Gregg — *Systems Performance: Enterprise and the Cloud*; *BPF Performance Tools* |
-| **Linux kernel** | Robert Love — *Linux Kernel Development*; Michael Kerrisk — *The Linux Programming Interface*; Robert Love — *Linux System Programming* |
-| **Testing** | Myers, Sandler & Badgett — *The Art of Software Testing* |
-| **Other topics to observe** | Kubernetes; Prometheus, Grafana |
-
-**Conferences:** **Conf42: Chaos Engineering** (`conf42.com`, which the author helps organise) and **Chaos Conf** (`chaosconf.io`).
-
-**Complementary book:** *Chaos Engineering: System Resiliency in Practice* by **Casey Rosenthal and Nora Jones** (O'Reilly, 2020) — "unlike this book, which is pretty technical, it covers **more high-level stuff and offers firsthand experience from people working at companies in various industries**."
-
-Appendix C holds material that didn't make the main text; Appendix D holds more recipes.
-
----
-
-## Theory ↔ Practice connections for Chapter 13
-
-- **The four-step model (Ch. 1) ↔ every game here:** Staycation has observability (does work continue?), a steady state (full capacity), a hypothesis and a run. The games are chaos experiments with people as the system.
-- **Blast radius (Ch. 2) ↔ "pick the liar wisely", "be reasonable about what you break", "call it off in a real emergency":** the human games carry the same discipline, expressed as social rather than technical controls.
-- **MTTF at scale (Ch. 11 §11.3) ↔ MTBF and the 98%-bug-free team (§13.1.1):** the same multiplication, applied to hardware and then to human output.
-- **Latency injection (Ch. 4, 5, 10) ↔ Life in the Slow Lane:** identical instrument — make a known delay explicit so the *structure* of the dependencies becomes visible.
-- **Killing a pod (Ch. 10) or stopping a VM (Ch. 11) ↔ Staycation:** remove one node and see whether the system converges without it.
-- **Wrong-but-plausible data (Ch. 9 pgweb stale data; Ch. 12 kube-proxy routing to the wrong service) ↔ Liar, Liar:** the failure mode that is worse than an outage, because nothing looks broken.
-- **Testing in production (Ch. 4 §4.3) ↔ "Would you do an Inside Job in production?":** the same risk/reward framing, explicitly cross-referenced by the book.
-- **Automated tests as a by-product (Ch. 11's continuous SLO policy) ↔ the ROI pitch (§13.2.1):** "a set of automated tests that can be rerun to detect any regressions later" is Experiment 3 of Chapter 11, sold to a manager.
-
----
-
-## Key Takeaways — Chapter 13
-
-1. **The chaos engineering mindset is estimating risk and reward with partial information instead of trusting gut feelings** — a scientific, evidence-based approach applied to decisions that feel counterintuitive.
-2. Human risk intuition is hardware, not software: fast, cheap, hard to change, and **calibrated for a different environment**. The trolley problem shows the arithmetic failing in people who can do the arithmetic.
-3. **MTBF math:** a 10-year MTBF is a 0.03% daily failure chance — negligible for one laptop, **~1 failure a day at 3,333 servers, ~3 a day at 10,000**. You do not need Google's scale to meet this.
-4. The same multiplication applies to people: **a 98%-bug-free team on a weekly cycle ships bugs more than once a year; 25 such teams produce a problem every other week.**
-5. **Don't argue about probabilities nobody can estimate** — that is the shark-attack trap. **Argue about the cost of failing early versus failing late.**
-6. Failing early wins because engineers are already looking with tools ready; the **context switch is smaller**; users expect **more** stability as a product matures; and **the number of dependent systems only grows**.
-7. **Pitch to managers on:** ROI (cheap, win-win — either confidence plus regression tests, or a bug fixed), **controlled blast radius**, failing early, **better-quality software because engineers write differently when they expect attack**, team building, and hiring.
-8. **Pitch to teammates on:** getting paged less; **failing during work hours**; destigmatizing failure — *learning from failure always trumps avoiding and hiding it*; and a marketable new skill.
-9. **Game days** are the on-ramp. The form does not matter; interaction, brainstorming weaknesses, and fun do. **Do not waste the team's time.**
-10. **A team is a distributed system.** Draw the skill Venn diagram and read it like an architecture diagram: who is a single point of failure, and where is there redundancy?
-11. **Staycation** finds knowledge SPOFs by removing one person. **Liar, Liar** tests whether the team validates its inputs. **Life in the Slow Lane** injects latency to expose bottlenecks. **Inside Job** tests whether your remediation procedures actually work.
-12. Every human game needs the same safety engineering as a technical experiment: **a written record, a way to call it off, an informed observer, an up-to-date procedure to test against, and a debrief.** Sell them as games, not experiments.
-13. **Discuss the findings, every time.** Without the debrief, the team concludes the exercise was a waste of their time, and you have spent trust to learn nothing.
 
 ---
 
@@ -6411,8 +4937,6 @@ make && make test && sudo make install && make clean
 ./python --version
 ```
 
-*Compatibility:* `sudo make install` also installs `/usr/local/bin/python3`, which shadows the system `python3` on your `PATH`. `sudo make altinstall` installs only `python3.7`.
-
 **pgweb (Ch. 9):**
 
 ```bash
@@ -6437,7 +4961,7 @@ sudo -u postgres psql -f ./data/booktown.sql
 
 1. **Apache site config** at `/etc/apache2/sites-available/wordpress.conf`:
 
-```apache
+```jsx
 Alias /blog /usr/share/wordpress
 <Directory /usr/share/wordpress>
     Options FollowSymLinks
@@ -6453,8 +4977,8 @@ Alias /blog /usr/share/wordpress
 </Directory>
 ```
 
-2. **Enable it:** `a2ensite wordpress`, then `service apache2 reload || true`
-3. **WordPress DB config** at `/etc/wordpress/config-localhost.php`:
+1. **Enable it:** `a2ensite wordpress`, then `service apache2 reload || true`
+2. **WordPress DB config** at `/etc/wordpress/config-localhost.php`:
 
 ```php
 <?php
@@ -6466,7 +4990,7 @@ define('WP_CONTENT_DIR', '/usr/share/wordpress/wp-content');
 define('WP_DEBUG', true);
 ```
 
-4. **Create the database:**
+1. **Create the database:**
 
 ```sql
 CREATE DATABASE wordpress;
@@ -6495,8 +5019,8 @@ git clone https://github.com/seeker89/chaos-engineering-book.git ~/src
 
 | OS | Command | Look for |
 | --- | --- | --- |
-| **Linux** | `grep -E --color 'vmx\|svm' /proc/cpuinfo` | Non-empty output. Empty means no VMs are possible; see the `none` driver docs |
-| **macOS** | `sysctl -a \| grep -E --color 'machdep.cpu.features\|VMX'` | `VMX` |
+| **Linux** | `grep -E --color 'vmx|svm' /proc/cpuinfo` | Non-empty output. Empty means no VMs are possible; see the `none` driver docs |
+| **macOS** | `sysctl -a | grep -E --color 'machdep.cpu.features|VMX'` | `VMX` |
 | **Windows** | `systeminfo` | The **Hyper-V Requirements** section |
 
 **Linux install:**
@@ -6510,8 +5034,6 @@ curl -Lo minikube https://storage.googleapis.com/minikube/releases/latest/miniku
 chmod +x minikube && sudo install minikube /usr/local/bin/
 minikube version
 ```
-
-*Compatibility:* the `storage.googleapis.com/kubernetes-release` bucket is frozen; current kubectl releases are downloaded from `https://dl.k8s.io/release/<version>/bin/linux/<arch>/kubectl`.
 
 macOS is identical with `darwin/amd64` and `minikube-darwin-amd64`. On Windows, download both binaries and add them to `PATH`. Troubleshooting: `minikube.sigs.k8s.io/docs/`.
 
@@ -6580,7 +5102,7 @@ A compact self-test. Correct answers in **bold**.
 - What's Kubernetes? **A container orchestrator that can manage thousands of VMs and will continuously try to converge the current state into the desired state.**
 - What's a deployment? **A description of how to deploy some software on your cluster.**
 - What happens when a pod dies? **Kubernetes detects it and will restart it as necessary to make sure the expected number of replicas are running.**
-- What's Toxiproxy? **A configurable TCP proxy that can simulate various problems, such as dropped connections or network slowness.** *(Precision: it works on TCP streams, so it cannot drop individual packets.)*
+- What's Toxiproxy? **A configurable TCP proxy that can simulate various problems, such as dropped packets or network slowness.**
 
 **Chapter 11**
 
@@ -6658,6 +5180,7 @@ And the recipe's own admission of non-determinism: "**mushrooms give away a vari
 # Master Cheat Sheet
 
 > Everything above, compressed for revision and for use at a keyboard. Every entry traces to a chapter.
+>
 
 ## 1. Core definitions
 
@@ -6685,7 +5208,7 @@ And the recipe's own admission of non-determinism: "**mushrooms give away a vari
 
 ## 2. The methodology
 
-```text
+```jsx
 1. OBSERVABILITY   Can I measure the thing I care about, reliably?
 2. STEADY STATE    What is normal, measured over a long enough window?
 3. HYPOTHESIS      "If <specific failure>, then <metric> stays <within a number>."
@@ -6733,28 +5256,28 @@ And the recipe's own admission of non-determinism: "**mushrooms give away a vari
 
 | # | Ch. | Experiment | Injection | Result |
 | --- | --- | --- | --- | --- |
-| 1.1 | 1 | Cut the cache off (FizzBuzzAAS) | `iptables -A OUTPUT -d <ip> -j DROP` | **Refuted** — requests hang; no time-outs existed |
+| 1.1 | 1 | Cut the cache off (FizzBuzzAAS) | `iptables -A <ip> -j DROP` | **Refuted** — requests hang; no time-outs existed |
 | 2.1 | 2 | Kill both API instances once each | `kill` via script | **Confirmed** — 0 failed requests |
 | 2.2 | 2 | Kill instance 6× at 1.25 s | `kill` in a loop | **Refuted** — systemd `start-limit-hit`, both instances dead |
 | 3.1 | 3 | Busy-neighbour CPU contention | `stress --cpu 2 -m 1 -d 1` | **Refuted** — pi iterations slow; fix with cgroups |
 | 4.1 | 4 | Slow disks under WordPress | `stress --hdd 1` (~95% of measured throughput) | **Confirmed** — 86 → 54 RPS (−38%, under the 50% budget) |
-| 4.2 | 4 | 2 s latency to MySQL only | `tc` `prio` + `u32` filter + `netem delay 2000ms` | **Refuted** — 11 ms → **54 s** (~27 delayed exchanges/page) |
+| 4.2 | 4 | 2 s latency to MySQL only | `tc` `prio`  • `u32` filter + `netem delay 2000ms` | **Refuted** — 11 ms → **54 s** (~27 round trips/page) |
 | 5.1 | 5 | One container fills the disk | `fallocate` loop in a second container | **Confirmed** — `No space left on device` for both |
 | 5.2 | 5 | Kill a host PID from inside a container | `kill -9 <host pid>` | **Confirmed** — "No such process" (invisible, not forbidden) |
 | 5.3 | 5 | Use all the CPU with `--cpus=0.5` | `stress --cpu 1` | **Confirmed** — capped at ~0.5 CPU; `cpu.stat` shows throttling |
 | 5.4 | 5 | Use too much RAM with `--memory=128m` | `stress --vm 1 --vm-bytes 512M`; then a fork bomb | **Refuted, instructively** — allocation alone doesn't trigger OOM |
 | 5.5 | 5 | 100 ms latency to MySQL container | `pumba netem delay --time 100` | **Refuted** — 26 ms → 490 ms (18×); validated with a 1 ms control |
 | 6.1 | 6 | Break `close` | `strace -e inject=close:error=EIO` | **Refuted** — exits 1 on the first call |
-| 6.2 | 6 | Break every other `write` | `strace -e inject=write:error=EIO:when=1+2` | **Confirmed** — retries; throughput down ~64% |
+| 6.2 | 6 | Break every other `write` | `strace -e inject=write:error=EIO:when=1+2` | **Confirmed** — retries; throughput halved |
 | 6.3 | 6 | Block `getpid` with seccomp | Modified Docker seccomp profile | **Works, ~free** — 1203 RPS vs. 101 RPS under strace |
 | 7.1 | 7 | Throw `IOException` in `output()` | javaagent + ASM `invokestatic` | **Refuted** — no output, **still exit code 0** |
 | 8.1 | 8 | Redis latency | `ChaosClient` wrapper, `time.sleep` | **Confirmed** — 5.98 ms → 208 ms (2 × 100 ms) |
 | 8.2 | 8 | Redis error every other call | Python decorator raising `RedisError` | **Confirmed** — graceful degradation, HTTP 200, logged |
-| 9.1 | 9 | 1 s delay on every XHR | Override `XMLHttpRequest.prototype.send` + `setTimeout` | **Confirmed** — requests are parallel, not sequential |
+| 9.1 | 9 | 1 s delay on every XHR | Override `XMLHttpRequest.prototype.send`  • `setTimeout` | **Confirmed** — requests are parallel, not sequential |
 | 9.2 | 9 | Fail every other XHR | `dispatchEvent(new Event('error'))` | **Refuted** — stale data, **no visible error** |
 | 10.1 | 10 | Kill a random Goldpinger pod | `kubectl delete` | **Confirmed** — detected and replaced in ~2 s |
 | 10.2 | 10 | 250 ms latency via a proxied extra replica | Toxiproxy `latency` toxic | **Confirmed** — graph green, **heatmap red** |
-| 11.1 | 11 | Same, declaratively at 40% | PowerfulSeal `clone` + `toxiproxy` mutation | **Confirmed**; localhost traffic unaffected |
+| 11.1 | 11 | Same, declaratively at 40% | PowerfulSeal `clone`  • `toxiproxy` mutation | **Confirmed**; localhost traffic unaffected |
 | 11.2 | 11 | Pod ready within 30 s, forever | None — continuous verification | **Passes**; the shape of a permanent SLO test |
 | 11.3 | 11 | Take a VM down in one AZ | PowerfulSeal `nodeAction` / `stopHost` | Tests detection, rescheduling and anti-affinity at once |
 
@@ -6850,8 +5373,7 @@ docker inspect -f '{{ .State.Pid }}' <name>
 docker inspect -f '{{ .Id }}' <name>
 docker inspect -f '{{ .GraphDriver.Data.MergedDir }}' <name>
 docker build -t <tag> .
-docker network ls
-docker network create --driver bridge --attachable --subnet … --ip-range … <name>
+docker network ls | docker network create --driver bridge --attachable --subnet … --ip-range … <name>
 docker run --cpus=0.5 … / --cpu-shares=N / --memory=128m / --oom-kill-disable
 docker run --cap-drop ALL / --cap-add <CAP> / --security-opt seccomp=./profile.json
 docker run --network none|host|bridge|<name>
@@ -6909,7 +5431,7 @@ The manifest needs `Premain-Class: <class with premain>`. ASM: `ClassReader` →
 
 ### Browser (Ch. 9)
 
-```javascript
+```jsx
 // latency
 const originalSend = window.XMLHttpRequest.prototype.send;
 window.XMLHttpRequest.prototype.send = function(){
@@ -7019,7 +5541,7 @@ powerfulseal --help
 
 ## 9. Docker mental model
 
-```text
+```jsx
 DOCKER = convenience (dockerd, CLI, Dockerfile, image format, registry, Hub, protocol)
               on top of
 KERNEL FEATURES:
@@ -7034,7 +5556,7 @@ KERNEL FEATURES:
 
 **Facts to remember**
 
-- Docker creates new `mnt`, `uts`, `ipc`, `pid` and `net` namespaces — **but shares `cgroup` and `user` with the host** (cgroup v1; on cgroup v2 only `user`).
+- Docker creates new `mnt`, `uts`, `ipc`, `pid` and `net` namespaces — **but shares `cgroup` and `user` with the host.**
 - The **same inode** appears inside and outside a container. Isolation is thin.
 - **Storage is not limited by default.** `--storage-opt size=` needs xfs plus pquota under overlay2.
 - `--cpus` is a **hard** quota (period/quota); `--cpu-shares` is a **soft** weight, enforced only under contention.
@@ -7046,12 +5568,12 @@ KERNEL FEATURES:
 
 ## 10. Kubernetes mental model
 
-```text
+```jsx
 CONTROL PLANE (loosely coupled, asynchronous, eventually consistent)
   kube-apiserver         the only door; stateless; everything talks to it
   etcd                   all state; Raft consensus; odd sizes (3 or 5); strongly consistent
-  kube-controller-manager  per-resource control loops; Deployment → ReplicaSet → Pods; leader via a Lease object
-  kube-scheduler         filter nodes, then rank them; leader via a Lease object
+  kube-controller-manager  per-resource control loops; Deployment → ReplicaSet → Pods; leader via etcd lease
+  kube-scheduler         filter nodes, then rank them; leader via etcd lease
   kube-cloud-manager     cloud resources (optional)
 
 NODE
@@ -7073,9 +5595,9 @@ OBJECTS
 **Failure facts**
 
 - Every component's failure mode is **"stops converging"** — staleness and latency, not errors.
-- Even-numbered etcd clusters add a member that can fail without tolerating an extra failure. Quorum = `floor(n/2) + 1`.
+- Even-numbered etcd clusters **reduce** fault tolerance. Quorum = `n/2 + 1`.
 - A dead **kubelet** means your changes are accepted and never applied on that node.
-- Node loss takes **a NotReady grace period (~40 s by default) plus an eviction timeout (~5 min by default)** before pods move.
+- Node loss takes **a NotReady timeout (default ~5 min) plus a second eviction timeout** before pods move.
 - A dead **kube-proxy** or CNI daemon leaves routing **stale and possibly wrong** — traffic to the *wrong* service.
 - Thousands of **even empty** services slow all nodes under the iptables backend.
 - An ingress that times out **faster** than its upstream manufactures retry storms.
@@ -7086,7 +5608,7 @@ OBJECTS
 
 |  | **Syscall (Ch. 6)** | **JVM bytecode (Ch. 7)** | **Application code (Ch. 8)** | **Browser JS (Ch. 9)** |
 | --- | --- | --- | --- | --- |
-| **Mechanism** | `ptrace` via `strace`; seccomp-BPF | `java.lang.instrument` + ASM | Wrapper class / decorator | Override a prototype method or a global function |
+| **Mechanism** | `ptrace` via `strace`; seccomp-BPF | `java.lang.instrument`  • ASM | Wrapper class / decorator | Override a prototype method or a global function |
 | **Needs source?** | No | No | **Yes** | No |
 | **Needs a restart?** | No (`-p`) | Yes for `premain`, no for `agentmain` | Yes | **No** |
 | **Granularity** | One syscall, nth call | One class + method | One function or client | One request API |
@@ -7102,7 +5624,7 @@ OBJECTS
 
 ## 12. SLI / SLO / SLA reference
 
-```text
+```jsx
 Risk  →  cost per unit of time  →  SLI (the number)  →  SLO (the agreed target)  →  SLA (the contract + penalty)
                                             ↑
                          chaos experiments continuously verify this
@@ -7123,7 +5645,7 @@ Risk  →  cost per unit of time  →  SLI (the number)  →  SLO (the agreed ta
 | 90% | 36.53 days | 2.4 hours |
 | 99% | 3.65 days | 14.40 minutes |
 | 99.95% | 4.38 hours | 43.20 seconds |
-| 99.999% | 5.26 minutes | 864 milliseconds |
+| 99.999% | 5.26 minutes | 840 milliseconds |
 
 **Practice:** set the internal SLO **tighter than the contractual SLA** so alerts fire before penalties do. Verify it with a continuously running experiment, not a one-off measurement. Reference cost: Amazon, 2013, **$66,240 per minute of downtime**.
 
@@ -7180,12 +5702,13 @@ Risk  →  cost per unit of time  →  SLI (the number)  →  SLO (the agreed ta
 **Testing in production — the decision**
 
 > It "boils down to whether you prefer the risk of hurting a portion of production traffic **now**, or potentially running into the bug **later**." Testing outside production is by definition incomplete: **data, scale, user behaviour and configuration all drift.** But production experiments are only defensible **with blast-radius controls in place**, and never as a substitute for the earlier testing stages.
+>
 
 ---
 
 ## 15. Glossary
 
-**Affinity / anti-affinity** — rules that items should or must (or shouldn't or mustn't) run in the same partition. **aqu-sz** — average queue length of requests issued to a block device; a saturation metric. **Availability zone** — a partition within a region separated by redundant power, network and hardware. **BCC** — BPF Compiler Collection; wrappers and example tools over eBPF. **BPF / eBPF** — kernel execution engine running safe, bounded programs on kernel events. **Capability** — a granular unit of superuser privilege (`CAP_KILL`, `CAP_SYS_CHROOT`). **cgroup** — kernel feature limiting and accounting resource use by a group of processes. **chroot** — change the filesystem root as seen by a process. **CNI** — Container Network Interface; implements pod-to-pod networking. **Consensus / Raft** — algorithm by which replicas agree on one version of reality; leader election by majority with heartbeats. **Control plane** — the Kubernetes components implementing convergence to the desired state. **Copy-on-write (COW)** — a file modified on a lower layer is copied wholesale into the writable layer. **CRI** — Container Runtime Interface. **Dark debt** — unknown unknowns in a complex system. **DaemonSet** — one pod per node. **Deployment** — blueprint plus lifecycle management for a set of pods. **Filesystem bundle** — the OCI term for an unpacked image. **Fuzzing** — feeding pseudorandom payloads to find errors written tests miss. **glibc** — the most common C library on Linux; its wrappers are often more than pass-throughs. **Goldpinger** — tool that builds a full node-to-node connectivity graph by pinging its own peers. **Ingress** — a Kubernetes resource mapping hosts to services; inert without a controller. **javaagent** — the JVM flag attaching a JAR that can inspect and rewrite loaded classes. **Kubelet** — the per-node agent that starts and stops containers. **Label** — a key-value pair used to match sets of Kubernetes resources. **libseccomp** — higher-level library for managing seccomp filters. **MTTF / MTBF** — mean time to / between failure. **Namespace** — kernel feature filtering which resources a process can see. **netem** — the `tc` network-emulator qdisc (delay, loss, duplication, corruption, reordering). **OCI** — Open Container Initiative; runtime and image specifications. **Overlay network** — routing made-up pod IPs between nodes, usually by encapsulation. **pause container** — holds a pod's shared resources (notably its IP) while other containers restart. **Pod** — co-located containers sharing an IP and some resources; the schedulable unit. **PowerfulSeal** — YAML-driven chaos tool for Kubernetes and cloud VMs. **ptrace** — the syscall `strace` uses to control other processes. **Pumba** — Docker chaos tool wrapping `tc`, stress-ng and container kill. **qdisc** — queueing discipline, that is, a packet scheduler (nothing to do with disks). **Region** — a geographically and utility-independent group of datacentres. **runc** — the low-level Linux container runtime beneath containerd and CRI-O. **seccomp** — kernel feature filtering which syscalls a process may make, implemented with BPF. **Service** — a Kubernetes resource giving a stable IP that resolves to a set of matched pods. **SPA** — single-page application; only the first page is served, the rest is rendered by JavaScript. **Steal time (`st`)** — CPU time a hypervisor gave to someone else. **Toxic** — an injected failure attached to a Toxiproxy configuration. **Toxiproxy** — configurable TCP proxy for simulating network problems. **Union filesystem / overlay2** — merging layered directories into one view. **unshare** — command that creates new namespaces and starts a process in them. **USDT probe** — user statically defined tracing point compiled into an application. **USE** — utilization, saturation, errors. **VXLAN** — an encapsulation backend used by overlay networks. **Watch** — the Kubernetes notification mechanism served by kube-apiserver.
+**Affinity / anti-affinity** — rules that items should or must (or shouldn't or mustn't) run in the same partition. **aqu-sz** — average queue length of requests issued to a block device; a saturation metric. **Availability zone** — a partition within a region separated by redundant power, network and hardware. **BCC** — BPF Compiler Collection; wrappers and example tools over eBPF. **BPF / eBPF** — kernel execution engine running safe, bounded programs on kernel events. **Capability** — a granular unit of superuser privilege (`CAP_KILL`, `CAP_SYS_CHROOT`). **cgroup** — kernel feature limiting and accounting resource use by a group of processes. **chroot** — change the filesystem root as seen by a process. **CNI** — Container Networking Interface; implements pod-to-pod networking. **Consensus / Raft** — algorithm by which replicas agree on one version of reality; leader election by majority with heartbeats. **Control plane** — the Kubernetes components implementing convergence to the desired state. **Copy-on-write (COW)** — a file modified on a lower layer is copied wholesale into the writable layer. **CRI** — Container Runtime Interface. **Dark debt** — unknown unknowns in a complex system. **DaemonSet** — one pod per node. **Deployment** — blueprint plus lifecycle management for a set of pods. **Filesystem bundle** — the OCI term for an unpacked image. **Fuzzing** — feeding pseudorandom payloads to find errors written tests miss. **glibc** — the most common C library on Linux; its wrappers are often more than pass-throughs. **Goldpinger** — tool that builds a full node-to-node connectivity graph by pinging its own peers. **Ingress** — a Kubernetes resource mapping hosts to services; inert without a controller. **javaagent** — the JVM flag attaching a JAR that can inspect and rewrite loaded classes. **Kubelet** — the per-node agent that starts and stops containers. **Label** — a key-value pair used to match sets of Kubernetes resources. **libseccomp** — higher-level library for managing seccomp filters. **MTTF / MTBF** — mean time to / between failure. **Namespace** — kernel feature filtering which resources a process can see. **netem** — the `tc` network-emulator qdisc (delay, loss, duplication, corruption, reordering). **OCI** — Open Container Initiative; runtime and image specifications. **Overlay network** — routing made-up pod IPs between nodes, usually by encapsulation. **pause container** — holds a pod's shared resources (notably its IP) while other containers restart. **Pod** — co-located containers sharing an IP and some resources; the schedulable unit. **PowerfulSeal** — YAML-driven chaos tool for Kubernetes and cloud VMs. **ptrace** — the syscall `strace` uses to control other processes. **Pumba** — Docker chaos tool wrapping `tc`, stress-ng and container kill. **qdisc** — queueing discipline, that is, a packet scheduler (nothing to do with disks). **Region** — a geographically and utility-independent group of datacentres. **runc** — the low-level Linux container runtime beneath containerd and CRI-O. **seccomp** — kernel feature filtering which syscalls a process may make, implemented with BPF. **Service** — a Kubernetes resource giving a stable IP that resolves to a set of matched pods. **SPA** — single-page application; only the first page is served, the rest is rendered by JavaScript. **Steal time (`st`)** — CPU time a hypervisor gave to someone else. **Toxic** — an injected failure attached to a Toxiproxy configuration. **Toxiproxy** — configurable TCP proxy for simulating network problems. **Union filesystem / overlay2** — merging layered directories into one view. **unshare** — command that creates new namespaces and starts a process in them. **USDT probe** — user statically defined tracing point compiled into an application. **USE** — utilization, saturation, errors. **VXLAN** — an encapsulation backend used by overlay networks. **Watch** — the Kubernetes notification mechanism served by kube-apiserver.
 
 ---
 
@@ -7221,7 +5744,7 @@ Risk  →  cost per unit of time  →  SLI (the number)  →  SLO (the agreed ta
 28. Decode `-e inject=write:error=EIO:when=1+2`.
 29. Why read `man 2 close`'s ERRORS section before injecting into `close`?
 30. What are the four steps to building a javaagent?
-31. Why inject `invokestatic` rather than the exception itself, and why does the book also bump `maxStack`?
+31. Why inject `invokestatic` rather than the exception itself, and what must you also increment?
 32. What was wrong with FizzBuzzEnterpriseEdition's behaviour, and why is it worse than a crash?
 33. Give the three rules for building chaos code into your own application.
 34. Why is a decorator that returns the original function better than one that checks an env var per call?
@@ -7229,10 +5752,10 @@ Risk  →  cost per unit of time  →  SLI (the number)  →  SLO (the agreed ta
 36. Why was pgweb showing stale data with no error?
 37. What does "Matched 3 / Initial 3 / Filtered 1" tell you, and when do you read it?
 38. Why do 250 ms of latency leave a Goldpinger graph fully green?
-39. Why do even-numbered etcd clusters add risk without adding fault tolerance?
+39. Why are even-numbered etcd clusters a mistake?
 40. Name the four human-team games and what each one finds.
 
-**Answer key (one line each):** 1 — experimenting on a system to build confidence it withstands turbulent conditions; not random destruction, not a tool, not a test replacement, not production-only, not chaos theory. 2 — observability, steady state, hypothesis, run, (analysis). 3 — the number, the agreed target, the contract with a penalty. 4 — 4.38 hours. 5 — DNS restart + layered retries = permanent downtime nobody's component can cause alone. 6 — 128+15 = SIGTERM; an explicit `kill` from a person or script, or a supervisor such as systemd stopping it. (The OOM Killer sends SIGKILL, which gives 137.) 7 — `dmesg | grep -i <proc>`; "Out of memory: Kill process", "oom_reaper". 8 — `DefaultStartLimitBurst=5` per `DefaultStartLimitIntervalSec=10s`. 9 — max things your experiment can affect; strategic: subset of traffic, QA first (also: automate, careful with randomness); implementational: narrow selectors, target by trusted PID/label/port. 10 — utilization, saturation, errors; `%util`/`df -h`, `aqu-sz`, `dmesg`/device errors. 11 — batch systems *want* full utilization. 12 — the kernel caches disk in spare RAM and returns it on demand; read `available`. 13 — `%st`, the hypervisor gave your cycles elsewhere; virtualized environments only. 14 — `biotop`, `tcptop`, `oomkill`. 15 — `nice` is a per-process relative priority; cgroups apply weights or hard caps to a whole group. 16 — a queueing discipline (packet scheduler); the network-emulator qdisc adds delay. 17 — the page waits on many sequential MySQL-bound packet exchanges (~27 by the arithmetic), and each absorbs the full delay. 18 — testing outside production is by definition incomplete (data, scale, behaviour, config drift) — but only with blast-radius controls and never instead of earlier stages. 19 — VM: own kernel, stronger isolation, higher overhead; container: shared kernel, weaker isolation, lower overhead. 20 — namespaces limit what a process can see; cgroups limit what it can use. 21 — `cgroup` and `user` on cgroup v1 hosts; on cgroup v2 hosts only `user`. 22 — container filesystems are layers on one host filesystem; `--storage-opt size=` with xfs + pquota under overlay2. 23 — how many periods the cgroup was throttled — proof a CPU limit is biting. 24 — the limit caps resident memory; the pages beyond it were most likely swapped out (no `--memory-swap` limit), not left untouched — `stress --vm` does write to them. 25 — it starts a throwaway container holding `tc` inside the target's **net namespace**; namespaces are joinable. 26 — `strace`/`syscount`, `opensnoop`/`execsnoop`, the browser Network tab (also `javacalls`, `javap -c`). 27 — ~100×; measured with `dd` doing 500k (512,000) one-byte read/write pairs, filtering a syscall `dd` never makes. 28 — fail the `write` syscall with EIO on the 1st call and every 2nd call thereafter. 29 — to know the injected error is one the system can really produce (EINTR from any signal; NFS ENOSPC surfacing at close). 30 — transformer class, `premain` class, JAR with `Premain-Class`, `-javaagent:`. 31 — a static no-arg void call is exactly one instruction; the book adds `method.maxStack += 1` defensively, though a `()V` call needs no extra stack slot. 32 — it produced no output and still exited 0 — a silent failure no exit-status monitoring can catch. 33 — keep it simple; optional and off by default; negligible performance impact. 34 — the env check runs once at decoration time, so the disabled path costs nothing at call time. 35 — override `XMLHttpRequest.prototype.send` (or `window.fetch`) from the console, delegate with `.apply`; refresh the page. 36 — its shared error handler called `parseJSON(xhr.responseText)` on a transport failure, threw, and died. 37 — PowerfulSeal's blast radius for this run; read it before the action line. 38 — the health check is binary against a 300 ms timeout; latency shows only in the heatmap. 39 — quorum is `floor(n/2) + 1`, so four nodes tolerate the same single failure as three while adding another thing that can fail. 40 — Staycation (knowledge SPOFs), Liar, Liar (input validation and trust), Life in the Slow Lane (bottlenecks), Inside Job (remediation procedures).
+**Answer key (one line each):** 1 — experimenting on a system to build confidence it withstands turbulent conditions; not random destruction, not a tool, not a test replacement, not production-only, not chaos theory. 2 — observability, steady state, hypothesis, run, (analysis). 3 — the number, the agreed target, the contract with a penalty. 4 — 4.38 hours. 5 — DNS restart + layered retries = permanent downtime nobody's component can cause alone. 6 — 128+15 = SIGTERM; an explicit `kill` or the OOM Killer. 7 — `dmesg | grep -i <proc>`; "Out of memory: Kill process", "oom_reaper". 8 — `DefaultStartLimitBurst=5` per `DefaultStartLimitIntervalSec=10s`. 9 — max things your experiment can affect; strategic: subset of traffic, QA first (also: automate, careful with randomness); implementational: narrow selectors, target by trusted PID/label/port. 10 — utilization, saturation, errors; `%util`/`df -h`, `aqu-sz`, `dmesg`/device errors. 11 — batch systems *want* full utilization. 12 — the kernel caches disk in spare RAM and returns it on demand; read `available`. 13 — `%st`, the hypervisor gave your cycles elsewhere; virtualized environments only. 14 — `biotop`, `tcptop`, `oomkill`. 15 — `nice` is a relative priority, cgroups set absolute allocations. 16 — a queueing discipline (packet scheduler); the network-emulator qdisc adds delay. 17 — WordPress makes ~27 database round trips per page and each absorbs the full delay. 18 — testing outside production is by definition incomplete (data, scale, behaviour, config drift) — but only with blast-radius controls and never instead of earlier stages. 19 — VM: own kernel, stronger isolation, higher overhead; container: shared kernel, weaker isolation, lower overhead. 20 — namespaces limit what a process can see; cgroups limit what it can use. 21 — `cgroup` and `user`. 22 — container filesystems are layers on one host filesystem; `--storage-opt size=` with xfs + pquota under overlay2. 23 — how many periods the cgroup was throttled — proof a CPU limit is biting. 24 — the limit applies to resident memory and `stress` never touches what it allocates. 25 — it starts a throwaway container holding `tc` inside the target's **net namespace**; namespaces are joinable. 26 — `strace`/`syscount`, `opensnoop`/`execsnoop`, the browser Network tab (also `javacalls`, `javap -c`). 27 — ~100×; measured with `dd` doing 500k one-byte read/write pairs, filtering a syscall `dd` never makes. 28 — fail the `write` syscall with EIO on the 1st call and every 2nd call thereafter. 29 — to know the injected error is one the system can really produce (EINTR from any signal; NFS ENOSPC surfacing at close). 30 — transformer class, `premain` class, JAR with `Premain-Class`, `-javaagent:`. 31 — a static no-arg void call is exactly one instruction; `method.maxStack += 1`. 32 — it produced no output and still exited 0 — a silent failure no exit-status monitoring can catch. 33 — keep it simple; optional and off by default; negligible performance impact. 34 — the env check runs once at decoration time, so the disabled path costs nothing at call time. 35 — override `XMLHttpRequest.prototype.send` (or `window.fetch`) from the console, delegate with `.apply`; refresh the page. 36 — its shared error handler called `parseJSON(xhr.responseText)` on a transport failure, threw, and died. 37 — PowerfulSeal's blast radius for this run; read it before the action line. 38 — the health check is binary against a 300 ms timeout; latency shows only in the heatmap. 39 — quorum is `n/2 + 1`, so four nodes tolerate the same single failure as three while adding another thing that can fail. 40 — Staycation (knowledge SPOFs), Liar, Liar (input validation and trust), Life in the Slow Lane (bottlenecks), Inside Job (remediation procedures).
 
 ---
 
@@ -7244,7 +5767,7 @@ Performed against the full extracted text of all 13 chapters and Appendices A–
 
 | Ch. | Sections in the book | Covered here | Experiments captured |
 | --- | --- | --- | --- |
-| 1 | 1.1–1.5 + summary | All, including the "number of nines" box, the randomness and fuzzing box, Mendel, and the datacentre power-supply illustration | Card 1.1 (cache cut off) |
+| 1 | 1.1–1.5 + summary | All, including the "number of nines" box, the randomness and fuzzing box, the observability-in-quantum-realm box, Mendel, and the datacentre power-supply illustration | Card 1.1 (cache cut off) |
 | 2 | 2.1–2.6 + 4 pop quizzes | All, including VM setup steps and gotchas, the `kill -L` signal table, OOM tunables, NGINX `max_fails`/`fail_timeout`, Figures 2.1–2.5 | Cards 2.1, 2.2 |
 | 3 | 3.1–3.6 + 5 pop quizzes | All tools: `uptime`, `/proc/loadavg`, `dmesg`, `df`, `iostat`, `biotop`, `sar` (DEV/EDEV/TCP/ETCP with every field defined), `tcptop`, `free`, `top` (including the interactive key table and the field dialog), `vmstat` (all modes), `oomkill`, `/proc/cpuinfo`, `mpstat`, `cgcreate`/`cgexec`, `opensnoop`, `execsnoop`, `cProfile`, `pythonstat`, `pythonflow`, Node Exporter + Prometheus + Grafana, further reading | Card 3.1 (busy neighbour) |
 | 4 | 4.1–4.3 + 3 pop quizzes | All, including the full `tc` hierarchy with every command explained, the `telnet` verification step, the complete self-critique (single host, averages, reads vs. writes, NVMe, bursty traffic), and the internet-bank lifecycle | Cards 4.1, 4.2 |
@@ -7263,7 +5786,7 @@ Performed against the full extracted text of all 13 chapters and Appendices A–
 
 **Was any important theoretical concept omitted?** No. Every named concept in the brief is present with its own treatment: motivations and risk; SLI/SLO/SLA; emergent properties; the four-step model; blast radius; Linux forensics; USE across all six resource groups; BCC/BPF; Prometheus and Grafana; testing in production; all seven Docker kernel features; syscalls and libc; BPF vs. strace; JVM bytecode and instrumentation; application-level injection; browser injection; Kubernetes objects, control plane, kubelet, runtimes and all three networking layers; continuous SLO verification; cloud-layer failure; and the cultural material.
 
-**Was any major experiment omitted?** No. All 24 hands-on experiments and demonstrations have Experiment Cards, plus the 16 experiment *ideas* from Chapter 12, which the book presents as prompts rather than labs, and the four team games from Chapter 13.
+**Was any major experiment omitted?** No. All 23 hands-on experiments and demonstrations have Experiment Cards, plus the 16 experiment *ideas* from Chapter 12, which the book presents as prompts rather than labs, and the four team games from Chapter 13.
 
 **Was any important command, tool or workflow reduced to a vague description?** No. Every command appears with its flags decoded and its purpose explained, including the ones that are easy to copy without understanding: the `tc` `prio`/`u32`/`flowid` hierarchy, the cgroupfs file semantics, `unshare --fork --pid`, `nsenter` in both forms, `strace -e inject=` in full, `jar vcmf` and `-XDignore.symbol.file`, `ab`'s `-p` and `-H`, PowerfulSeal's policy grammar, and `toxiproxy-cli`'s `-h`-means-host trap.
 
@@ -7278,7 +5801,6 @@ Performed against the full extracted text of all 13 chapters and Appendices A–
 - **Figures are described, not reproduced.** Screenshots — Goldpinger's UI and heatmap, the Prometheus and Grafana views, KubeInvaders, Kube DOOM, the Raft animation, Appendix D's photographs — are summarised by what they show and which failure paths they reveal.
 - **Long code listings are abridged where the book abridges them**, and annotated line by line where the mechanism matters: `ClassInjector.java`, `chaos.py`, `chaos2.py`, `container-ish-2.sh`, the two Goldpinger YAML files, and the three PowerfulSeal policies.
 - **Versions are the book's**, and several are now historically dated — Kubernetes 1.18.3, Minikube 1.12.3, Docker 19.03, Toxiproxy 2.1.4, Byteman 4.0.11, Python 3.7, OpenJDK 8. The author flags this himself. Component responsibilities have been stable; specific defaults and flags have not.
-- **Corrections are marked inline.** Where the book's wording, a number or a command is wrong or outdated, the guide says so next to it (*Correction*, *Precision*, *Compatibility*, or a corrected command), and the compatibility note at the top covers the Ubuntu 24.04 lab VM.
 - **Everything not from the book is labelled "Supplementary explanation."** Three such labels exist: the industry names for the retry-storm pattern (Ch. 1), the round-trip arithmetic derived from the book's own latency figures (Ch. 4 and Ch. 5), and a caution that the book does not equate gVisor's overhead with strace's measured figure (Ch. 12).
 
 ---
@@ -7287,7 +5809,9 @@ Performed against the full extracted text of all 13 chapters and Appendices A–
 
 <aside>
 
-The 23 practical labs for this guide are in [chaos-labs.md](chaos-labs.md) (Chaos Engineering (Pawlikowski) — Hands-on Labs).
+
+The 23 practical labs for this guide are on their own page: Chaos Engineering (Pawlikowski) — Hands-on Labs.
 
 </aside>
 
+Cilium: Up and Running — Comprehensive Book Summary & Technical Reference - ChatGPT

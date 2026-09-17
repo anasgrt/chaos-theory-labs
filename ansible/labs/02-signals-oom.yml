@@ -3,6 +3,47 @@ concept: >-
   Signals notify processes of events or request termination. SIGTERM gives an application an opportunity to handle shutdown and release resources; SIGKILL cannot be caught or ignored. Bash normally reports a fatal signal as 128 plus its number: 143 for SIGTERM and 137 for SIGKILL. These values identify how execution ended, not who sent the signal or why.
 mechanism: >-
   A cgroup memory limit constrains a group independently of total free host memory. When its memory demand cannot be satisfied through reclaim, an out-of-memory (OOM) kill may terminate a member. Separately, virtual address space describes mappings, while resident set size (RSS) describes pages currently in RAM. The mmap comparison delays touching pages so you can observe these two quantities diverge.
+task:
+  question: >-
+    A process exited with status 137. Can you prove it was an out-of-memory kill? And does a large memory mapping actually consume RAM?
+  brief:
+    theory:
+      - >-
+        Exit codes (Ch. 2 §2.3.1): a terminating process returns a number; many commands use 0 for success and 1 for failure. Codes in the 128–192 range decode as 128 + n, where n is the kill-signal number, and kill -L lists the numbers: 136 = 128 + 8 = SIGFPE (an erroneous arithmetic operation).
+      - >-
+        Signals in practice (Ch. 2 §2.3.2): pkill sleep sends the default signal, SIGTERM, and echo $? prints 143 = 128 + 15; pkill -9 sends SIGKILL and prints 137 = 128 + 9.
+      - >-
+        Exit codes are a convention, not proof (Ch. 2 §2.3.1 and its editorial correction): a program can return any code, and nothing stops someone running kill -8 to produce the arithmetic-error code. The correction: 143 is SIGTERM, 137 is SIGKILL, and the OOM killer sends SIGKILL, so it cannot explain 143. A status alone does not establish who sent a signal or prove an OOM event; correlate kernel logs.
+      - >-
+        OOM Killer (Ch. 2 §2.3.3): under low memory it scores every process with heuristics (niceness, how recent it is, how much memory it uses) and kills the winner. The forensic step is the kernel log: "Out of memory: Kill process … score …", "Killed process … anon-rss" and "oom_reaper: reaped process", plus a task table with oom_score_adj.
+      - >-
+        Three ways a process dies (Ch. 2 §2.3.3): it did something illegal (128 + n for the faulting signal), something killed it explicitly (128 + n for the sent signal), or the OOM Killer chose it (it looks like a kill; the truth is in dmesg).
+      - >-
+        cgroup memory limits (Ch. 5 §5.5.2, Card 5.4): a memory cgroup has a hard limit, and a group that exceeds it meets the cgroup OOM Killer ("Memory cgroup out of memory: Kill process") even when the host has free RAM. Enforcement arrives as a kill, not as an error your app can handle; Docker memory and swap configuration must be considered (Ch. 5 editorial note).
+      - >-
+        Virtual vs. resident memory (Card 5.4, Ch. 3 §3.3.4): VIRT is mapped address space; RES is memory actually in RAM. "Just allocating the memory doesn't trigger the OOM Killer"; the book's stress run showed VIRT 528152 KiB but RES 127400 KiB under a 128 MB limit. The editorial note marks the cause of that run unresolved, so treat residency, not allocation, as what the limit counts.
+    in_this_lab:
+      - >-
+        wait "$victim"; echo $? reads the status of that exact background process. The SIGFPE is sent deliberately with os.kill, so it demonstrates the 128 + n rule, not an arithmetic bug.
+      - >-
+        ce-lab02 is a transient systemd unit with MemoryMax=128M, MemorySwapMax=0 and RuntimeMaxSec=20s. A memory kill shows as result 'oom-kill' in the unit log plus a kernel "Memory cgroup out of memory ... Killed process" line; reaching RuntimeMaxSec would show result 'timeout' instead.
+      - >-
+        systemd-oomd (a userspace killer) is inactive on this VM, so the kill should come from the kernel. Collect logs with --since the recorded start time so older entries do not mislead you.
+      - >-
+        pages.py creates a 256 MiB anonymous mmap. The kernel supplies physical pages only when each page is first written. ps prints VSZ and RSS in KiB, so 256 MiB is about 262144 KiB.
+  predict: >-
+    The exit statuses for SIGTERM, SIGKILL and SIGFPE; whether a 128 MiB-bounded allocator dies before its 20 s runtime bound; when RSS grows for a 256 MiB mmap.
+  steps:
+    - >-
+      Send TERM and KILL to a sleep and raise SIGFPE in Python; record each exit status.
+    - >-
+      Run an allocator in transient unit ce-lab02 with MemoryMax=128M, MemorySwapMax=0 and RuntimeMaxSec=20s.
+    - >-
+      For the same time window, collect the unit log, the kernel OOM line and any systemd-oomd log.
+    - >-
+      Map 256 MiB with mmap, then touch every page; sample VSZ and RSS every second.
+  answer_with: >-
+    The three exit statuses, unit plus kernel evidence of the OOM kill, and a VSZ/RSS timeline. Explain why 137 alone is not proof of an OOM kill.
 solution: 'Follow Lab 2: compare TERM/KILL/FPE, run the bounded ce-lab02 unit, then use pages.py to compare VSZ and RSS.'
 verify_note: 'The cgroup v2 memory controller is available and no ce-lab02 transient unit remains active.'
 commands:

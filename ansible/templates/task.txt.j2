@@ -1,0 +1,34 @@
+{% set lab_id = lab_definition | basename | regex_replace('-.*$', '') %}
+{% macro wrap(text, indent) %}{{ text | wordwrap(width=78 - indent, break_long_words=false, break_on_hyphens=false) | indent(indent) }}{% endmacro %}
+
+{{ '#' * 78 }}
+  YOUR TASK: {{ selected_lab.title }}
+{{ '#' * 78 }}
+
+QUESTION TO ANSWER
+  {{ wrap(selected_lab.task.question, 2) }}
+
+THEORY YOU NEED (from the book)
+{% for point in selected_lab.task.brief.theory %}
+  - {{ wrap(point, 4) }}
+{% endfor %}
+
+HOW IT APPLIES IN THIS LAB
+{% for point in selected_lab.task.brief.in_this_lab %}
+  - {{ wrap(point, 4) }}
+{% endfor %}
+
+PREDICT FIRST (write it in your journal before you start)
+  {{ wrap(selected_lab.task.predict, 2) }}
+
+STEPS
+{% for step in selected_lab.task.steps %}
+  {{ '%-3s' | format(loop.index ~ '.') }}{{ wrap(step, 5) }}
+{% endfor %}
+
+YOUR ANSWER MUST SHOW
+  {{ wrap(selected_lab.task.answer_with, 2) }}
+
+Stuck? Exact commands:  ./ansible/run-lab.sh {{ lab_id }} solution
+Show this task again:   ./ansible/run-lab.sh {{ lab_id }} question
+Remove the fixture:     ./ansible/run-lab.sh {{ lab_id }} reset

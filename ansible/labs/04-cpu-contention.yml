@@ -3,6 +3,51 @@ concept: >-
   USE means utilization, saturation and errors. CPU utilization measures time spent working; saturation means runnable tasks must wait for execution. A CPU can be fully busy doing useful batch work without violating an application's target. Contention becomes important when that waiting increases the target workload's completion time. Measure the application effect alongside the resource signal.
 mechanism: >-
   CPU affinity places both workloads on the same CPU, making competition easier to observe. A quota limits the neighbour's CPU-time budget per period; after consuming it, the group is throttled until its budget renews. Nice changes relative scheduling preference rather than imposing a hard cap. Pressure Stall Information (PSI) records resource waiting, while throttling counters reveal enforcement of the quota.
+task:
+  question: >-
+    A CPU-hungry neighbour shares CPU 0 with the batch job work.py. How much slower does each iteration get, which kernel counter proves the neighbour caused it, and which protects the job better: a 20% CPU quota or nice 19?
+  brief:
+    theory:
+      - >-
+        Why "slow" is the hard case (Ch. 3 §3.1): "my app doesn't work" is binary; "my app is slow" is subtler, and enough slowness makes the system "as good as down". Diagnosing it needs fast, reliable performance metrics.
+      - >-
+        USE method (Ch. 3 §3.2): for each resource check errors, utilization and saturation. Utilization is the proportion of time the resource is used (for a CPU, time spent doing work); saturation is the work it cannot service at a given moment, often queued. High saturation is not automatically bad — a batch system wants to run near 100%.
+      - >-
+        Reading CPU (Ch. 3 §3.3.4–3.3.5): vmstat column r counts runnable processes (running or waiting to run), an indicator of saturation. top's %Cpu(s) splits user, system, nice, idle, I/O wait and steal time, and mpstat -P ALL splits it per CPU — a single-threaded process only ever uses one CPU.
+      - >-
+        The busy neighbour (Card 3.1): the pi calculation slowed while stress workers competed for the same cores, because the kernel's default scheduler shares CPU fairly among runnable processes — "fair" here means the application loses. Slowness is often not a bug in your code; find the neighbour with per-process tools before touching the application.
+      - >-
+        Measure long enough (Ch. 3 §3.3.5): the "benign" script sleeps 20 s before starting its load, so the app looked fine when first observed. A steady state measured once, briefly, is untrustworthy; include the system's periodic behaviour.
+      - >-
+        nice (Ch. 3 §3.3.5): niceness runs from −20 to 19; higher means nicer, meaning lower priority. It is a relative priority, so "it's hard to control precisely how much CPU they would get."
+      - >-
+        cgroups, corrected (Ch. 3 §3.3.5 and its editorial correction): cgroups control CPU for a whole group of processes. CPU shares are relative weights under contention, not an absolute allocation or a reserved core; quota/period imposes a bandwidth ceiling. The book's "absolute allocations" wording is qualified by that correction.
+      - >-
+        Throttling evidence (Ch. 5 §5.5.2, Card 5.3): a group with a quota is throttled whenever it tries to exceed its CPU time per period. cpu.stat's nr_throttled and throttled_time prove throttling is happening; "check them first when a containerised app is mysteriously slow."
+    in_this_lab:
+      - >-
+        taskset -c 0 pins work.py and the stress-ng neighbour to CPU 0, so they compete for one CPU even though the VM has four.
+      - >-
+        cgroup v2 files: CPUQuota=20% sets cpu.max to "20000 100000" (20 ms of CPU per 100 ms period); cpu.stat reports nr_throttled and throttled_usec.
+      - >-
+        /proc/pressure/cpu (PSI, not in the book): the "some" line is the share of time at least one task waited for CPU; avg10, avg60 and avg300 are smoothed averages. It measures waiting, not utilization.
+      - >-
+        Groups decide first: the neighbour runs in unit ce-lab04 under system.slice; work.py runs in your SSH session under user.slice. The cpu controller is enabled and both slices have cpu.weight 100, so contended CPU is split between the slices first. nice only ranks tasks inside the same group.
+  predict: >-
+    Rank the mean iteration time of baseline, contention, 20% quota, nice 19 and recovered runs before you measure them.
+  steps:
+    - >-
+      Confirm CPU 0 is allowed (taskset -pc $$); run work.py pinned to CPU 0 three times as the baseline.
+    - >-
+      Start the stress-ng neighbour on CPU 0 in unit ce-lab04, rerun work.py, and read /proc/pressure/cpu and vmstat's r column.
+    - >-
+      Repeat with CPUQuota=20% on ce-lab04; read cpu.max and the cpu.stat throttling counters.
+    - >-
+      Repeat with the neighbour at nice -n 19 and no quota.
+    - >-
+      Stop ce-lab04, rerun work.py, and compare all mean iteration times.
+  answer_with: >-
+    Mean iteration time per run, CPU PSI and vmstat during contention, and rising nr_throttled/throttled_usec under the quota. Explain the difference between a relative priority (nice) and a hard cap (quota).
 solution: 'Run the Lab 4 baseline, contention, and 20 percent quota cases on one allowed CPU, retaining iteration timings, PSI and cpu.stat.'
 verify_note: 'CPU affinity and CPU pressure metrics are available and the ce-lab04 unit is stopped.'
 commands:

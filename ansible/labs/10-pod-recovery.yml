@@ -1,8 +1,49 @@
-title: 'Lab 15 — Kubernetes pod deletion and recovery'
+title: 'Lab 10 — Kubernetes pod deletion and recovery'
 concept: >-
   A Pod groups containers that run together; a Deployment manages the desired number through a ReplicaSet. A Service selects backends and provides stable access while individual Pods change. Ready expresses whether a Pod is eligible to serve according to configured checks; Running only describes its lifecycle phase. RBAC separately controls which API actions the application's identity may perform.
 mechanism: >-
   Deleting a managed Pod causes the replica controller to create a new object with a new identity. The scheduler chooses a node, kubelet starts its containers, and readiness and endpoint information update asynchronously. Remaining replicas may serve during that gap if they have enough capacity. The replacement is not the old Pod restarting, and a TCP readiness check establishes a listening socket rather than complete application health.
+task:
+  question: >-
+    When you delete one of three Goldpinger Pods, how long until the service is fully recovered, and did any request to it fail in between?
+  brief:
+    theory:
+      - >-
+        Why Kubernetes (Ch. 10 §10.2): it automates deployment, supervision and restart, rollouts and rollbacks, and resource-aware placement. It is declarative — you state the desired state and the control plane converges to it.
+      - >-
+        Core objects (Ch. 10 §10.4, Ch. 12 §12.1.1): a Pod is containers grouped together on one host sharing resources such as an IP; a Deployment is a blueprint plus lifecycle management, which the deployments controller turns into a ReplicaSet that creates the pods; a Service provides one IP resolving to the matched pods and takes a pod that goes down out of the pool.
+      - >-
+        Labels drive everything (Ch. 10 §10.4): key-value pairs; multiple labels AND together. Deployments find their pods, Services route, and Goldpinger finds its peers by label (app=goldpinger). Compare a Service's endpoints with the pods' IPs: "any mismatch… would point to misconfigured labels."
+      - >-
+        RBAC (Ch. 10 §10.4): a ClusterRole grants verbs on resources, a ServiceAccount is the workload's identity, a ClusterRoleBinding links them. Granting exactly the list verb Goldpinger needs is a blast-radius control, and Goldpinger crashing when it cannot list its peers doubles as a permission test.
+      - >-
+        Deleting a managed pod (Card 10.1): Kubernetes reconverges to the desired three replicas by creating a new pod — with a new name — while the old one is still draining. --watch showed the victim go Running → Terminating and the replacement Pending → ContainerCreating → Running in about 2 seconds; the transient state (four pods, one unhealthy) is part of normal operation.
+      - >-
+        Readiness and phases (Ch. 10 §10.4.2 caveat 3, Ch. 11 §11.2): without a readiness probe, pods can receive traffic before they are actually up — the probe exists to keep a pod out of traffic until a condition is met. The Running phase only means the pod is set up and at least one container is still running.
+      - >-
+        A dashboard samples; metrics record (Ch. 10 §10.4.2): the UI goes through a Service that picks a pseudorandom instance per call, data can be up to REFRESH_INTERVAL stale, and if you do not see an event "you might simply have missed it." Record continuous samples to judge user-visible recovery.
+    in_this_lab:
+      - >-
+        The chaos kind cluster has one control-plane and three worker nodes, each a Docker container. Goldpinger runs 3 replicas in namespace chaos-labs with a TCP readiness probe on port 8080 every 2 s, so Ready means only "the port accepts connections".
+      - >-
+        The Service is NodePort 30080 on the control-plane node's IP. kube-proxy forwards to the endpoints in the EndpointSlices, and new traffic goes only to Ready endpoints. Those updates are asynchronous: a request sent in the moment after the deletion can still reach the terminating pod (a run on this VM recorded one 000 about 0.2 s after deleting).
+      - >-
+        The Role grants get, list and watch on pods and nothing else, so can-i delete pods must answer no.
+      - >-
+        The probe loop sends 100 requests about 0.2 s apart (at least 20 s in total) with a 1 s timeout. A non-200 sample is any other code, or 000 when no response arrived.
+  predict: >-
+    Whether the replacement keeps the old Pod's name, and how many of 100 probes to /healthz return non-200 during the deletion.
+  steps:
+    - >-
+      Confirm 3 Ready Pods, 3 EndpointSlice addresses, HTTP 200 from /healthz, and RBAC answers yes (list pods) and no (delete pods).
+    - >-
+      In VM terminal 2 start 100 probes of http://<node-ip>:30080/healthz about 0.2 s apart.
+    - >-
+      Delete exactly one managed Pod and watch until three Pods are 1/1 Ready.
+    - >-
+      Record the new Pod names, Ready status, EndpointSlice addresses and the non-200 probe count.
+  answer_with: >-
+    Old versus new Pod name, Ready and EndpointSlice evidence, and the probe count. Explain the difference between Running and Ready, and between a replacement Pod and user-visible recovery.
 solution: 'Use the prepared chaos cluster and Goldpinger deployment to record probes, delete exactly one managed Pod, compare identity/Ready/endpoints/HTTP, and confirm recovery.'
 verify_note: 'The chaos cluster has three Ready Goldpinger Pods, correct least-privilege pod-read RBAC, and a healthy NodePort endpoint.'
 commands:
@@ -28,7 +69,7 @@ commands:
         code=$(curl -s --max-time 1 -o /dev/null -w '%{http_code}' "http://$NODE_IP:30080/healthz")
         printf '%s %s\n' "$(date --iso-8601=ns)" "$code"
         sleep 0.2
-      done | tee ~/labs/lab15/probes.log
+      done | tee ~/labs/lab10/probes.log
   - name: Delete exactly one managed pod and watch the replacement (Ctrl-C once three pods are 1/1 Ready)
     where: VM terminal 1, same shell
     run: !unsafe |
@@ -44,21 +85,21 @@ commands:
       k get pods -l app=goldpinger -o custom-columns='NAME:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status,START:.status.startTime,NODE:.spec.nodeName'
       k get pod "$victim" 2>&1 | tail -1
       k get endpointslices -l kubernetes.io/service-name=goldpinger -o wide
-      echo "non-200 samples: $(grep -vc ' 200$' ~/labs/lab15/probes.log)"
-      grep -v ' 200$' ~/labs/lab15/probes.log | head
+      echo "non-200 samples: $(grep -vc ' 200$' ~/labs/lab10/probes.log)"
+      grep -v ' 200$' ~/labs/lab10/probes.log | head
     expect: >-
-      The victim is NotFound, a new pod name replaced it, all READY=True, three endpoints and a counted (often zero) number of non-200 samples.
+      The victim is NotFound, a new pod name replaced it, all READY=True, three endpoints and a counted number of non-200 samples (0 or a few, right after the deletion).
 setup:
   - name: Create the dedicated multi-node kind cluster
     command: |
       for host in registry-1.docker.io auth.docker.io dl.k8s.io; do
         timeout 5s getent ahostsv4 "$host" >/dev/null || {
-          echo "Required DNS lookup failed for $host. Docker/kind image registry DNS is unavailable in the VM; restore DNS before Lab 15." >&2
+          echo "Required DNS lookup failed for $host. Docker/kind image registry DNS is unavailable in the VM; restore DNS before Lab 10." >&2
           exit 1
         }
       done
-      mkdir -p "$HOME/labs/lab15"
-      cat > "$HOME/labs/lab15/kind.yaml" <<'YAML'
+      mkdir -p "$HOME/labs/lab10"
+      cat > "$HOME/labs/lab10/kind.yaml" <<'YAML'
       kind: Cluster
       apiVersion: kind.x-k8s.io/v1alpha4
       name: chaos
@@ -71,7 +112,7 @@ setup:
       - role: worker
         labels: {topology.kubernetes.io/zone: east-1}
       YAML
-      kind get clusters | grep -Fx chaos >/dev/null || timeout 10m kind create cluster --config "$HOME/labs/lab15/kind.yaml" --kubeconfig "$HOME/labs/chaos.kubeconfig" --wait 180s
+      kind get clusters | grep -Fx chaos >/dev/null || timeout 10m kind create cluster --config "$HOME/labs/lab10/kind.yaml" --kubeconfig "$HOME/labs/chaos.kubeconfig" --wait 180s
       "$HOME/labs/install-kubectl-for-kind.sh" chaos
       "$HOME/labs/load-lab-images-into-kind.sh" chaos \
         bloomberg/goldpinger:v3.11.3 \
@@ -80,7 +121,7 @@ setup:
         nginx:1.27
   - name: Deploy the Goldpinger fixture
     command: |
-      cat > "$HOME/labs/lab15/goldpinger.yaml" <<'YAML'
+      cat > "$HOME/labs/lab10/goldpinger.yaml" <<'YAML'
       apiVersion: v1
       kind: ServiceAccount
       metadata: {name: goldpinger}
@@ -137,7 +178,7 @@ setup:
       YAML
       k() { kubectl --kubeconfig="$HOME/labs/chaos.kubeconfig" --context=kind-chaos --namespace=chaos-labs --request-timeout=10s "$@"; }
       k create namespace chaos-labs --dry-run=client -o yaml | k apply -f -
-      k apply -f "$HOME/labs/lab15/goldpinger.yaml"
+      k apply -f "$HOME/labs/lab10/goldpinger.yaml"
       k rollout status deployment/goldpinger --request-timeout=0 --timeout=180s
 verify:
   - name: Verify pod-recovery baseline
@@ -149,7 +190,7 @@ verify:
       delete_answer=$(k auth can-i delete pods --as=system:serviceaccount:chaos-labs:goldpinger || true)
       test "$delete_answer" = no
 reset:
-  - name: Remove only Lab 15 namespace resources and preserve the shared cluster
+  - name: Remove only Lab 10 namespace resources and preserve the shared cluster
     command: |
       if kind get clusters | grep -Fx chaos >/dev/null; then
         kubectl --kubeconfig="$HOME/labs/chaos.kubeconfig" --context=kind-chaos delete namespace chaos-labs --ignore-not-found --wait=true --timeout=180s || true

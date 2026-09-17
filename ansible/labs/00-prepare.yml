@@ -3,6 +3,49 @@ concept: >-
   Chaos engineering tests whether a system still delivers useful service under a controlled fault. The hypothesis predicts an observable outcome; the baseline records normal behaviour for comparison. The blast radius includes everything the fault could affect, including shared dependencies. A useful experiment changes one main condition so you can explain why the result changed.
 mechanism: >-
   A disposable Linux virtual machine supplies the kernel features used throughout these labs and separates the experiments from your normal working environment. Version records and a fixed setup reduce accidental differences between runs. Snapshots provide a recovery fallback; explicit cleanup removes the intended fault. Checking baseline → fault → recovery helps distinguish the fault's effect from an already-broken setup.
+task:
+  question: >-
+    Is this VM a trustworthy, recorded baseline for every later lab, and could you restore it if an experiment broke it?
+  brief:
+    theory:
+      - >-
+        Definition (Ch. 1 §1.1): chaos engineering is "the discipline of experimenting on a system in order to build confidence in the system's capability to withstand turbulent conditions in production" — a testing method that finds evidence of problems before users experience them. It is not random destruction, not a tool and not a replacement for other tests (§1.4).
+      - >-
+        The crash-test analogy (Ch. 1 §1.1): controlled speed is the blast radius, high-speed cameras are observability, and a production car is realism. Without reliable measurement "the crash teaches nothing", which is why the environment and its measurements must be trusted before any experiment.
+      - >-
+        Experiment model (Ch. 1 §1.3, App. C): observability → steady state → hypothesis → run, plus the implied fifth step, analysis ("An experiment is useless if you don't analyze your findings at the end"). A hypothesis has the shape condition → measurable outcome bounded by a number.
+      - >-
+        Steady state and hidden variables (Ch. 1 §1.3): define what normal is from observed data. Many variables sit outside your control — stolen CPU, a cron job starting mid-experiment, scheduler priority, a hypervisor giving your CPU to another tenant — so repeat experiments until hidden variables surface. A broken baseline turns every later result into noise.
+      - >-
+        Experiments carry their own risk (Ch. 1 §1.3): switching off a power source to test failover can cause the outage itself, so "a big part of your job will be about minimizing the risks coming from your experiments and choosing the right environment to execute them."
+      - >-
+        The lab VM (Ch. 2 §2.1): the book ships a VM so every command runs with matching tool versions, and so you can be playful — fill the RAM, kill processes, break the network — without the blast radius reaching your laptop. Choosing the environment is part of experiment design.
+      - >-
+        Blast radius (Ch. 2 §2.5): "the maximum number of things that can be affected by something going wrong". Strategic controls plan where it runs (small subset first, QA before production, automate early, care with randomness); implementational controls make execution safe (narrow selectors, trusted PIDs, guards).
+      - >-
+        Versions (guide, Known limits; Ch. 5 §5.5.2 v1 vs v2): the book's versions are historical — Kubernetes 1.18.3, Docker 19.03 and others — and its cgroup examples use v1 paths. "Component responsibilities have been stable; specific defaults and flags have not", so a recorded environment separates real findings from version differences.
+    in_this_lab:
+      - >-
+        The VM is the blast-radius boundary: Ubuntu 24.04 with, by default, 4 vCPUs, 12 GiB RAM and a 60 GiB root volume. Nothing here touches your laptop or a shared system.
+      - >-
+        cgroup v2 check: stat -fc %T /sys/fs/cgroup prints cgroup2fs and docker info reports cgroups=2. Later labs read cgroup v2 files (cpu.max, memory.max, pids.max, cpu.stat) that do not exist on cgroup v1.
+      - >-
+        Version record: ~/labs/book-commit.txt pins the book's example source; ~/labs/versions.txt holds the kernel, systemd, Docker, Compose, Python, strace and kind versions. Image tags can move; RepoDigests identify the exact image. A locally built image (Goldpinger on ARM64) has no registry digest.
+      - >-
+        Recovery path: a Vagrant snapshot restores the whole VM. Save 01-tools now, and restore a snapshot whenever a fault cannot be removed cleanly.
+  predict: >-
+    Which environment checks will pass. A failure here is a setup problem to fix, not a resilience finding.
+  steps:
+    - >-
+      Confirm /sys/fs/cgroup is cgroup2fs and Docker reports cgroups=2.
+    - >-
+      Confirm hello-world runs, docker compose works and / has at least 60 GiB.
+    - >-
+      Record the book commit, ~/labs/versions.txt and the image digests in your journal.
+    - >-
+      Save the 01-tools Vagrant snapshot from the Mac host.
+  answer_with: >-
+    The check outputs, commit 3e3ee64db71f51a5e9f79af8562dd4aa913a0e71, and vagrant snapshot list showing 01-tools. Explain in one sentence why a recorded environment separates real findings from setup and version differences.
 solution: 'The shared Ansible provisioner is the solution. Review ~/labs/versions.txt, then use the Lab 0 checks in ~/labs/chaos-labs.md before continuing.'
 verify_note: 'The host must report cgroup2fs, Docker cgroup v2, and the recorded tool versions.'
 commands:
