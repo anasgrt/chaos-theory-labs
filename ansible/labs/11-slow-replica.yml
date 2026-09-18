@@ -1,133 +1,92 @@
-title: 'Lab 11 — Deliberately slow Kubernetes replica'
+title: "Lab 11 — Health depends on what you test"
 concept: >-
-  Health is often reported as a binary result even though performance degrades gradually. A replica may accept connections but respond too late for its callers. A timeout is the caller's waiting budget, not a statement that the server stopped working. Goldpinger's peer checks let this lab observe how increasing latency crosses that practical boundary.
+  A timeout is the caller’s waiting budget. A running server can respond too late for a
+  caller and still remain alive. If injected latency exceeds the ping budget, peer requests
+  can time out without the target process stopping.
 mechanism: >-
-  Toxiproxy is a TCP relay with configurable faults called toxics. Other peers connect to its listener, which forwards to Goldpinger in the same Pod; the upstream toxic here delays data travelling from peers toward that replica. As delay plus normal processing consumes the ping budget, successful checks can become timeouts. The proxy can keep accepting connections throughout, so TCP readiness and peer-level health can disagree.
+  Readiness is only as informative as its configured probe. Here Kubernetes checks whether
+  it can establish a TCP connection to the proxy; peer pings need an application response
+  within 300 ms. The connection can succeed while the response arrives too late. Comparing
+  the two checks exposes different definitions of health.
 task:
   question: >-
-    You add a fourth Goldpinger replica that is deliberately slow. As its latency rises, at what point do peer pings mark it failed, at what point does cluster_health report the cluster unhealthy, and does Kubernetes still report the pod Ready?
+    Why can the same Pod be Ready while peers report it as unhealthy?
   brief:
+    theory_source: >-
+      chaos-theory.md: §10.4.4 and Experiment Card 10.2. The timeout and readiness criteria
+      are specific to this fixture.
     theory:
       - >-
-        Slowness, the nemesis (Ch. 10 §10.4.4): "actual failure is often easier to debug than situations where things mostly work" — and slowness falls into the latter category.
+        A timeout is the caller’s waiting budget. A running server can respond too late
+        for a caller and still remain alive. If injected latency exceeds the ping budget,
+        peer requests can time out without the target process stopping.
       - >-
-        Add a degraded copy (Ch. 10 §10.4.4): tc, Pumba, kubectl exec or a sidecar all modify software that is already running and "by definition carry risks of messing things up." Instead, add extra software, tweaked to implement the failure but otherwise identical, and integrate it so the system discovers it; existing pods stay unmodified.
-      - >-
-        Toxiproxy (Ch. 10 §10.4.4): a TCP-level (Layer 4) proxy, so it needs no HTTP knowledge and works for any TCP protocol. Each proxy configuration has a unique name, a listen address and an upstream; toxics — latency, down, bandwidth, slow close, timeout, slicer — are added and changed at runtime through its API.
-      - >-
-        The proxy-fronted pod (Ch. 10 §10.4.4, Ch. 12 §12.1.2): containers in a pod share an IP and localhost (the pause container holds the shared network namespace). Goldpinger listens on 9090 but calls peers on 8080 (CLIENT_PORT_OVERRIDE); Toxiproxy takes 8080 and relays to localhost:9090, so peers reach the proxy while the chaos pod's own calls go out normally. With app=goldpinger it joins discovery; before the proxy exists it shows red.
-      - >-
-        Binary health vs. continuous latency (Card 10.2): Goldpinger's default time-out is 300 ms, so 250 ms was "enough to be clearly seen, but not enough to cause a time-out". The graph showed all four pods healthy while the heatmap row turned red: health is a binary derived from a timeout, latency is continuous, and "a system can be 100% 'healthy' and badly degraded at the same time."
-      - >-
-        Green check, severe degradation (cheat sheet §13, §7): a binary check hides everything below its threshold, so watch both binary and continuous signals and ask how close values are to the limits that cause time-outs.
-      - >-
-        Limits of the technique (Card 10.2): the UI service routes pseudorandomly, so you may be talking to the delayed instance yourself, and the extra software can still affect existing instances. Whether to run it in production: "It depends."
+        Readiness is only as informative as its configured probe. Here Kubernetes checks
+        whether it can establish a TCP connection to the proxy; peer pings need an application
+        response within 300 ms. The connection can succeed while the response arrives too
+        late. Comparing the two checks exposes different definitions of health.
     in_this_lab:
       - >-
-        goldpinger-slow runs Goldpinger on 9090 (PORT) but calls peers on 8080 (CLIENT_PORT_OVERRIDE). Toxiproxy's API is on 8474; the "slow" proxy you create listens on 8080, the port peers call, and relays to 127.0.0.1:9090.
-      - >-
-        The latency toxic uses stream "upstream": data travelling from a calling peer through the proxy to Goldpinger is delayed. The slow pod's own outgoing pings are not.
-      - >-
-        Two thresholds. Every pod pings every peer each REFRESH_INTERVAL (2 s) with PING_TIMEOUT=300ms; /check returns the serving pod's latest ping results, where goldpinger-slow turns OK false with status 504 ("context deadline exceeded") once delay plus processing passes 300 ms. /cluster_health ignores ping results: it calls /check on every pod live with CHECK_TIMEOUT (default 1000 ms), so it stays OK until the delay passes 1 s. Measured on this VM: pings failed at 400 ms, cluster_health turned false at 1200 ms.
-      - >-
-        Only the toxiproxy container has a readiness probe (TCP 8080), so the pod shows 1/2 until the proxy listener exists and then stays Ready (2/2) at every latency.
-      - >-
-        The pod carries app=goldpinger, so it also joins the NodePort Service: any of the four pods can serve a sample, and one served by the slow pod passes through its proxy and is delayed. Every pod pings goldpinger-slow, so every sample still contains a verdict about it.
-      - >-
-        It is a bare Pod, not owned by the Deployment: deleting it is final and the Deployment keeps its 3 replicas.
+        The extra Goldpinger replica receives traffic through Toxiproxy. Peer pings use
+        300 ms; readiness checks the proxy’s TCP listener.
   predict: >-
-    The delay (ms) at which pings to goldpinger-slow fail (PING_TIMEOUT=300ms), the delay at which cluster_health turns false (CHECK_TIMEOUT, default 1000 ms), and the pod's READY value at 1200 ms.
+    With a 400 ms delay and a 300 ms ping budget, predict the peer result and TCP readiness
+    result separately.
   steps:
     - >-
-      Apply slow.yaml (Goldpinger behind a Toxiproxy sidecar) and port-forward the Toxiproxy API on 8474.
+      Create the proxy listener and confirm healthy peer pings and Pod readiness.
     - >-
-      Create the slow proxy listener (0.0.0.0:8080 to 127.0.0.1:9090) and confirm pings to the pod and cluster_health are both OK.
+      Add 400 ms latency; compare fresh peer reports with the Pod’s Ready state.
     - >-
-      Add a latency toxic and raise it through 50, 150, 250, 400 and 1200 ms; at each dose read the ping result for goldpinger-slow, cluster_health and the pod's READY value.
-    - >-
-      Delete the toxic, confirm pings and cluster_health recover, delete the Pod and stop the port-forward.
+      Remove the delay, confirm pings recover, then delete the extra Pod and stop the port-forward.
   answer_with: >-
-    Per dose: the ping result for goldpinger-slow, cluster_health OK and the pod's READY value, including a slower-but-OK case, a failed-ping-but-cluster-OK case and a cluster-unhealthy case, plus recovery. Explain why one pod can be Ready, fail its peers' pings and still pass cluster_health.
-solution: 'Run Lab 10 setup first, apply the prepared slow pod, configure its Toxiproxy listener through port-forward, vary the latency toxic, then delete it and the slow pod.'
-verify_note: 'The base Goldpinger deployment is healthy; the slow-pod manifest is present but no latency toxic is injected by setup.'
+    Compare peer pings and readiness before, during and after delay. Explain the different
+    operation each check measures.
+solution: >-
+  At 400 ms of added latency, a peer with a 300 ms budget should report failure. TCP readiness
+  can remain successful because establishing the connection does not require the delayed
+  application response. Removing the delay should restore peer success without restarting
+  the Pod. If the baseline or recovery fails, resolve that before attributing the disagreement
+  solely to the dose.
+verify_note: >-
+  The toxic is removed and the original three replicas are Ready.
 commands:
-  - name: Add the proxy-fronted pod and wait until both containers run (Ctrl-C the watch)
+  - name: Connect the prepared proxy and establish the no-delay baseline
     where: VM terminal 1
     run: !unsafe |
-      source ~/labs/common.sh
-      k apply -f ~/labs/lab10/slow.yaml
-      k get pod goldpinger-slow --request-timeout=0 -w
+      source ~/labs/lab10/connect-proxy.sh
+      pings
+      k get pod goldpinger-slow
     expect: >-
-      READY 1/2: Goldpinger runs, and toxiproxy is not Ready until the 8080 listener exists. The Toxiproxy API may still be starting at this point.
-  - name: Port-forward the Toxiproxy API with a recorded PID
-    where: VM terminal 1, same shell
+      The extra replica is Ready and peer reports for its IP show OK true. Establish this
+      baseline before adding delay.
+  - name: Add 400 ms and compare peer pings with readiness
+    where: VM terminal 1
     run: !unsafe |
-      T=http://127.0.0.1:8474
-      # READY 1/2 can appear before Toxiproxy listens, which ends a port-forward; retry until the API answers.
-      for attempt in $(seq 1 10); do
-        k port-forward --request-timeout=0 pod/goldpinger-slow 8474:8474 > ~/labs/lab10/lab11-port-forward.log 2>&1 &
-        echo $! > ~/labs/lab10/lab11-port-forward.pid
-        for _ in $(seq 1 10); do curl -fs --max-time 2 -o /dev/null "$T/version" && break 2; sleep 1; done
-        kill "$(cat ~/labs/lab10/lab11-port-forward.pid)" 2>/dev/null
-      done
-      curl -fsS "$T/version"; echo
+      curl -fsS --max-time 5 -H 'Content-Type: application/json' -X POST "$T/proxies/slow/toxics" -d '{"name":"lat","type":"latency","stream":"upstream","toxicity":1,"attributes":{"latency":400,"jitter":0}}'
+      sleep 8
+      pings
+      k get pod goldpinger-slow
     expect: >-
-      {"version": "2.12.0"}. If it still fails after the retries, check k get pod goldpinger-slow and k logs goldpinger-slow -c toxiproxy.
-  - name: Create the proxy listener, define probes and check baseline health
-    where: VM terminal 1, same shell
-    run: !unsafe |
-      curl -fsS -H 'Content-Type: application/json' -X POST "$T/proxies" \
-        -d '{"name":"slow","listen":"0.0.0.0:8080","upstream":"127.0.0.1:9090","enabled":true}'; echo
-      k wait --for=condition=Ready pod/goldpinger-slow --request-timeout=0 --timeout=60s
-      NODE_IP=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' chaos-control-plane)
-      SLOW_IP=$(k get pod goldpinger-slow -o jsonpath='{.status.podIP}')
-      # Latest background ping result for goldpinger-slow, from 3 sampled pods (PING_TIMEOUT).
-      pings() {
-        for _ in 1 2 3; do
-          curl -sS --max-time 5 "http://$NODE_IP:30080/check" |
-            jq -c --arg ip "$SLOW_IP" '[.podResults[] | select(.PodIP == $ip)][0] | {OK, status: .["status-code"], ms: .["response-time-ms"], error}'
-        done
-      }
-      # Live /check call to every pod (CHECK_TIMEOUT).
-      health() {
-        curl -sS --max-time 8 "http://$NODE_IP:30080/cluster_health" |
-          jq -c '{OK, nodesUnhealthy, duration_ms: (.["duration-ns"] / 1e6 | floor)}'
-      }
-      sleep 10
-      pings; health
-    expect: >-
-      goldpinger-slow is Ready; its ping results show OK true with status 200, and cluster_health shows OK true with nodesUnhealthy null. If not, run k logs goldpinger-slow -c goldpinger before injecting.
-  - name: Add the latency toxic and raise the dose
-    where: VM terminal 1, same shell
-    run: !unsafe |
-      curl -fsS -H 'Content-Type: application/json' -X POST "$T/proxies/slow/toxics" \
-        -d '{"name":"lat","type":"latency","stream":"upstream","toxicity":1,"attributes":{"latency":50,"jitter":0}}'; echo
-      for ms in 50 150 250 400 1200; do
-        curl -fsS -H 'Content-Type: application/json' -X PATCH "$T/proxies/slow/toxics/lat" \
-          -d "{\"attributes\":{\"latency\":$ms,\"jitter\":0}}" > /dev/null
-        sleep 8
-        echo "configured delay=$ms ms"
-        pings; health
-        k get pod goldpinger-slow --no-headers
-      done
-    expect: >-
-      Up to 250 ms, pings stay OK (response time rises) and cluster_health is OK. At 400 ms pings fail (OK false, 504, context deadline exceeded) while cluster_health stays OK. At 1200 ms cluster_health turns OK false with the slow pod's node in nodesUnhealthy. READY stays 2/2 throughout.
+      Look for failed peer pings while the Pod remains Ready. The 400 ms delay exceeds the
+      300 ms ping budget; readiness only checks TCP connection establishment.
   - name: Remove the fault, verify recovery, delete the pod and stop the port-forward
     where: VM terminal 1, same shell
     run: !unsafe |
       curl -fsS -X DELETE "$T/proxies/slow/toxics/lat"
       curl -fsS "$T/proxies/slow/toxics"; echo
       sleep 8
-      pings; health
+      pings
       k delete pod goldpinger-slow --wait=true
       kill "$(cat ~/labs/lab10/lab11-port-forward.pid)"; rm -f ~/labs/lab10/lab11-port-forward.pid
       k rollout status deployment/goldpinger --request-timeout=0 --timeout=180s
       k get pods -l app=goldpinger
     expect: >-
-      An empty toxic list ([]), OK pings and cluster_health, and the original three Ready Goldpinger pods.
+      No toxic remains, peer pings recover, and the original three replicas are Ready after
+      the extra Pod is deleted.
 setup:
   - name: Prepare the proxy-fronted Pod manifest
-    command: |
+    command: !unsafe |
       kubectl --kubeconfig="$HOME/labs/chaos.kubeconfig" --context=kind-chaos --namespace=chaos-labs rollout status deployment/goldpinger --timeout=180s
       mkdir -p "$HOME/labs/lab10"
       cat > "$HOME/labs/lab10/slow.yaml" <<'YAML'
@@ -157,12 +116,45 @@ setup:
           ports: [{containerPort: 8474}, {containerPort: 8080}]
           readinessProbe: {tcpSocket: {port: 8080}, periodSeconds: 2}
       YAML
+  - name: Prepare proxy connection and observation helpers
+    command: !unsafe |
+      cat > "$HOME/labs/lab10/connect-proxy.sh" <<'SH'
+      source ~/labs/common.sh
+      k apply -f ~/labs/lab10/slow.yaml
+      k wait --for=jsonpath='{.status.phase}'=Running pod/goldpinger-slow --timeout=120s --request-timeout=0 || return 1
+      T=http://127.0.0.1:8474
+      # READY 1/2 can appear before Toxiproxy listens, which ends a port-forward; retry until the API answers.
+      for attempt in $(seq 1 10); do
+        k port-forward --request-timeout=0 pod/goldpinger-slow 8474:8474 > ~/labs/lab10/lab11-port-forward.log 2>&1 &
+        echo $! > ~/labs/lab10/lab11-port-forward.pid
+        for _ in $(seq 1 10); do curl -fs --max-time 2 -o /dev/null "$T/version" && break 2; sleep 1; done
+        kill "$(cat ~/labs/lab10/lab11-port-forward.pid)" 2>/dev/null
+      done
+      curl -fsS --max-time 5 "$T/version" || return 1
+      echo
+      curl -fsS -H 'Content-Type: application/json' -X POST "$T/proxies" \
+        -d '{"name":"slow","listen":"0.0.0.0:8080","upstream":"127.0.0.1:9090","enabled":true}'; echo
+      k wait --for=condition=Ready pod/goldpinger-slow --request-timeout=0 --timeout=60s
+      NODE_IP=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' chaos-control-plane)
+      SLOW_IP=$(k get pod goldpinger-slow -o jsonpath='{.status.podIP}')
+      # Latest background ping result for goldpinger-slow, from 3 Service requests (not necessarily distinct pods; PING_TIMEOUT).
+      pings() {
+        for _ in 1 2 3; do
+          curl -sS --max-time 5 "http://$NODE_IP:30080/check" |
+            jq -c --arg ip "$SLOW_IP" '[.podResults[] | select(.PodIP == $ip)][0] | {OK, status: .["status-code"], ms: .["response-time-ms"], error}'
+        done
+      }
+      sleep 10
+
+      SH
 verify:
   - name: Verify the Lab 11 base fixture
-    command: kubectl --kubeconfig="$HOME/labs/chaos.kubeconfig" --context=kind-chaos --namespace=chaos-labs rollout status deployment/goldpinger --timeout=30s
+    command: !unsafe |
+      kubectl --kubeconfig="$HOME/labs/chaos.kubeconfig" --context=kind-chaos --namespace=chaos-labs rollout status deployment/goldpinger --timeout=30s
+      test -s "$HOME/labs/lab10/connect-proxy.sh"
 reset:
   - name: Delete only the slow replica and recorded port-forward
-    command: |
+    command: !unsafe |
       pid_file="$HOME/labs/lab10/lab11-port-forward.pid"
       if [[ -f "$pid_file" ]] && [[ "$(cat "$pid_file")" =~ ^[0-9]+$ ]]; then kill "$(cat "$pid_file")" 2>/dev/null || true; fi
       rm -f "$pid_file"

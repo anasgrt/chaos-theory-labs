@@ -1,61 +1,64 @@
-title: 'Lab 04 — CPU contention with two measurements'
+title: "Lab 04 — CPU contention and a quota"
 concept: >-
-  USE means utilization, saturation and errors. CPU utilization measures time spent working; saturation means runnable tasks must wait for execution. A CPU can be fully busy doing useful batch work without violating an application's target. Contention becomes important when that waiting increases the target workload's completion time. Measure the application effect alongside the resource signal.
+  A CPU-bound job needs execution time, but its elapsed time also includes waiting to be
+  scheduled. Two runnable workloads pinned to one CPU compete for that time. A slower iteration
+  can therefore come from contention rather than extra work in the application.
 mechanism: >-
-  CPU affinity places both workloads on the same CPU, making competition easier to observe. A quota limits the neighbour's CPU-time budget per period; after consuming it, the group is throttled until its budget renews. Nice changes relative scheduling preference rather than imposing a hard cap. Pressure Stall Information (PSI) records resource waiting, while throttling counters reveal enforcement of the quota.
+  A quota limits the competitor's CPU budget per period. After using its budget, that group
+  is throttled until the next period. A 20% quota means 20 ms per 100 ms, not a reserved
+  core for the other job. Compare job timing with the quota and throttling counters to see
+  whether limiting the neighbour helps.
 task:
   question: >-
-    A CPU-hungry neighbour shares CPU 0 with the batch job work.py. How much slower does each iteration get, which kernel counter proves the neighbour caused it, and which protects the job better: a 20% CPU quota or nice 19?
+    How does capping a CPU competitor change the time taken by the same job?
   brief:
+    theory_source: >-
+      chaos-theory.md: §§3.2, 3.3.5 and the CPU-shares correction; §5.5.2.
     theory:
       - >-
-        Why "slow" is the hard case (Ch. 3 §3.1): "my app doesn't work" is binary; "my app is slow" is subtler, and enough slowness makes the system "as good as down". Diagnosing it needs fast, reliable performance metrics.
+        A CPU-bound job needs execution time, but its elapsed time also includes waiting
+        to be scheduled. Two runnable workloads pinned to one CPU compete for that time.
+        A slower iteration can therefore come from contention rather than extra work in
+        the application.
       - >-
-        USE method (Ch. 3 §3.2): for each resource check errors, utilization and saturation. Utilization is the proportion of time the resource is used (for a CPU, time spent doing work); saturation is the work it cannot service at a given moment, often queued. High saturation is not automatically bad — a batch system wants to run near 100%.
-      - >-
-        Reading CPU (Ch. 3 §3.3.4–3.3.5): vmstat column r counts runnable processes (running or waiting to run), an indicator of saturation. top's %Cpu(s) splits user, system, nice, idle, I/O wait and steal time, and mpstat -P ALL splits it per CPU — a single-threaded process only ever uses one CPU.
-      - >-
-        The busy neighbour (Card 3.1): the pi calculation slowed while stress workers competed for the same cores, because the kernel's default scheduler shares CPU fairly among runnable processes — "fair" here means the application loses. Slowness is often not a bug in your code; find the neighbour with per-process tools before touching the application.
-      - >-
-        Measure long enough (Ch. 3 §3.3.5): the "benign" script sleeps 20 s before starting its load, so the app looked fine when first observed. A steady state measured once, briefly, is untrustworthy; include the system's periodic behaviour.
-      - >-
-        nice (Ch. 3 §3.3.5): niceness runs from −20 to 19; higher means nicer, meaning lower priority. It is a relative priority, so "it's hard to control precisely how much CPU they would get."
-      - >-
-        cgroups, corrected (Ch. 3 §3.3.5 and its editorial correction): cgroups control CPU for a whole group of processes. CPU shares are relative weights under contention, not an absolute allocation or a reserved core; quota/period imposes a bandwidth ceiling. The book's "absolute allocations" wording is qualified by that correction.
-      - >-
-        Throttling evidence (Ch. 5 §5.5.2, Card 5.3): a group with a quota is throttled whenever it tries to exceed its CPU time per period. cpu.stat's nr_throttled and throttled_time prove throttling is happening; "check them first when a containerised app is mysteriously slow."
+        A quota limits the competitor's CPU budget per period. After using its budget, that
+        group is throttled until the next period. A 20% quota means 20 ms per 100 ms, not
+        a reserved core for the other job. Compare job timing with the quota and throttling
+        counters to see whether limiting the neighbour helps.
     in_this_lab:
       - >-
-        taskset -c 0 pins work.py and the stress-ng neighbour to CPU 0, so they compete for one CPU even though the VM has four.
-      - >-
-        cgroup v2 files: CPUQuota=20% sets cpu.max to "20000 100000" (20 ms of CPU per 100 ms period); cpu.stat reports nr_throttled and throttled_usec.
-      - >-
-        /proc/pressure/cpu (PSI, not in the book): the "some" line is the share of time at least one task waited for CPU; avg10, avg60 and avg300 are smoothed averages. It measures waiting, not utilization.
-      - >-
-        Groups decide first: the neighbour runs in unit ce-lab04 under system.slice; work.py runs in your SSH session under user.slice. The cpu controller is enabled and both slices have cpu.weight 100, so contended CPU is split between the slices first. nice only ranks tasks inside the same group.
+        Both workloads use CPU 0. The neighbour runs in ce-lab04 with a finite runtime.
+        Keep the same job and CPU placement in each phase.
   predict: >-
-    Rank the mean iteration time of baseline, contention, 20% quota, nice 19 and recovered runs before you measure them.
+    Rank the job time with no competitor, an unrestricted competitor and a competitor capped
+    at 20%. Explain your prediction.
   steps:
     - >-
-      Confirm CPU 0 is allowed (taskset -pc $$); run work.py pinned to CPU 0 three times as the baseline.
+      Run the job three times without the neighbour to establish normal variation.
     - >-
-      Start the stress-ng neighbour on CPU 0 in unit ce-lab04, rerun work.py, and read /proc/pressure/cpu and vmstat's r column.
+      Add the bounded neighbour on CPU 0 and rerun the job; observe CPU waiting.
     - >-
-      Repeat with CPUQuota=20% on ce-lab04; read cpu.max and the cpu.stat throttling counters.
+      Repeat with CPUQuota=20% on the neighbour; record job time and cpu.stat.
     - >-
-      Repeat with the neighbour at nice -n 19 and no quota.
-    - >-
-      Stop ce-lab04, rerun work.py, and compare all mean iteration times.
+      Stop the neighbour and rerun the job. Compare the mean times with baseline.
   answer_with: >-
-    Mean iteration time per run, CPU PSI and vmstat during contention, and rising nr_throttled/throttled_usec under the quota. Explain the difference between a relative priority (nice) and a hard cap (quota).
-solution: 'Run the Lab 4 baseline, contention, and 20 percent quota cases on one allowed CPU, retaining iteration timings, PSI and cpu.stat.'
-verify_note: 'CPU affinity and CPU pressure metrics are available and the ce-lab04 unit is stopped.'
+    Compare the measured job times and quota counters. Explain how throttling the competitor
+    changes waiting for CPU; mark a run inconclusive if the competitor stopped too early.
+solution: >-
+  An unrestricted neighbour competes for CPU time. Capping it should leave more time for
+  work.py, though the measured gain depends on scheduling. cpu.max shows the configured
+  cap; cpu.stat shows throttling. Recovery toward baseline strengthens the contention explanation.
+  A run that outlasts the neighbour mixes contention with recovery and cannot support the
+  comparison.
+verify_note: >-
+  ce-lab04 is stopped and the final job timing is recorded.
 commands:
   - name: Choose an allowed CPU
     where: VM terminal 1
     run: !unsafe |
       cd ~/labs/lab04
       taskset -pc $$
+      # If CPU 0 is not allowed, replace every -c 0 below with one allowed CPU.
     expect: >-
       The commands below use CPU 0. If CPU 0 is not listed, change every -c 0.
   - name: Record the baseline three times
@@ -71,11 +74,13 @@ commands:
       sudo systemd-run --unit=ce-lab04 --collect -p RuntimeMaxSec=45s \
         taskset -c 0 stress-ng --cpu 1 --timeout 40s
       taskset -c 0 python3 work.py | tee loaded.txt
+      systemctl is-active --quiet ce-lab04 || echo 'Inconclusive: the neighbour ended before the measurement finished.'
       cat /proc/pressure/cpu
       vmstat 1 5
       sudo systemctl stop ce-lab04
     expect: >-
-      Iteration times rise; CPU PSI "some" rises; vmstat shows runnable tasks (r) above 1.
+      Compare iteration time with baseline. PSI and vmstat provide supporting waiting measurements;
+      neither alone proves which task caused the slowdown.
   - name: Cap the neighbour at 20 percent and read throttling counters
     where: VM terminal 1
     run: !unsafe |
@@ -85,10 +90,31 @@ commands:
         taskset -c 0 stress-ng --cpu 1 --timeout 40s
       taskset -c 0 python3 work.py | tee quota.txt
       path=$(systemctl show ce-lab04 -p ControlGroup --value)
-      sudo cat "/sys/fs/cgroup$path/cpu.max" "/sys/fs/cgroup$path/cpu.stat"
+      if systemctl is-active --quiet ce-lab04 && [ -n "$path" ]; then
+        sudo cat "/sys/fs/cgroup$path/cpu.max" "/sys/fs/cgroup$path/cpu.stat"
+      else
+        echo 'Inconclusive: the neighbour ended before the measurement finished.'
+      fi
       sudo systemctl stop ce-lab04
     expect: >-
-      cpu.max is 20000 100000; nr_throttled and throttled_usec are above 0.
+      cpu.max should show a quota/period ratio of 0.2, and cpu.stat should show throttling.
+      If the neighbour ends before measurement finishes, shorten work.py's iteration count
+      and repeat every phase with that same workload.
+  - name: Recover and repeat the baseline
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab04
+      sudo systemctl stop ce-lab04 2>/dev/null || true
+      while systemctl list-units --all --plain --no-legend ce-lab04.service | grep -q .; do sleep 1; done
+      taskset -c 0 python3 work.py | tee recovered.txt
+      for f in baseline-1.txt baseline-2.txt baseline-3.txt loaded.txt quota.txt recovered.txt; do
+        awk -v f="$f" '{s+=$2} END {printf "%-15s mean=%.4fs\n", f, s/NR}' "$f"
+      done
+optional_explanation: >-
+  Optional: compare nice 19 with the quota. Nice is a relative scheduling preference, not
+  a CPU ceiling; cgroup scheduling can limit its effect. Run after the core comparison in
+  the same VM shell.
+optional_commands:
   - name: Contrast relative priority (nice) with the hard quota
     where: VM terminal 1
     run: !unsafe |
@@ -98,19 +124,10 @@ commands:
         nice -n 19 taskset -c 0 stress-ng --cpu 1 --timeout 40s
       taskset -c 0 python3 work.py | tee nice.txt
       sudo systemctl stop ce-lab04
-  - name: Recover and repeat the baseline
-    where: VM terminal 1
-    run: !unsafe |
-      cd ~/labs/lab04
-      sudo systemctl stop ce-lab04 2>/dev/null || true
-      while systemctl list-units --all --plain --no-legend ce-lab04.service | grep -q .; do sleep 1; done
-      taskset -c 0 python3 work.py | tee recovered.txt
-      for f in baseline-1.txt loaded.txt quota.txt nice.txt recovered.txt; do
-        awk -v f="$f" '{s+=$2} END {printf "%-15s mean=%.4fs\n", f, s/NR}' "$f"
-      done
+      awk '{s+=$2} END {printf "nice mean=%.4fs\n", s/NR}' nice.txt
 setup:
   - name: Create the finite CPU workload
-    command: |
+    command: !unsafe |
       mkdir -p "$HOME/labs/lab04"
       cat > "$HOME/labs/lab04/work.py" <<'PY'
       import time
@@ -121,10 +138,11 @@ setup:
       PY
 verify:
   - name: Verify CPU experiment prerequisites
-    command: |
+    command: !unsafe |
       taskset -pc $$ >/dev/null
       test -r /proc/pressure/cpu
       ! systemctl is-active --quiet ce-lab04.service
 reset:
   - name: Stop the exact CPU transient unit
-    command: sudo systemctl stop ce-lab04.service 2>/dev/null || true
+    command: !unsafe |
+      sudo systemctl stop ce-lab04.service 2>/dev/null || true

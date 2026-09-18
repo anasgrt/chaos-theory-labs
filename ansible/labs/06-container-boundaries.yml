@@ -1,52 +1,95 @@
-title: 'Lab 06 — Container resource boundaries'
+title: "Lab 06 — Separate containers can share a full filesystem"
 concept: >-
-  Container isolation is specific to each resource. Separate process or filesystem views do not automatically reserve CPU, RAM, task slots or shared-volume space. A limit also does not guarantee application progress: preventing one workload from consuming too much can make that workload slower or cause it to fail. The experiment tests those different enforcement outcomes.
+  Containers can have separate process and filesystem views while still mounting the same
+  underlying storage. A container boundary does not create additional capacity for that
+  shared mount. Both writers consume the same finite pool of free space.
 mechanism: >-
-  A CPU quota throttles execution, a memory limit can lead to allocation failure or an OOM kill, and a PID limit blocks creation of additional tasks, including threads. Shared storage needs separate capacity controls. The two containers here mount one small tmpfs, a memory-backed filesystem: filling it consumes the same space both depend on, regardless of their separate container identities.
+  When the shared filesystem is full, a write can fail with No space left on device even
+  in a newly started container. Freeing space and retrying the same write tests whether
+  shared capacity caused the failure. This lab uses a small tmpfs to demonstrate capacity
+  exhaustion; it does not measure physical disk performance.
 task:
   question: >-
-    Docker gives each container its own view of the system. Which resources does a container limit actually constrain (CPU, memory, process count, shared storage), and what failure does each limit produce?
+    Why can one container prevent another from writing to a shared filesystem?
   brief:
+    theory_source: >-
+      chaos-theory.md: §5.4 and Experiment Card 5.1. The tmpfs fixture adapts the shared-storage
+      example.
     theory:
       - >-
-        See vs. use (Ch. 5 §5.9, Key Takeaway 3): namespaces control what a container can SEE; cgroups control what it can USE. A private filesystem or process list reserves no CPU, RAM or disk, and "you must understand and be able to observe the limits that your applications are running with" (§5.5.2).
+        Containers can have separate process and filesystem views while still mounting the
+        same underlying storage. A container boundary does not create additional capacity
+        for that shared mount. Both writers consume the same finite pool of free space.
       - >-
-        CPU: hard vs. soft limits (Ch. 5 §5.5.2, Card 5.3): --cpus is a hard limit (quota per period); --cpu-shares is a relative weight enforced only when there is not enough CPU for everyone. --cpus=0.5 sets period 100000 and quota 50000: one CPU sat at ~49% and cpu.stat showed nr_throttled 304 of 311 periods. A CPU-limited container reports running out of CPU nowhere except cpu.stat.
-      - >-
-        Memory (Card 5.4): --memory is enforced against resident memory, and enforcement arrives as a kill, not an error your app can handle. The book's 512 MB stress run finished inside a 128 MB limit; the editorial note marks that cause unresolved and says Docker memory and swap configuration must be considered — which is why a clean test disables swap.
-      - >-
-        Enforcement under pressure (Card 5.4): a fork bomb pushed memory.usage_in_bytes slightly above the limit, showed ~89% system CPU, printed "bash: fork: Cannot allocate memory" inside the container, and logged "Memory cgroup out of memory: Kill process". Running the OOM Killer against a fork bomb costs a non-negligible amount of CPU.
-      - >-
-        Process count (Ch. 3 §3.2, cheat sheet §7): threads and PIDs are software resources with their own utilization, saturation and errors. Unbounded process creation is what the fork bomb exploits; a task limit (Docker --pids-limit, not covered in the book) makes new processes and threads fail instead.
-      - >-
-        Shared storage (Ch. 5 §5.4, Card 5.1): container filesystems are overlay2 layers on the same host filesystem — the same inode is visible inside and outside. One container filled the 32 GB disk ("No space left on device") and the control container failed in the same seconds; stopping the writer freed the space.
-      - >-
-        Why storage is rarely limited (Card 5.1, Ch. 5 §5.12.2): --storage-opt size needs an xfs data root mounted with pquota under overlay2, so many systems do not limit it at all. A full disk can also stop Docker restarting the crashed app, and containers "might give a false sense of safety" (cheat sheet §13, Unisolated resource).
+        When the shared filesystem is full, a write can fail with No space left on device
+        even in a newly started container. Freeing space and retrying the same write tests
+        whether shared capacity caused the failure. This lab uses a small tmpfs to demonstrate
+        capacity exhaustion; it does not measure physical disk performance.
     in_this_lab:
       - >-
-        --cpus=0.5 sets cpu.max to "50000 100000"; docker stats shows about 50%. The cg helper prints the container's cgroup directory.
-      - >-
-        --memory=64m with --memory-swap=64m allows no swap, so the allocator is killed: exit 137, State.OOMKilled true and a kernel OOM line. 137 alone would not prove it; the other two signals do.
-      - >-
-        --pids-limit=20 counts every task in the container, including Python itself. At the limit, fork fails with EAGAIN, which Python raises as BlockingIOError.
-      - >-
-        The 32 MiB tmpfs is one filesystem mounted into both containers. Filling it gives "No space left on device" (ENOSPC) to every writer until the file is deleted. It shows shared capacity, not disk latency or Docker writable-layer quotas.
+        Two disposable containers mount the same 32 MiB tmpfs. Only this small lab mount
+        is filled.
   predict: >-
-    For --cpus=0.5, --memory=64m, --pids-limit=20 and a shared 32 MiB tmpfs: the symptom you expect and where the evidence will appear.
+    Will a fresh container be able to write after another fills their shared mount?
   steps:
     - >-
-      Run a 30 s busy loop with --cpus=0.5; read cpu.max, cpu.stat and docker stats.
+      Write one MiB to the empty shared mount to establish the baseline.
     - >-
-      Run an allocator with --memory=64m --memory-swap=64m; record the exit code, State.OOMKilled and the kernel OOM line.
+      Fill the mount from one container and repeat the same probe from another.
     - >-
-      Try to start 40 child processes with --pids-limit=20; record where and how it fails.
-    - >-
-      Mount a 32 MiB tmpfs, fill it from one container, write from a second container, then delete the file and retry.
+      Delete the filling file, repeat the probe and unmount the filesystem.
   answer_with: >-
-    One observed limit with its evidence per resource, and a storage probe that fails while full and succeeds after cleanup. Explain why two separate containers still failed on the shared tmpfs.
-solution: 'Run each finite Docker limit from Lab 6, inspect its matching evidence, then mount/fill/recover the exact 32 MiB tmpfs.'
-verify_note: 'No ce-lab06 containers remain and the shared path is not mounted.'
+    Compare the identical write before filling, while full and after freeing space. Explain
+    which resource the two containers share.
+solution: >-
+  The new container has a separate process environment but uses the same full tmpfs. Its
+  write therefore fails until the filling file is removed. Success before filling and after
+  freeing space supports shared-capacity exhaustion as the explanation. Container separation
+  alone does not protect this shared resource.
+verify_note: >-
+  No ce-lab06 test container remains and the shared tmpfs is unmounted.
 commands:
+  - name: Mount the small shared filesystem and prove a write works
+    where: VM terminal 1
+    run: !unsafe |
+      mkdir -p ~/labs/lab06/shared
+      sudo mount -t tmpfs -o size=32m tmpfs "$HOME/labs/lab06/shared"
+      docker run --rm -v "$HOME/labs/lab06/shared:/data" ubuntu:24.04 sh -c 'dd if=/dev/zero of=/data/probe bs=1M count=1'
+      sudo rm -f ~/labs/lab06/shared/probe
+    expect: >-
+      The one-MiB write succeeds before space is consumed.
+  - name: Fill it from one container and repeat the same write from another
+    where: VM terminal 1
+    run: !unsafe |
+      docker run --rm -v "$HOME/labs/lab06/shared:/data" ubuntu:24.04 sh -c 'dd if=/dev/zero of=/data/full bs=1M count=40; df -h /data'
+      docker run --rm -v "$HOME/labs/lab06/shared:/data" ubuntu:24.04 sh -c 'dd if=/dev/zero of=/data/probe bs=1M count=1'
+    expect: >-
+      The filling write and the second container’s probe reach No space left on device.
+  - name: Free the space, repeat the write, and unmount
+    where: VM terminal 1
+    run: !unsafe |
+      sudo rm -f ~/labs/lab06/shared/full ~/labs/lab06/shared/probe
+      docker run --rm -v "$HOME/labs/lab06/shared:/data" ubuntu:24.04 sh -c 'dd if=/dev/zero of=/data/probe bs=1M count=1'
+      sudo rm -f ~/labs/lab06/shared/probe
+      sudo umount ~/labs/lab06/shared
+    expect: >-
+      The same probe succeeds after capacity is freed.
+setup:
+  - name: Create the Lab 06 shared-path mountpoint
+    command: !unsafe |
+      mkdir -p "$HOME/labs/lab06/shared"
+verify:
+  - name: Verify the clean container-limit baseline
+    command: !unsafe |
+      test -z "$(docker ps -aq --filter 'name=^/ce-lab06-')"
+      ! mountpoint -q "$HOME/labs/lab06/shared"
+reset:
+  - name: Remove only Lab 06 containers and tmpfs
+    command: !unsafe |
+      docker ps -aq --filter 'name=^/ce-lab06-' | xargs -r docker rm -f
+      if mountpoint -q "$HOME/labs/lab06/shared"; then sudo umount "$HOME/labs/lab06/shared"; fi
+      rm -f "$HOME/labs/lab06/shared/full" "$HOME/labs/lab06/shared/probe"
+optional_commands:
   - name: Read a hard CPU cap
     where: VM terminal 1
     run: !unsafe |
@@ -89,33 +132,7 @@ commands:
       docker rm ce-lab06-pids
     expect: >-
       A BlockingIOError (Resource temporarily unavailable) with fewer than 20 children.
-  - name: Exhaust and recover a shared 32 MiB tmpfs
-    where: VM terminal 1
-    run: !unsafe |
-      mkdir -p ~/labs/lab06/shared
-      sudo mount -t tmpfs -o size=32m tmpfs "$HOME/labs/lab06/shared"
-      docker run --rm -v "$HOME/labs/lab06/shared:/data" ubuntu:24.04 \
-        sh -c 'dd if=/dev/zero of=/data/full bs=1M count=40; df -h /data'
-      docker run --rm -v "$HOME/labs/lab06/shared:/data" ubuntu:24.04 \
-        sh -c 'dd if=/dev/zero of=/data/probe bs=1M count=1'
-      sudo rm -f ~/labs/lab06/shared/full ~/labs/lab06/shared/probe
-      docker run --rm -v "$HOME/labs/lab06/shared:/data" ubuntu:24.04 \
-        sh -c 'dd if=/dev/zero of=/data/probe bs=1M count=1'
-      sudo rm -f ~/labs/lab06/shared/probe
-      sudo umount ~/labs/lab06/shared
-    expect: >-
-      The first writer stops with "No space left on device" at 32M/100%; the second container's probe also fails; after deleting the file the probe succeeds.
-setup:
-  - name: Create the Lab 06 shared-path mountpoint
-    command: mkdir -p "$HOME/labs/lab06/shared"
-verify:
-  - name: Verify the clean container-limit baseline
-    command: |
-      test -z "$(docker ps -aq --filter 'name=^/ce-lab06-')"
-      ! mountpoint -q "$HOME/labs/lab06/shared"
-reset:
-  - name: Remove only Lab 06 containers and tmpfs
-    command: |
-      docker ps -aq --filter 'name=^/ce-lab06-' | xargs -r docker rm -f
-      if mountpoint -q "$HOME/labs/lab06/shared"; then sudo umount "$HOME/labs/lab06/shared"; fi
-      rm -f "$HOME/labs/lab06/shared/full" "$HOME/labs/lab06/shared/probe"
+optional_explanation: >-
+  Optional: compare CPU, memory and task limits. CPU quotas throttle execution; memory exhaustion
+  may trigger OOM; a task cap refuses new processes. Record the different symptom and evidence
+  in each case. These cgroup limits do not establish separate capacity for a shared filesystem.

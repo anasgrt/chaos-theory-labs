@@ -1,60 +1,64 @@
-title: 'Lab 02 — Signals and memory-limit kills'
+title: "Lab 02 — Prove why a process was killed"
 concept: >-
-  Signals notify processes of events or request termination. SIGTERM gives an application an opportunity to handle shutdown and release resources; SIGKILL cannot be caught or ignored. Bash normally reports a fatal signal as 128 plus its number: 143 for SIGTERM and 137 for SIGKILL. These values identify how execution ended, not who sent the signal or why.
+  SIGKILL stops a process without allowing a handler to run. Bash commonly reports death
+  by SIGKILL as 137: 128 plus signal number 9. That status describes how the process ended,
+  not why the signal was sent. A program can also explicitly return 137, so the number alone
+  cannot establish the cause.
 mechanism: >-
-  A cgroup memory limit constrains a group independently of total free host memory. When its memory demand cannot be satisfied through reclaim, an out-of-memory (OOM) kill may terminate a member. Separately, virtual address space describes mappings, while resident set size (RSS) describes pages currently in RAM. The mmap comparison delays touching pages so you can observe these two quantities diverge.
+  A cgroup memory limit restricts a group even when the VM has free memory elsewhere. If
+  its memory demand cannot be satisfied, the kernel may kill a process to reclaim memory.
+  Match the unit result and kernel log to the same process and time window to distinguish
+  that event from an ordinary kill or the runtime limit expiring.
 task:
   question: >-
-    A process exited with status 137. Can you prove it was an out-of-memory kill? And does a large memory mapping actually consume RAM?
+    Why is exit status 137 insufficient to diagnose an OOM kill?
   brief:
+    theory_source: >-
+      chaos-theory.md: §2.3; optional memory comparison: §3.3.4 and Experiment Card 5.4
+      (with its qualification).
     theory:
       - >-
-        Exit codes (Ch. 2 §2.3.1): a terminating process returns a number; many commands use 0 for success and 1 for failure. Codes in the 128–192 range decode as 128 + n, where n is the kill-signal number, and kill -L lists the numbers: 136 = 128 + 8 = SIGFPE (an erroneous arithmetic operation).
+        SIGKILL stops a process without allowing a handler to run. Bash commonly reports
+        death by SIGKILL as 137: 128 plus signal number 9. That status describes how the
+        process ended, not why the signal was sent. A program can also explicitly return
+        137, so the number alone cannot establish the cause.
       - >-
-        Signals in practice (Ch. 2 §2.3.2): pkill sleep sends the default signal, SIGTERM, and echo $? prints 143 = 128 + 15; pkill -9 sends SIGKILL and prints 137 = 128 + 9.
-      - >-
-        Exit codes are a convention, not proof (Ch. 2 §2.3.1 and its editorial correction): a program can return any code, and nothing stops someone running kill -8 to produce the arithmetic-error code. The correction: 143 is SIGTERM, 137 is SIGKILL, and the OOM killer sends SIGKILL, so it cannot explain 143. A status alone does not establish who sent a signal or prove an OOM event; correlate kernel logs.
-      - >-
-        OOM Killer (Ch. 2 §2.3.3): under low memory it scores every process with heuristics (niceness, how recent it is, how much memory it uses) and kills the winner. The forensic step is the kernel log: "Out of memory: Kill process … score …", "Killed process … anon-rss" and "oom_reaper: reaped process", plus a task table with oom_score_adj.
-      - >-
-        Three ways a process dies (Ch. 2 §2.3.3): it did something illegal (128 + n for the faulting signal), something killed it explicitly (128 + n for the sent signal), or the OOM Killer chose it (it looks like a kill; the truth is in dmesg).
-      - >-
-        cgroup memory limits (Ch. 5 §5.5.2, Card 5.4): a memory cgroup has a hard limit, and a group that exceeds it meets the cgroup OOM Killer ("Memory cgroup out of memory: Kill process") even when the host has free RAM. Enforcement arrives as a kill, not as an error your app can handle; Docker memory and swap configuration must be considered (Ch. 5 editorial note).
-      - >-
-        Virtual vs. resident memory (Card 5.4, Ch. 3 §3.3.4): VIRT is mapped address space; RES is memory actually in RAM. "Just allocating the memory doesn't trigger the OOM Killer"; the book's stress run showed VIRT 528152 KiB but RES 127400 KiB under a 128 MB limit. The editorial note marks the cause of that run unresolved, so treat residency, not allocation, as what the limit counts.
+        A cgroup memory limit restricts a group even when the VM has free memory elsewhere.
+        If its memory demand cannot be satisfied, the kernel may kill a process to reclaim
+        memory. Match the unit result and kernel log to the same process and time window
+        to distinguish that event from an ordinary kill or the runtime limit expiring.
     in_this_lab:
       - >-
-        wait "$victim"; echo $? reads the status of that exact background process. The SIGFPE is sent deliberately with os.kill, so it demonstrates the 128 + n rule, not an arithmetic bug.
-      - >-
-        ce-lab02 is a transient systemd unit with MemoryMax=128M, MemorySwapMax=0 and RuntimeMaxSec=20s. A memory kill shows as result 'oom-kill' in the unit log plus a kernel "Memory cgroup out of memory ... Killed process" line; reaching RuntimeMaxSec would show result 'timeout' instead.
-      - >-
-        systemd-oomd (a userspace killer) is inactive on this VM, so the kill should come from the kernel. Collect logs with --since the recorded start time so older entries do not mislead you.
-      - >-
-        pages.py creates a 256 MiB anonymous mmap. The kernel supplies physical pages only when each page is first written. ps prints VSZ and RSS in KiB, so 256 MiB is about 262144 KiB.
+        The allocator runs only in ce-lab02, with 128 MiB memory, no swap and a 20-second
+        runtime bound.
   predict: >-
-    The exit statuses for SIGTERM, SIGKILL and SIGFPE; whether a 128 MiB-bounded allocator dies before its 20 s runtime bound; when RSS grows for a 256 MiB mmap.
+    Will a deliberate SIGKILL and a memory-limit kill have different exit statuses? Which
+    evidence can distinguish them?
   steps:
     - >-
-      Send TERM and KILL to a sleep and raise SIGFPE in Python; record each exit status.
+      Record the status of the deliberately killed process.
     - >-
-      Run an allocator in transient unit ce-lab02 with MemoryMax=128M, MemorySwapMax=0 and RuntimeMaxSec=20s.
+      Run the memory-limited allocator and collect its unit and kernel logs.
     - >-
-      For the same time window, collect the unit log, the kernel OOM line and any systemd-oomd log.
-    - >-
-      Map 256 MiB with mmap, then touch every page; sample VSZ and RSS every second.
+      Match the termination to its logged cause, then stop the allocator if needed.
   answer_with: >-
-    The three exit statuses, unit plus kernel evidence of the OOM kill, and a VSZ/RSS timeline. Explain why 137 alone is not proof of an OOM kill.
-solution: 'Follow Lab 2: compare TERM/KILL/FPE, run the bounded ce-lab02 unit, then use pages.py to compare VSZ and RSS.'
-verify_note: 'The cgroup v2 memory controller is available and no ce-lab02 transient unit remains active.'
+    Compare the known SIGKILL with the allocator result. Cite the matching log that identifies
+    the allocator’s cause; status 137 alone is not enough.
+solution: >-
+  The allocator should trigger a cgroup OOM kill before its runtime bound. Status 137 is
+  consistent with SIGKILL, but only the matching memory-kill evidence explains why. If the
+  logs show a runtime timeout or a userspace kill, report that cause instead.
+verify_note: >-
+  The allocator is stopped and its termination evidence has been recorded.
 commands:
-  - name: Compare TERM, KILL and FPE exit statuses (interactive Bash, no set -e)
+  - name: Record a deliberate SIGKILL
     where: VM terminal 1
     run: !unsafe |
-      sleep 60 & victim=$!; kill -TERM "$victim"; wait "$victim"; echo "TERM=$?"
-      sleep 60 & victim=$!; kill -KILL "$victim"; wait "$victim"; echo "KILL=$?"
-      python3 -c 'import os,signal; os.kill(os.getpid(),signal.SIGFPE)'; echo "FPE=$?"
+      python3 -c 'import os,signal; os.kill(os.getpid(),signal.SIGKILL)'
+      echo "deliberate KILL exit=$?"
     expect: >-
-      TERM=143, KILL=137, FPE=136.
+      Bash normally reports 137. Here you know the cause because the program deliberately
+      sent SIGKILL.
   - name: Cause a cgroup-bounded OOM and collect unit plus kernel evidence
     where: VM terminal 1
     run: !unsafe |
@@ -67,7 +71,25 @@ commands:
       sudo journalctl -k --since "$since" --no-pager | grep -iE 'oom|killed process'
       sudo journalctl -u systemd-oomd --since "$since" --no-pager
     expect: >-
-      The unit fails before the 20 s bound, with oom-kill in the unit log and a matching kernel line. An oomd entry means userspace acted instead.
+      The unit fails before the 20 s bound, with oom-kill in the unit log and a matching
+      kernel line. An oomd entry means userspace acted instead.
+  - name: Stop the allocator if it remains active
+    where: VM terminal 1
+    run: !unsafe |
+      sudo systemctl stop ce-lab02.service 2>/dev/null || true
+optional_explanation: >-
+  Optional: compare other signal statuses, then virtual and resident memory. These examples
+  extend the process-forensics lesson; they are not needed to distinguish a deliberate kill
+  from OOM.
+optional_commands:
+  - name: Compare TERM, KILL and FPE exit statuses (interactive Bash, no set -e)
+    where: VM terminal 1
+    run: !unsafe |
+      sleep 60 & victim=$!; kill -TERM "$victim"; wait "$victim"; echo "TERM=$?"
+      sleep 60 & victim=$!; kill -KILL "$victim"; wait "$victim"; echo "KILL=$?"
+      python3 -c 'import os,signal; os.kill(os.getpid(),signal.SIGFPE)'; echo "FPE=$?"
+    expect: >-
+      TERM=143, KILL=137, FPE=136.
   - name: Compare virtual size (VSZ) with touched memory (RSS)
     where: VM terminal 1
     run: !unsafe |
@@ -94,12 +116,14 @@ commands:
       kill -0 "$victim" 2>/dev/null && kill "$victim"
 setup:
   - name: Create the Lab 02 workspace
-    command: mkdir -p "$HOME/labs/lab02"
+    command: !unsafe |
+      mkdir -p "$HOME/labs/lab02"
 verify:
   - name: Verify memory-control readiness
-    command: |
+    command: !unsafe |
       grep -qw memory /sys/fs/cgroup/cgroup.controllers
       ! systemctl is-active --quiet ce-lab02.service
 reset:
   - name: Stop the exact bounded unit
-    command: sudo systemctl stop ce-lab02.service 2>/dev/null || true
+    command: !unsafe |
+      sudo systemctl stop ce-lab02.service 2>/dev/null || true

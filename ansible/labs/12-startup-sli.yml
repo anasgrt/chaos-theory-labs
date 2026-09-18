@@ -1,115 +1,84 @@
-title: 'Lab 12 — Automated startup checks'
+title: "Lab 12 — Test whether the checker detects failure"
 concept: >-
-  An SLI measures a service outcome; an SLO sets a target for that measurement over a stated scope and window. This lab measures time from workload creation until an HTTP probe succeeds. That includes platform startup work, not just application execution. A repeated check samples variability, but five successful samples cannot establish a long-term availability or latency guarantee.
+  Startup is useful only when the requested workload can serve. Timing an HTTP response
+  through its Service includes more of that path than checking whether the Pod is Running.
+  The result is one service-level measurement, not proof of long-term reliability.
 mechanism: >-
-  The loop creates a disposable workload, starts timing, probes its exposed endpoint, records the result and removes its objects before repeating. Scheduling, image retrieval, startup and routing can all affect the duration. A deliberately delayed server acts as a known failing case to validate the checker. Cleanup prevents an old endpoint from producing false success; timestamps expose a checker that has stopped reporting.
+  A checker that only sees healthy runs might be wrong. Introduce a known delay beyond its
+  30-second budget, then restore the healthy version. Deleting the previous workload prevents
+  it from answering for the next test. The last-run timestamp distinguishes a recent result
+  from one left by a stopped checker.
 task:
   question: >-
-    Can a script reliably measure "a new Pod serves HTTP within 30 seconds", and does it actually detect a startup that is too slow?
+    How do you show that a startup checker detects a missed deadline and subsequent recovery?
   brief:
+    theory_source: >-
+      chaos-theory.md: §11.2 and Experiment Card 11.2.
     theory:
       - >-
-        One run proves one run (Ch. 11 §11.2): "a single counterexample is enough to prove a hypothesis wrong, but absence of such a counterexample doesn't prove anything." A pass shows only that the system behaved as expected during that experiment, not under peak traffic, other usage or other data.
+        Startup is useful only when the requested workload can serve. Timing an HTTP response
+        through its Service includes more of that path than checking whether the Pod is
+        Running. The result is one service-level measurement, not proof of long-term reliability.
       - >-
-        Run it continuously (Ch. 11 §11.2): the book's PaaS promises a 1-minute deploy in its SLA and measured 30 s once — "Or does it?" Run the experiment continuously, on a system in a different state each time, and alert on an internal SLO more aggressive than the contractual SLA so you are warned before trouble.
-      - >-
-        SLI, SLO, SLA (Ch. 1 §1.2.1): an SLI puts a number on an event, an SLO is the agreed target range for it, an SLA is an SLO enforced by contract with a penalty. Work backward: business goal → SLO → a condition you can test continuously.
-      - >-
-        Why pod start time is unpredictable (Ch. 11 §11.2): image download (remote, prone to failure and retries), preparing dependencies such as volumes and configuration, and actually running the containers on a busy host all take variable time. Phases are pending, running, succeeded, failed and unknown; "you can't easily predict how long it's going to take", so test continuously and alert near the threshold.
-      - >-
-        The continuous check (Card 11.2): create a pod and a service → wait 30 seconds → call the service and fail if it is unavailable → remove both → repeat. Steady state is N/A because it measures a transition, no failure was injected, and the pod went Pending → ContainerCreating → Running in ~1 s.
-      - >-
-        Make it realistic (Card 11.2, Ch. 12 §12.1.1): use images that resemble what the platform runs, several of them, and imagePullPolicy: Always to test the cold-pull worst case — the scheduler prefers nodes that already hold the image because pulling is slow and failure-prone. The same pattern verifies pod-healing and scaling SLOs.
-      - >-
-        Continuous means recorded (Ch. 11 connections, cheat sheet §6–§7): an experiment that runs forever needs metrics and alerting, not a UI — metrics in a time-series database, not a dashboard refreshed by hand. Ask whether a result could be an artefact of the tooling, and whether the check should become continuous at all.
+        A checker that only sees healthy runs might be wrong. Introduce a known delay beyond
+        its 30-second budget, then restore the healthy version. Deleting the previous workload
+        prevents it from answering for the next test. The last-run timestamp distinguishes
+        a recent result from one left by a stopped checker.
     in_this_lab:
       - >-
-        startup.yaml creates Pod startup-check (python:3.12-slim running http.server on 8080, restartPolicy Never, HTTP readiness probe every 1 s) and a NodePort Service on 30090. The image is preloaded into the kind nodes with imagePullPolicy IfNotPresent, so no download is timed.
-      - >-
-        The Service routes only to Ready pods, so a probe succeeds only after the server listens and readiness passes. run.sh probes every 0.5 s for up to 30 s and records elapsed time in whole seconds (date +%s).
-      - >-
-        Each run writes ce_start_success, ce_start_seconds and ce_last_run_timestamp_seconds to a temporary file and renames it to metrics/start.prom, so a reader never sees half a file. An old timestamp reveals a checker that stopped.
-      - >-
-        The EXIT trap deletes the objects on normal exit and on Ctrl-C. Python as PID 1 in the container ignores SIGTERM, so cleanup uses --grace-period=1 instead of waiting 30 s.
-      - >-
-        sleep 45 before the server starts exceeds the 30 s budget, so a correct checker reports success=0.
+        Setup prepares the checker and manifest. Each invocation creates a fresh workload,
+        waits up to its 30-second budget, records a result and cleans up. The image is preloaded.
   predict: >-
-    Success and elapsed seconds for the healthy manifest, and the result when the container sleeps 45 s before serving.
+    Predict success and elapsed time for normal startup, a 45-second delay, and the restored
+    workload.
   steps:
     - >-
-      Save run.sh: five cycles of apply startup.yaml, probe NodePort 30090 for up to 30 s, write metrics, delete.
+      Run one healthy trial; record HTTP startup time and the checker’s exit status.
     - >-
-      Run it against the healthy manifest; confirm no startup-check Pod or Service remains.
+      Add the 45-second startup delay and repeat against the same 30-second budget.
     - >-
-      Change the command to sleep 45; exec python -m http.server 8080 and run it again.
-    - >-
-      Restore the good manifest and rerun; press Ctrl-C mid-run once and confirm cleanup still happens.
+      Restore the manifest and repeat once more; confirm the test objects are removed.
   answer_with: >-
-    Per-run success and elapsed time for healthy, delayed and restored runs, the metrics/start.prom contents, and NotFound for the startup-check objects. Explain why five runs prove the checker works but do not prove an SLO.
-solution: 'After Lab 10, use the prepared startup manifest and follow Lab 12 to run five healthy cycles, then prove detection using the deliberately delayed command.'
-verify_note: 'The chaos cluster is reachable, the startup manifest is present, and no stale startup-check objects exist.'
+    Give the three results and explain why an HTTP deadline miss differs from a checker
+    that exits without recording a trial.
+solution: >-
+  The delayed workload should miss the 30-second budget and be reported as unsuccessful.
+  Restored healthy runs check that the fault was removed. These trials validate those checker
+  paths; they do not establish an SLO for all future startups.
+verify_note: >-
+  The healthy manifest is restored and no startup-check Pod or Service remains.
 commands:
-  - name: Save the finite startup-check loop with cleanup
-    where: VM terminal 1
-    run: !unsafe |
-      cd ~/labs/lab12
-      cat > run.sh <<'SH'
-      #!/usr/bin/env bash
-      set -u
-      source "$HOME/labs/common.sh"
-      cd "$HOME/labs/lab12" || exit 1
-      NODE_IP=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' chaos-control-plane) || exit 1
-      # PID 1 in the pod ignores SIGTERM; a 1 s grace period keeps cleanup inside the timeouts.
-      cleanup() { k delete -f startup.yaml --ignore-not-found --wait=true --timeout=30s --grace-period=1 --request-timeout=0 >/dev/null; }
-      trap cleanup EXIT
-      trap 'exit 130' INT TERM
-      mkdir -p metrics
-      for run in $(seq 1 5); do
-        cleanup || exit 1
-        start=$(date +%s)
-        ok=0
-        k apply -f startup.yaml >/dev/null || exit 1
-        while (( $(date +%s)-start < 30 )); do
-          if curl -fs --max-time 1 -o /dev/null "http://$NODE_IP:30090/"; then ok=1; break; fi
-          sleep 0.5
-        done
-        elapsed=$(( $(date +%s)-start ))
-        (( elapsed <= 30 )) || ok=0
-        printf 'run=%s success=%s elapsed=%ss\n' "$run" "$ok" "$elapsed"
-        printf 'ce_start_success %s\nce_start_seconds %s\nce_last_run_timestamp_seconds %s\n' \
-          "$ok" "$elapsed" "$(date +%s)" > metrics/start.prom.tmp
-        mv metrics/start.prom.tmp metrics/start.prom
-        k get pod startup-check -o wide
-        sleep 2
-      done
-      SH
-  - name: Predict, run five healthy cycles, confirm nothing is left behind
+  - name: Run one healthy check and confirm cleanup
     where: VM terminal 1
     run: !unsafe |
       cd ~/labs/lab12
       source ~/labs/common.sh
       bash run.sh | tee runs.txt
+      echo "checker exit=${PIPESTATUS[0]} (0 means the loop completed)"
       cat metrics/start.prom
       k get pod startup-check; k get svc startup-check
     expect: >-
-      Five lines with success=1 and a few seconds elapsed; both final gets report NotFound.
+      One result with success=1 and a few seconds elapsed; both final gets report NotFound.
+      A nonzero checker exit or no new result means the check did not complete; do not interpret
+      old metrics as a new result.
   - name: Prove the check detects a deliberately delayed startup
     where: VM terminal 1
     run: !unsafe |
       cd ~/labs/lab12
-      cp startup.yaml startup-good.yaml
-      sed -i "s|command: \[python, -m, http.server, '8080'\]|command: [sh, -c, 'sleep 45; exec python -m http.server 8080']|" startup.yaml
+      cp startup-delayed.yaml startup.yaml
       grep -n 'command:' startup.yaml
       bash run.sh | tee runs-delayed.txt
+      echo "checker exit=${PIPESTATUS[0]} (0 means the loop completed)"
     expect: >-
-      The grep shows the sleep 45 command; all five runs report success=0 after about 30 s.
-  - name: Restore the good command and confirm healthy cycles again
+      The grep shows the sleep 45 command; the run reports success=0 after about 30 s.
+  - name: Restore the healthy command and repeat the check
     where: VM terminal 1
     run: !unsafe |
       cd ~/labs/lab12
-      mv startup-good.yaml startup.yaml
+      cp startup-good.yaml startup.yaml
       grep -n 'command:' startup.yaml
       bash run.sh | tee runs-restored.txt
+      echo "checker exit=${PIPESTATUS[0]} (0 means the loop completed)"
   - name: Manual fallback if the loop was killed
     where: VM terminal 2
     run: !unsafe |
@@ -117,7 +86,7 @@ commands:
       k delete -f ~/labs/lab12/startup.yaml --ignore-not-found --grace-period=1
 setup:
   - name: Write the disposable startup-check manifest
-    command: |
+    command: !unsafe |
       kubectl --kubeconfig="$HOME/labs/chaos.kubeconfig" --context=kind-chaos get nodes >/dev/null
       mkdir -p "$HOME/labs/lab12/metrics"
       cat > "$HOME/labs/lab12/startup.yaml" <<'YAML'
@@ -141,13 +110,72 @@ setup:
         selector: {app: startup-check}
         ports: [{port: 8080, targetPort: 8080, nodePort: 30090}]
       YAML
+      cp "$HOME/labs/lab12/startup.yaml" "$HOME/labs/lab12/startup-good.yaml"
+      sed "s|command: \[python, -m, http.server, '8080'\]|command: [sh, -c, 'sleep 45; exec python -m http.server 8080']|" "$HOME/labs/lab12/startup-good.yaml" > "$HOME/labs/lab12/startup-delayed.yaml"
+      grep -q 'sleep 45' "$HOME/labs/lab12/startup-delayed.yaml"
+  - name: Prepare the startup checker
+    command: !unsafe |
+      cd ~/labs/lab12
+      cat > run.sh <<'SH'
+      #!/usr/bin/env bash
+      set -u
+      source "$HOME/labs/common.sh"
+      cd "$HOME/labs/lab12" || exit 1
+      NODE_IP=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' chaos-control-plane) || exit 1
+      # PID 1 in the pod ignores SIGTERM; a 1 s grace period keeps cleanup inside the timeouts.
+      cleanup() { k delete -f startup.yaml --ignore-not-found --wait=true --timeout=30s --grace-period=1 --request-timeout=0 >/dev/null; }
+      trap cleanup EXIT
+      trap 'exit 130' INT TERM
+      mkdir -p metrics
+      for run in $(seq 1 "${1:-1}"); do
+        cleanup || exit 1
+        start=$(date +%s)
+        ok=0
+        k apply -f startup.yaml >/dev/null || exit 1
+        while (( $(date +%s)-start < 30 )); do
+          if curl -fs --max-time 1 -o /dev/null "http://$NODE_IP:30090/"; then ok=1; break; fi
+          sleep 0.5
+        done
+        elapsed=$(( $(date +%s)-start ))
+        (( elapsed <= 30 )) || ok=0
+        printf 'run=%s success=%s elapsed=%ss\n' "$run" "$ok" "$elapsed"
+        printf 'ce_start_success %s\nce_start_seconds %s\nce_last_run_timestamp_seconds %s\n' \
+          "$ok" "$elapsed" "$(date +%s)" > metrics/start.prom.tmp
+        mv metrics/start.prom.tmp metrics/start.prom
+        k get pod startup-check -o wide
+        sleep 2
+      done
+      SH
 verify:
   - name: Verify startup-check readiness to run
-    command: |
+    command: !unsafe |
       test -s "$HOME/labs/lab12/startup.yaml"
       ! kubectl --kubeconfig="$HOME/labs/chaos.kubeconfig" --context=kind-chaos --namespace=chaos-labs get pod startup-check >/dev/null 2>&1
+      test -s "$HOME/labs/lab12/run.sh"
 reset:
   - name: Delete only startup-check resources and current metrics
-    command: |
+    command: !unsafe |
       kubectl --kubeconfig="$HOME/labs/chaos.kubeconfig" --context=kind-chaos --namespace=chaos-labs delete -f "$HOME/labs/lab12/startup.yaml" --ignore-not-found --wait=true 2>/dev/null || true
       rm -f "$HOME/labs/lab12/metrics/start.prom"
+      if [[ -f "$HOME/labs/lab12/startup-good.yaml" ]]; then cp "$HOME/labs/lab12/startup-good.yaml" "$HOME/labs/lab12/startup.yaml"; fi
+optional_explanation: >-
+  Optional: run five healthy cycles to observe variation, then interrupt another run with
+  Ctrl-C. Verify that its Pod and Service are removed. The saved metric is the last completed
+  trial; its timestamp must advance before it can represent a new result.
+optional_commands:
+  - name: Repeat healthy checks
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab12
+      bash run.sh 5 | tee runs-repeated.txt
+      echo "checker exit=${PIPESTATUS[0]}"
+      cat metrics/start.prom
+  - name: Start another run, press Ctrl-C, then inspect cleanup
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab12
+      bash run.sh
+      # Press Ctrl-C while the script is running; after it exits:
+      source ~/labs/common.sh
+      k get pod startup-check; k get svc startup-check
+      cat metrics/start.prom

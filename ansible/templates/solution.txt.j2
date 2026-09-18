@@ -1,25 +1,46 @@
 {% set lab_id = lab_definition | basename | regex_replace('-.*$', '') %}
+{% macro wrap(text) %}{{ text | wordwrap(width=78, break_long_words=false, break_on_hyphens=false) }}{% endmacro %}
 {{ selected_lab.title }}
 {{ '=' * (selected_lab.title | length) }}
 
-Solution: {{ selected_lab.solution }}
-Verify:   {{ selected_lab.verify_note }}
+THE EXPLANATION
+{{ wrap(selected_lab.solution) }}
 
-Practical commands
-------------------
-Source: ~/labs/chaos-labs.md, Lab {{ lab_id | int }} core experiment, adapted to the fixture created by setup.
-Run each block in the VM (vagrant ssh) unless its label names another place.
-"same shell" means the block reuses variables or functions from the previous block.
+RECOVERY CHECK
+{{ wrap(selected_lab.verify_note) }}
+
+COMPARE WITH YOUR OBSERVATIONS
+These are expected patterns, not guaranteed results. If your result differs,
+check the baseline, whether the fault took effect, and whether recovery passed.
+Do not replace your observation with the expected answer.
 {% for step in selected_lab.commands | default([]) %}
+{% if step.expect is defined %}
 
 [{{ loop.index }}] {{ step.name }}
+{{ wrap(step.expect) }}
+{% endif %}
+{% endfor %}
+
+Core procedure: ./ansible/run-lab.sh {{ lab_id }} question
+
+{% if selected_lab.optional_commands is defined %}
+
+OPTIONAL COMPARISON — the core lab is complete without this
+{{ wrap(selected_lab.optional_explanation) }}
+{% for step in selected_lab.optional_commands %}
+
+[Optional {{ loop.index }}] {{ step.name }}
     where: {{ step.where | default('VM terminal 1') }}
 
 {{ step.run | trim }}
 {% if step.expect is defined %}
 
-Expect: {{ step.expect }}
+Expected observation:
+{{ wrap(step.expect) }}
 {% endif %}
 {% endfor %}
 
-Fixture cleanup (Mac host, project folder): ./ansible/run-lab.sh {{ lab_id }} reset
+{% endif %}
+
+After recovery and any optional work, reset the fixture from the Mac:
+./ansible/run-lab.sh {{ lab_id }} reset

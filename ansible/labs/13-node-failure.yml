@@ -1,53 +1,56 @@
-title: 'Lab 13 — Kubelet loss versus machine loss'
+title: "Lab 13 — Losing supervision does not stop the process"
 concept: >-
-  The kubelet is the node-local agent that reconciles assigned Pods with the container runtime and reports health. Stopping it interrupts supervision and reporting but does not inherently terminate existing containers. Stopping the node removes a much broader part of the execution environment. Kubernetes must infer loss of contact, so failure detection and application recovery are separate events.
+  Kubelet supervises assigned containers and reports node status. The container runtime
+  is separate, so stopping kubelet does not inherently stop existing application processes.
+  It does stop the normal reporting and reconciliation path.
 mechanism: >-
-  Missing heartbeats lead the control plane to mark the node unhealthy or unreachable. NoExecute taints can cause Pods to be evicted after their applicable toleration period; a controller then creates replacements that still need capacity, scheduling and startup. The disconnected node's old processes may continue running. Shortening a toleration changes the eviction wait, not heartbeat detection, and does not guarantee faster end-to-end recovery.
+  The control plane first detects missing reports, then waits through applicable eviction
+  tolerations before replacing the workload. Scheduling and startup take more time. Meanwhile,
+  an API object being deleted does not prove its process stopped on the disconnected node.
+  Inspect the runtime as well as the Pod list.
 task:
   question: >-
-    If the kubelet on a worker stops, how long until Kubernetes notices, how long until node-web is replaced, and is the old container actually dead?
+    Why can Kubernetes replace a Pod while its original container is still running?
   brief:
+    theory_source: >-
+      chaos-theory.md: §§12.1.1–12.1.3 (kubelet experiment ideas).
     theory:
       - >-
-        How the control plane works (Ch. 12 §12.1.1): kube-apiserver is at the centre, and all logic lives in "asynchronous, eventually consistent loops in loosely connected components." Component failures therefore show up as staleness and latency, not as errors.
+        Kubelet supervises assigned containers and reports node status. The container runtime
+        is separate, so stopping kubelet does not inherently stop existing application processes.
+        It does stop the normal reporting and reconciliation path.
       - >-
-        Kubelet (Ch. 12 §12.1.2): the agent that starts and stops containers for the pods on its host. It takes orders from kube-apiserver, downloads images, creates your container plus a pause container, restarts crashed containers, and reports back the factual state.
-      - >-
-        Kubelet is a single point of failure per node (Ch. 12 §12.1.2): "If it crashes… no changes will be made to the containers running on that node, even though Kubernetes will happily accept your changes. They just won't ever get implemented on that node."
-      - >-
-        Detection and eviction are separate timers (Ch. 12 §12.1.2, Key Takeaway 10): when Kubelet stops reporting, the node is marked NotReady after a configurable timeout; pods are not removed immediately, and the control plane waits another configurable timeout before assigning them elsewhere. The book's 5-minute NotReady default is historical — current values are in the lab facts below.
-      - >-
-        Stale copies (Ch. 12 §12.1.2, experiment 1b): a node whose Kubelet died or is partitioned keeps "running whatever it was running before the event" without updates — possibly extra copies of your software with stale configuration. An API object disappearing is not proof the process stopped.
-      - >-
-        Replacement is a cascade (Ch. 12 §12.1.1): the replica set controller creates a new pod, kube-scheduler filters nodes (resources, ports, affinity, memory and disk pressure) and ranks them, and the target node's Kubelet starts it. Each loop corrects discrepancies "ad infinitum" — that separation is Kubernetes' self-healing.
-      - >-
-        What machine loss tests (Ch. 11 §11.3.2): is the loss detected as quickly as a pod loss, is the instance rescheduled elsewhere, and how long does recovery take once the machine returns? A VM stop tests the scheduler, node-failure detection, rescheduling and anti-affinity at once.
+        The control plane first detects missing reports, then waits through applicable eviction
+        tolerations before replacing the workload. Scheduling and startup take more time.
+        Meanwhile, an API object being deleted does not prove its process stopped on the
+        disconnected node. Inspect the runtime as well as the Pod list.
     in_this_lab:
       - >-
-        kind nodes are Docker containers; kubelet runs as a systemd service inside each one and containerd runs the pod containers. docker exec $NODE systemctl stop kubelet stops only the agent; crictl talks to containerd directly, so it still sees the container.
-      - >-
-        node-web is a 1-replica Deployment that prefers chaos-worker (soft affinity) and has an HTTP readiness probe on port 80. It can land on another worker, so every command uses $NODE.
-      - >-
-        Expected sequence: kubelet stops; after the node-monitor grace period (50 s on this VM's Kubernetes v1.37; a run here saw NotReady at about 51 s) the node turns NotReady with node.kubernetes.io/unreachable taints; about 300 s later the pod is marked Terminating; the ReplicaSet creates a replacement on another worker; it becomes Ready.
-      - >-
-        The old pod stays Terminating because only its kubelet can confirm its containers stopped. Starting kubelet again lets the node clean it up and report Ready.
+        Stop only kubelet in the node actually hosting node-web. Read the Pod's tolerations;
+        observe for at most eight minutes, then restore kubelet.
   predict: >-
-    Seconds until the node turns NotReady, seconds until a replacement Pod is Ready, and whether crictl still shows the old web container afterwards.
+    Predict whether stopping kubelet immediately stops the container, and whether detection
+    and replacement occur together.
   steps:
     - >-
-      Find the node running node-web ($NODE) and read the Pod's not-ready and unreachable tolerationSeconds.
+      Record the actual node, Pod identity and tolerations; start timestamped node and Pod
+      watches.
     - >-
-      Start timestamped watches of nodes (VM terminal 2) and node-web Pods (VM terminal 3).
+      Stop kubelet on that node and check the original container with crictl.
     - >-
-      Stop only kubelet inside $NODE; confirm with crictl that the web container is still running.
+      Observe detection and replacement, checking runtime state too; stop waiting after
+      eight minutes.
     - >-
-      Every minute sample node status, taints, Pods and crictl until a replacement is Ready (stop after 8 minutes).
-    - >-
-      Start kubelet again and confirm 4 Ready nodes and 1 Ready node-web Pod.
+      Restart kubelet and confirm four Ready nodes and one Ready node-web Pod.
   answer_with: >-
-    Timestamps for kubelet stop, NotReady, taint, eviction and replacement Ready, plus crictl output after eviction. Explain why detection and recovery are separate times, and why a deleted API object does not prove the process stopped.
-solution: 'After Lab 10, apply the node-web fixture, record node and Pod watches, stop only kubelet, restore it, and optionally compare an entire worker stop.'
-verify_note: 'node-web is Ready and its selected worker kubelet is active before an injection.'
+    Compare the node/Pod timeline with crictl on the original node. Explain why control-plane
+    replacement does not establish that the old process stopped.
+solution: >-
+  Missing kubelet reports trigger detection and eviction, not an immediate process kill.
+  Replacement includes several waits, while the old runtime may keep serving its container.
+  Restoring kubelet allows that node to reconcile and clean up.
+verify_note: >-
+  Kubelet is running, four nodes are Ready and one node-web Pod is Ready.
 commands:
   - name: Find the worker running node-web and inspect its tolerations
     where: VM terminal 1
@@ -59,7 +62,9 @@ commands:
       echo "NODE=$NODE"
       k get pods -l app=node-web -o jsonpath='{.items[0].spec.tolerations}'; echo
     expect: >-
-      The pod is Ready on chaos-worker (the affinity is only preferred, so it can land on another worker; every later command uses $NODE). The not-ready and unreachable NoExecute tolerations have tolerationSeconds 300.
+      The pod is Ready on chaos-worker (the affinity is only preferred, so it can land on
+      another worker; every later command uses $NODE). The not-ready and unreachable NoExecute
+      tolerations have tolerationSeconds 300.
   - name: Timestamped node watch
     where: VM terminal 2
     run: !unsafe |
@@ -78,7 +83,8 @@ commands:
       docker exec "$NODE" crictl ps --name web
     expect: >-
       The web container is still Running although kubelet stopped.
-  - name: Sample detection, taints and eviction (repeat every minute; stop after eight minutes without a replacement)
+  - name: Sample detection, taints and eviction (repeat every minute; stop after eight minutes
+      without a replacement)
     where: VM terminal 1, same shell
     run: !unsafe |
       date --iso-8601=seconds
@@ -87,7 +93,10 @@ commands:
       k get pods -l app=node-web -o wide
       docker exec "$NODE" crictl ps --name web
     expect: >-
-      After the node-monitor grace period (50 s on Kubernetes v1.37) the node turns NotReady with node.kubernetes.io/unreachable taints. About 300 s after that the old pod goes Terminating and a replacement starts on another worker, while crictl still shows the old container running.
+      After the node-monitor grace period (50 s on Kubernetes v1.37) the node turns NotReady
+      with node.kubernetes.io/unreachable taints. About 300 s after that the old pod goes
+      Terminating and a replacement starts on another worker, while crictl still shows the
+      old container running.
   - name: Restore kubelet before any other fault
     where: VM terminal 1, same shell
     run: !unsafe |
@@ -97,10 +106,12 @@ commands:
       k get nodes
       k get pods -l app=node-web -o wide
     expect: >-
-      All four nodes Ready and one Ready node-web pod on another worker. The old pod can still show Terminating for up to a minute while the restored kubelet stops its container. Stop the watches with Ctrl-C.
+      All four nodes Ready and one Ready node-web pod on another worker. The old pod can
+      still show Terminating for up to a minute while the restored kubelet stops its container.
+      Stop the watches with Ctrl-C.
 setup:
   - name: Create the guide's node-web workload preferring chaos-worker
-    command: |
+    command: !unsafe |
       mkdir -p "$HOME/labs/lab10"
       cat > "$HOME/labs/lab10/node-web.yaml" <<'YAML'
       apiVersion: apps/v1
@@ -129,14 +140,14 @@ setup:
       k rollout status deployment/node-web --timeout=180s
 verify:
   - name: Verify a ready node-web baseline
-    command: |
+    command: !unsafe |
       k() { kubectl --kubeconfig="$HOME/labs/chaos.kubeconfig" --context=kind-chaos --namespace=chaos-labs "$@"; }
       test "$(k get pods -l app=node-web --no-headers | awk '$2 == "1/1" && $3 == "Running" {count++} END {print count+0}')" = 1
       node=$(k get pods -l app=node-web -o jsonpath='{.items[0].spec.nodeName}')
       docker exec "$node" systemctl is-active --quiet kubelet
 reset:
   - name: Restore kubelet on dedicated chaos workers and remove node-web
-    command: |
+    command: !unsafe |
       for worker in chaos-worker chaos-worker2 chaos-worker3; do
         docker inspect "$worker" >/dev/null 2>&1 && docker exec "$worker" systemctl start kubelet || true
       done

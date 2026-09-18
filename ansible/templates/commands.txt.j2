@@ -1,0 +1,15 @@
+CORE PROCEDURE
+Run setup and verify first. Use the named terminals; keep the same shell when
+later blocks reuse variables. Run in Bash without exit-on-error: some failures
+are deliberate observations. Stop if the baseline fails. Fallback blocks are
+only for failed cleanup.
+{% for step in selected_lab.commands %}
+
+[{{ loop.index }}] {{ step.name }}
+    where: {{ step.where | default('VM terminal 1') }}
+
+{{ step.run | trim }}
+{% endfor %}
+
+RECOVERY CHECK
+{{ selected_lab.verify_note | wordwrap(width=78, break_long_words=false, break_on_hyphens=false) }}

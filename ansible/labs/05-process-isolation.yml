@@ -1,59 +1,62 @@
-title: 'Lab 05 — Small isolated process environment'
+title: "Lab 05 — A container is several Linux mechanisms"
 concept: >-
-  A Linux container combines mechanisms that separate a process's view of the system and constrain its resource use. Containers normally share the host kernel, while a virtual machine has its own guest kernel. Seeing an isolated filesystem or PID list does not imply independent CPU, memory or storage capacity, and does not by itself establish a secure boundary.
+  chroot changes the root used to resolve filesystem paths. A PID namespace gives processes
+  a separate PID view, and a suitable proc mount lets ps display that view. A mount namespace
+  separates mount configuration. These mechanisms do not themselves limit CPU or memory.
 mechanism: >-
-  chroot changes where filesystem paths beginning with a slash are resolved. Mount and PID namespaces provide separate mount and process-ID views; the same process can have different PIDs inside and outside its namespace. Cgroups account for and limit the workload's consumption. The lab combines these features under a bounded systemd scope, letting you observe visibility and CPU enforcement independently from the host.
+  Cgroups separately account for and limit resource use. A sandbox can see only a few processes
+  yet still share the VM's kernel, network and storage. Reading the configured limits and
+  observing a throttled busy loop distinguishes resource enforcement from an isolated-looking
+  view.
 task:
   question: >-
-    Using only chroot, unshare and a systemd scope (no Docker): which Linux feature gives the sandbox its own filesystem, which gives it its own process list, and which limits its CPU?
+    Why does an isolated process view not tell you how much CPU a sandbox can use?
   brief:
+    theory_source: >-
+      chaos-theory.md: §§5.2–5.5.2 and §5.7.1.
     theory:
       - >-
-        Containers are kernel features (Ch. 5 §5.3, §5.9): Docker did not invent containers; it packages chroot, namespaces, cgroups, capabilities, networking, union filesystems and seccomp. The model to carry: namespaces control what a process can SEE, cgroups what it can USE, chroot what filesystem it has, capabilities what privileged actions it may take, seccomp which syscalls it may make.
+        chroot changes the root used to resolve filesystem paths. A PID namespace gives
+        processes a separate PID view, and a suitable proc mount lets ps display that view.
+        A mount namespace separates mount configuration. These mechanisms do not themselves
+        limit CPU or memory.
       - >-
-        VM vs. container (Ch. 5 §5.2): full virtualization gives each VM its own kernel (strong isolation); OS-level virtualization shares one kernel across containers (lightweight isolation). Sharing the kernel gives containers a bigger blast radius for security issues.
-      - >-
-        chroot (Ch. 5 §5.3–5.4.2): changes the root of the filesystem for a process and its children (UNIX v7, 1979). Inside a bare chroot, ps fails because there is no /proc; mounting the host's /proc gives the "container" a view of every process on the host. "Isolation is a series of deliberate choices, not a single switch."
-      - >-
-        Namespaces (Ch. 5 §5.4.4): filters on what a process can see — mnt, pid, net, ipc, uts, user, cgroup, time. A resource outside your namespace looks like it does not exist. Inspect them with lsns, lsns --task <PID> or /proc/<pid>/ns.
-      - >-
-        PID namespaces with unshare (Ch. 5 §5.5.1, Card 5.2): unshare --fork --pid --mount-proc makes the shell report PID 1, and the host sees a new pid namespace with lsns -t pid; --fork is required for the PID namespace change to take effect. Killing a host PID from inside fails with "No such process", not permission denied: namespaces isolate by making things invisible.
-      - >-
-        cgroups (Ch. 5 §5.5.2): they organise processes into hierarchical groups, then limit and monitor their use of CPU, RAM and I/O; a group with a 50% CPU limit is throttled whenever it tries to exceed it. Creating a cgroup means creating a folder in cgroupfs under /sys/fs/cgroup.
-      - >-
-        A DIY container (Ch. 5 §5.7.1): a prepared filesystem plus chroot, unshare --fork --pid, and a cgroup with the process added (children inherit it). It is still missing networking, capabilities and seccomp — "its networking access is still exactly the same as for any other process running on the host."
+        Cgroups separately account for and limit resource use. A sandbox can see only a
+        few processes yet still share the VM's kernel, network and storage. Reading the
+        configured limits and observing a throttled busy loop distinguishes resource enforcement
+        from an isolated-looking view.
     in_this_lab:
       - >-
-        systemd-run --scope places the command in the transient cgroup ce-lab05.scope with MemoryMax=128M, TasksMax=50 and CPUQuota=20%, so cpu.max reads 20000 100000, memory.max 134217728 and pids.max 50.
-      - >-
-        unshare --fork --pid --mount --mount-proc=<rootfs>/proc creates new PID and mount namespaces and mounts a proc filesystem for the new PID namespace, so ps inside lists only sandbox processes.
-      - >-
-        The root filesystem is BusyBox exported from busybox:1.36, so / contains only BusyBox files. Network, disk I/O and the kernel are still shared with the VM.
-      - >-
-        CPUQuota is a percentage of one CPU: a busy loop settles near 20% in top, and nr_throttled and throttled_usec keep rising in cpu.stat.
+        The prepared BusyBox sandbox uses chroot, PID and mount namespaces, and a systemd
+        scope with CPU, memory and task limits.
   predict: >-
-    What echo $$ and ps print inside the sandbox, and the CPU% a busy loop reaches under CPUQuota=20%.
+    Predict which observation shows a separate PID view and which shows enforced CPU limiting.
   steps:
     - >-
-      Start the BusyBox sandbox in scope ce-lab05 with MemoryMax=128M, TasksMax=50 and CPUQuota=20%.
+      Start the bounded sandbox and record echo $$, ps and ls / inside it.
     - >-
-      Inside the sandbox run echo $$, ps and ls /.
+      From the VM, inspect its PID namespace and cpu.max, memory.max and pids.max.
     - >-
-      From VM terminal 2 read the scope's cpu.max, memory.max and pids.max, and list PID namespaces with lsns -t pid.
+      Run the busy loop; read cpu.stat twice and observe CPU usage from the VM.
     - >-
-      Run a busy loop in the sandbox; read cpu.stat twice and check top from the host.
-    - >-
-      Stop the loop, exit the sandbox and confirm ce-lab05 is gone.
+      Stop the loop and exit. Match the filesystem view, PID view and throttling to their
+      mechanisms.
   answer_with: >-
-    Inside and outside observations, the three limit files, and throttling counters that increased. Map each observation to its mechanism: chroot, PID namespace or cgroup.
-solution: 'Enter the bounded unshare/chroot command from Lab 5, observe PID 1 and /proc, then inspect cpu.max, memory.max, pids.max and cpu.stat from the host.'
-verify_note: 'A BusyBox root filesystem is exported and the ce-lab05 scope is not running.'
+    Use the PID view and increasing throttling counters to explain the separate roles of
+    namespaces and cgroups.
+solution: >-
+  The prepared root explains the files under /. The PID namespace explains the different
+  process view. The cgroup explains the CPU cap and throttling. None of these creates a
+  separate kernel or automatically isolates every shared resource.
+verify_note: >-
+  The sandbox is exited and its scope is no longer active.
 commands:
   - name: Confirm the exported BusyBox root filesystem
     where: VM terminal 1
     run: !unsafe |
       ls ~/labs/lab05/rootfs
-  - name: Start the sandbox under a bounded systemd scope (this shell becomes the sandbox)
+  - name: Start the sandbox under a resource-limited systemd scope (this shell becomes the
+      sandbox)
     where: VM terminal 1
     run: !unsafe |
       sudo systemd-run --unit=ce-lab05 --scope --collect \
@@ -75,7 +78,8 @@ commands:
       sudo cat "/sys/fs/cgroup$path/cpu.max" "/sys/fs/cgroup$path/memory.max" "/sys/fs/cgroup$path/pids.max"
       sudo lsns -t pid
     expect: >-
-      cpu.max 20000 100000, memory.max 134217728, pids.max 50; lsns shows a separate PID namespace whose command is sh.
+      cpu.max 20000 100000, memory.max 134217728, pids.max 50; lsns shows a separate PID
+      namespace whose command is sh.
   - name: Burn CPU inside the sandbox
     where: Sandbox shell (terminal 1)
     run: !unsafe |
@@ -101,7 +105,7 @@ commands:
       sudo systemctl reset-failed ce-lab05.scope 2>/dev/null || true
 setup:
   - name: Export the BusyBox root filesystem
-    command: |
+    command: !unsafe |
       rootfs="$HOME/labs/lab05/rootfs"
       rm -rf "$rootfs"
       mkdir -p "$rootfs"
@@ -112,12 +116,12 @@ setup:
       trap - EXIT
 verify:
   - name: Verify namespace fixture readiness
-    command: |
+    command: !unsafe |
       test -x "$HOME/labs/lab05/rootfs/bin/sh"
       ! systemctl is-active --quiet ce-lab05.scope
 reset:
   - name: Stop and remove the Lab 05 sandbox
-    command: |
+    command: !unsafe |
       sudo systemctl stop ce-lab05.scope 2>/dev/null || true
       sudo systemctl reset-failed ce-lab05.scope 2>/dev/null || true
       rm -rf "$HOME/labs/lab05/rootfs"

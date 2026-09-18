@@ -1,65 +1,80 @@
-title: 'Lab 09 — Capabilities and seccomp controls'
+title: "Lab 09 — A syscall denial need not crash the process"
 concept: >-
-  Linux capabilities divide privileged authority into named permissions, such as permission to change a process's filesystem root. Seccomp instead filters the system calls a process attempts. An operation may therefore fail because authorization is missing or because a filter rejects the call. Neither control grants permission denied by another layer; several checks can apply to the same operation.
+  A syscall requests a kernel operation. Seccomp can filter those requests for a process.
+  This program first calls getpid normally, then installs a filter that returns EACCES for
+  getpid while allowing other calls. Comparing the same call before and after installation
+  isolates the filter’s effect.
 mechanism: >-
-  Dropping SYS_CHROOT removes the permission needed by the demonstrated chroot operation. The separate C program installs a seccomp filter after startup and makes one selected syscall return an error number. The filter applies to that process and is inherited by its descendants, without changing the whole host. Installing it after startup avoids confusing loader failures with the intended syscall test.
+  The denied syscall returns -1 and sets errno; that does not require the application itself
+  to crash. This demonstration prints the result and exits 0 if the denial matched its expectation.
+  The filter applies to the process and is inherited by descendants; it is not installed
+  in the original shell or unrelated processes.
 task:
   question: >-
-    An operation can be blocked by a missing capability or by a seccomp filter. Can you make one operation fail each way without changing application code, and name the layer that blocked it?
+    What changes when the same process installs a filter that denies getpid?
   brief:
+    theory_source: >-
+      chaos-theory.md: §6.5.2; optional capability comparison: §5.8.1.
     theory:
       - >-
-        Capabilities (Ch. 5 §5.8.1): superuser privileges, which skip all checks, split into granular units — CAP_KILL bypasses permission checks for sending signals; CAP_SYS_TIME allows changing the clock. Docker grants 14 by default, including cap_sys_chroot, and --cap-add/--cap-drop take single capabilities or ALL.
+        A syscall requests a kernel operation. Seccomp can filter those requests for a process.
+        This program first calls getpid normally, then installs a filter that returns EACCES
+        for getpid while allowing other calls. Comparing the same call before and after
+        installation isolates the filter’s effect.
       - >-
-        The capability demonstration (Ch. 5 §5.8.1): chroot inside a default container works because cap_sys_chroot is granted. With --cap-drop ALL, getpcaps shows none and chroot fails with "Operation not permitted". "It's always a good idea to give the container only what it really needs."
-      - >-
-        seccomp (Ch. 5 §5.8.1): filters which syscalls a process can make, implemented with BPF. Docker's JSON profiles use "defaultAction": "SCMP_ACT_ERRNO" with an allow-list; --security-opt seccomp=profile.json loads a custom one. seccomp is a kernel feature — you can use it without Docker.
-      - >-
-        Which mechanism stopped you (Card 5.2): the error message points at the mechanism — a permission error means capabilities or DAC, "not found" means namespaces. Because capability and seccomp denials can both surface as permission errors, change one control at a time and attribute the failure to the control you changed.
-      - >-
-        The easy way (Ch. 6 §6.5.1, Card 6.3): removing getpid from Docker's default profile made the server print PID: -1, and it served 1203.53 RPS versus ~101 under strace — more than 10× faster. The limits: no "every other call", no attaching to a running process, the error chosen only via the profile's action, and Docker required.
-      - >-
-        The hard way — libseccomp (Ch. 6 §6.5.2): seccomp_init sets the default action and returns a context, seccomp_rule_add adds a rule for one syscall, seccomp_load loads the context into the kernel, seccomp_release frees it. In the book's deny-by-default example, output appearing proves write was allowed, a clean exit proves exit was allowed, and -1 proves getpid was blocked.
-      - >-
-        Allow the teardown path (Ch. 6 §6.5.2): without exit in the allow-list the program segfaults on exit — a filter that forgets the teardown path breaks the program for reasons unrelated to the experiment.
-      - >-
-        Pick the mechanism by where it must run (Card 6.3, Ch. 6 comparison): strace gives maximum control (attach, choose the error, when=) at ~100× overhead; seccomp costs almost nothing but is set at process start and is all-or-nothing per syscall. Security controls make excellent chaos tools.
+        The denied syscall returns -1 and sets errno; that does not require the application
+        itself to crash. This demonstration prints the result and exits 0 if the denial
+        matched its expectation. The filter applies to the process and is inherited by descendants;
+        it is not installed in the original shell or unrelated processes.
     in_this_lab:
       - >-
-        chroot / true in ubuntu:24.04 needs CAP_SYS_CHROOT. Without it chroot prints "Operation not permitted" and exits 125, its code for "the chroot command itself failed". On this VM the result is the same with --security-opt seccomp=unconfined, so the capability blocks it, not seccomp.
-      - >-
-        CapEff in /proc/self/status is the effective capability bit mask in hex; 0000000000000000 means no capabilities.
-      - >-
-        filter.c starts allow-by-default (SCMP_ACT_ALLOW) and adds one rule: getpid returns EACCES (errno 13). It installs the filter after startup, so program loading runs unfiltered. Its exit codes: 1-3 setup failed, 4 the filter did not act, 0 success.
-      - >-
-        A seccomp filter applies to the process that loaded it and its children and cannot be removed; it ends when they exit. In /proc/<pid>/status, Seccomp 0 means no filter and 2 means filter mode.
+        Setup compiles filter.c. Run the binary to install the filter only in that test
+        process. The capability comparison is optional.
   predict: >-
-    The exit code and error of chroot / true with and without SYS_CHROOT, and what getpid() returns under a filter that answers EACCES.
+    Predict getpid’s result before and after the filter, and whether the program can still
+    print the error.
   steps:
     - >-
-      Run chroot / true in ubuntu:24.04 with default capabilities, then with --cap-drop SYS_CHROOT.
+      Run the prepared program and compare getpid before and after filter installation.
     - >-
-      Print CapEff for a container started with --cap-drop ALL.
+      Record the syscall result, errno and the program’s exit status.
     - >-
-      Compile and run filter.c, which installs a seccomp rule making getpid return EACCES.
-    - >-
-      Check grep Seccomp /proc/self/status in a fresh process.
+      Inspect Seccomp in a fresh shell command; distinguish its state from the test process’s
+      filter.
   answer_with: >-
-    Both chroot results, CapEff, the filter output (result=-1 errno=13, exit 0) and Seccomp 0 afterwards. Explain which control caused each failure: authorization (capability) or syscall filtering (seccomp).
-solution: 'Run the capability comparisons and compile/filter.c sequence in Lab 9; the process exit removes the seccomp filter automatically.'
-verify_note: 'libseccomp headers are installed and the Lab 09 workspace is writable.'
+    Explain the positive PID before filtering, the error afterward and why exit 0 means
+    the demonstration detected the intended denial.
+solution: >-
+  Before the filter, getpid returns the process ID. Afterward, the filter makes it return
+  -1 with errno 13 (EACCES). Printing still works because the filter allows other syscalls.
+  The program’s exit 0 reports a successful check of the denial, not a successful getpid
+  call. Exit 1–3 means filter setup failed; exit 4 means the expected denial was not observed.
+verify_note: >-
+  The demonstration has exited; the filter was scoped to that process. Reset removes the
+  compiled fixture.
 commands:
-  - name: Remove one capability
+  - name: Run the prepared seccomp demonstration
     where: VM terminal 1
     run: !unsafe |
-      docker run --rm ubuntu:24.04 chroot / true; echo "default exit=$?"
-      docker run --rm --cap-drop SYS_CHROOT ubuntu:24.04 chroot / true; echo "no SYS_CHROOT exit=$?"
-      docker run --rm --cap-drop ALL ubuntu:24.04 sh -c 'grep CapEff /proc/self/status'
+      cd ~/labs/lab09
+      ./filter; echo "exit=$?"
     expect: >-
-      The first exits 0; the second prints "chroot: cannot change root directory to '/': Operation not permitted"; CapEff is 0000000000000000.
-  - name: Write, compile and run the post-startup seccomp filter
+      Before filtering, getpid prints a positive PID. After filtering, getpid result=-1
+      errno=13 and exit=0. Exit 1–3 means filter setup failed; 4 means the expected denial
+      did not occur.
+  - name: Check an unrelated process after the test exits
     where: VM terminal 1
     run: !unsafe |
+      grep Seccomp /proc/self/status
+    expect: >-
+      This fresh process has its own Seccomp state. An existing inherited filter can be
+      present; the test did not install a host-wide policy.
+setup:
+  - name: Create the Lab 09 workspace
+    command: !unsafe |
+      mkdir -p "$HOME/labs/lab09"
+  - name: Build the seccomp demonstration
+    command: !unsafe |
       mkdir -p ~/labs/lab09 && cd ~/labs/lab09
       cat > filter.c <<'C'
       #include <seccomp.h>
@@ -68,6 +83,7 @@ commands:
       #include <errno.h>
       #include <stdio.h>
       int main(void) {
+          printf("before filter: getpid=%ld\n", syscall(SYS_getpid));
           scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_ALLOW);
           if (!ctx) return 1;
           if (seccomp_rule_add(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(getpid), 0) < 0)
@@ -81,24 +97,29 @@ commands:
       }
       C
       cc -Wall -Wextra filter.c -lseccomp -o filter
-      ./filter; echo "exit=$?"
-    expect: >-
-      getpid result=-1 errno=13 and exit=0. Exit 1-3 means filter setup failed; 4 means the filter did not act.
-  - name: Show that the filter is gone once the process exits
-    where: VM terminal 1
-    run: !unsafe |
-      grep Seccomp /proc/self/status
-      rm -f ~/labs/lab09/filter
-    expect: >-
-      Seccomp 0 for a fresh process: nothing host-wide changed.
-setup:
-  - name: Create the Lab 09 workspace
-    command: mkdir -p "$HOME/labs/lab09"
 verify:
   - name: Verify seccomp build prerequisites
-    command: |
+    command: !unsafe |
       test -f /usr/include/seccomp.h
       docker info >/dev/null
+      test -s "$HOME/labs/lab09/filter"
+      test -x "$HOME/labs/lab09/filter"
 reset:
   - name: Remove only the Lab 09 compiled filter
-    command: rm -f "$HOME/labs/lab09/filter"
+    command: !unsafe |
+      rm -f "$HOME/labs/lab09/filter"
+optional_commands:
+  - name: Remove one capability
+    where: VM terminal 1
+    run: !unsafe |
+      docker run --rm ubuntu:24.04 chroot / true; echo "default exit=$?"
+      docker run --rm --cap-drop SYS_CHROOT ubuntu:24.04 chroot / true; echo "no SYS_CHROOT exit=$?"
+      docker run --rm --cap-drop ALL ubuntu:24.04 sh -c 'grep CapEff /proc/self/status'
+    expect: >-
+      The first exits 0; the second prints "chroot: cannot change root directory to '/':
+      Operation not permitted"; CapEff is 0000000000000000.
+optional_explanation: >-
+  Optional: contrast seccomp with capabilities. SYS_CHROOT authorizes a privileged operation;
+  dropping it can deny chroot even as root. Seccomp instead filters syscall attempts. The
+  comparisons change one control at a time, since an error message alone does not identify
+  the denying layer.

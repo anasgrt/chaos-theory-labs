@@ -37,10 +37,14 @@ The shared provisioner remains separate from individual labs. From the macOS hos
 2. Prepare one lab with `./ansible/run-lab.sh 04 setup`. The last thing it prints is **YOUR TASK**: the question to answer, the theory you need, the prediction to write down, the steps and the evidence your answer must show.
 3. Confirm its safe baseline with `./ansible/run-lab.sh 04 verify`.
 4. Reprint the task at any time with `./ansible/run-lab.sh 04 question`. It changes nothing on the VM, unlike re-running `setup`, which resets the fixture.
-5. Print the core solution, verification objective and step-by-step practical commands with `./ansible/run-lab.sh 04 solution`.
+5. After writing your explanation, compare it with the solution using `./ansible/run-lab.sh 04 solution`.
 6. Remove only that lab's automated fixture with `./ansible/run-lab.sh 04 reset`.
 
-Each lab definition has a required `task` block: `question`, `brief`, `predict`, `steps` and `answer_with`. The `brief` holds the theory needed to answer the question: `theory` points from `chaos-theory.md` with chapter references, and `in_this_lab` facts about this fixture's configuration. The question and steps come from that lab's Goal, Prediction and "Done when" in `chaos-labs.md`. The playbook fails early if a lab lacks one. `setup` first runs that lab's scoped reset, then creates only its safe prerequisites; it never executes the intentional fault. `verify` runs executable readiness checks. `solution` prints the guide-aligned solution path, then each lab's `commands` list as plain, pasteable blocks: where to run each block (VM terminal, Mac host, or browser) and the expected evidence. The commands follow the lab's core experiment in `chaos-labs.md`, adapted to the fixture that `setup` already created (for example, the recorded PID files that `reset` uses). Command blocks are tagged `!unsafe` so Ansible does not template Docker/kubectl `{{...}}` formats, and they are rendered to a local text file because Ansible's `debug` output escapes quotes and newlines. The full **Concept**, **Mechanism** and **Question** text is printed before every setup, and the full task card after it, so the learning objective stays with the runnable fixture.
+Each lab focuses on one concept: a short explanation, a direct question, a prediction, a small experiment and a recovery check. `chaos-labs.md` and the terminal cards use the same learning content from `ansible/labs/`. The detailed source is `chaos-theory.md`; section references retain the book's original numbering.
+
+`question` prints the theory, prediction, learning task and core commands, including cleanup. It does not print the expected observations. `solution` explains the mechanism and provides expected observations for comparison after you have recorded your own result. Secondary exercises appear separately as optional comparisons; finish any optional work before resetting the fixture. The YAML `task` fields hold the question, theory, prediction, steps and expected explanation. `commands` holds the core procedure; `optional_commands`, where present, holds additional comparisons. The YAML is the editable source. Regenerate the guide with `python3 scripts/render-labs.py` (requires PyYAML); use `--check` to detect drift.
+
+`setup` runs the lab's scoped reset and prepares its prerequisites, scripts and compiled demonstrations; it does not inject the fault. `verify` checks readiness, and `reset` removes the lab fixture. Command blocks use `!unsafe` to preserve literal Docker/kubectl `{{...}}` expressions. Templates produce plain text so multiline commands stay pasteable.
 
 **VS Code YAML support:** `.vscode/settings.json` contains `"yaml.customTags": ["!unsafe scalar"]` so the YAML extension recognizes Ansible's `!unsafe` tag without reporting it as unknown. `scalar` means a single value, including a multiline command string. The tag tells Ansible to preserve that text literally; the VS Code setting only affects editor validation and does not enable command execution or change Ansible's behavior.
 
@@ -55,7 +59,7 @@ Labs 10 and 14 check resolution of the Docker registry and Kubernetes download e
 - A kind cluster is **not** created by Ansible. Labs 10–13 use the `chaos` cluster and Lab 14 creates the separate `ha` cluster; cluster lifecycle is part of the exercises.
 - `kubectl` is intentionally not installed until after a kind cluster is created. Run `~/labs/install-kubectl-for-kind.sh chaos` (or `ha`) to install the client version derived from that cluster's control plane and verified with the upstream SHA-256 file.
 - The published Goldpinger v3.11.3 tag has no ARM64 manifest. On ARM64, Ansible installs Ubuntu's `docker-buildx` plugin and builds its pinned v3.11.3 source locally under the unchanged `bloomberg/goldpinger:v3.11.3` tag. Labs 10 and 14 load their required, locally cached fixture images into their kind nodes before applying manifests; `~/labs/load-lab-images-into-kind.sh chaos` remains available to load Goldpinger manually. This avoids later per-Pod registry downloads and is safe on AMD64 too.
-- Optional BCC tracing tools, Byteman, Prometheus, and PowerfulSeal are not installed because the guide marks them optional and version-dependent.
+- BCC tracing tools, Byteman, Prometheus and PowerfulSeal are not required by the core labs and are not installed.
 
 The VM's lab workspace is `~/labs` on its VM-local root filesystem, not a macOS mount. It contains the guide, provisioning notes, `common.sh`, version record, pinned book source, and Kubernetes client installer. This avoids distorting Docker volumes, `fio` measurements, namespace mounts, or ownership semantics.
 
@@ -63,4 +67,4 @@ The VM's lab workspace is `~/labs` on its VM-local root filesystem, not a macOS 
 
 The default configuration meets the guide's baseline. Before Lab 14, remove the earlier `chaos` kind cluster as instructed and reboot/reload the VM with at least 16 GiB (`CHAOS_LABS_MEMORY_MB=16384`) if the host has capacity.
 
-All workload, fault-injection, and recovery commands remain in the lab guide and run only when you choose to practice that lab.
+Setup prepares the services and inert helper programs. The core procedure runs the workload, fault and recovery only when you choose to practice. Read a prepared script when its implementation interests you; copying it is not part of the learning task.

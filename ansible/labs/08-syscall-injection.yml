@@ -1,57 +1,58 @@
-title: 'Lab 08 — Inject one syscall error'
+title: "Lab 08 — A syscall error tests application handling"
 concept: >-
-  A system call is the boundary where an application asks the kernel to perform work, such as writing bytes or closing a file descriptor. Library functions often invoke syscalls underneath. A syscall can fail even when the application logic is otherwise correct, so reliable software must handle error returns without silently losing work or unnecessarily terminating service.
+  A syscall is an application request to the kernel, such as writing bytes or closing a
+  connection. The kernel can return an error, and the application decides how to handle
+  it. A server that normally works may still have a fragile error path.
 mechanism: >-
-  strace uses tracing facilities to observe calls and can substitute an error such as EIO, meaning an input/output error. In the lab's error-injection mode, the targeted operation is skipped and an artificial failure is returned. This exercises application error handling, but may leave different resource state from a real failure. Tracing also adds overhead, which needs its own control when comparing performance.
+  strace can substitute an EIO error for close in one process. The INJECTED marker identifies
+  the artificial failure. Compare that line with the server's log and process state: a response
+  may already have been sent before close fails. This tests error handling, not throughput;
+  tracing itself adds overhead, and a synthetic error does not reproduce every detail of
+  a real failure.
 task:
   question: >-
-    When one system call fails inside a running server, what does the user receive and does the server survive? How much of any slowdown comes from strace itself?
+    Why can one request succeed even though its close error stops the server?
   brief:
+    theory_source: >-
+      chaos-theory.md: §§6.2–6.4 and Experiment Cards 6.1–6.2.
     theory:
       - >-
-        Syscalls (Ch. 6 §6.2): the APIs of an operating system — a program calls a libc wrapper, the wrapper executes the syscall, the kernel validates it and touches the hardware. Virtually every program relies on them, which makes syscalls "a universal angle of attack for chaos experiments", even for closed-source legacy binaries (§6.1).
+        A syscall is an application request to the kernel, such as writing bytes or closing
+        a connection. The kernel can return an error, and the application decides how to
+        handle it. A server that normally works may still have a fragile error path.
       - >-
-        libc wrappers are not pass-throughs (Ch. 6 §6.2.2): in glibc 2.23 only ~100 of ~380 syscall wrappers are generated pass-throughs; exit(3) runs atexit handlers before the _exit(2) syscall. There is no guaranteed one-to-one mapping between library functions and syscalls.
-      - >-
-        Observe first (Ch. 6 §6.3.2): strace -C -p <pid> on the running System X server showed 292 write calls per request, one close, one accept, one read and one fsync with an error — two findings (one-byte writes, fsync on a socket failing) without reading source. Attaching with -p misses everything before you attached.
-      - >-
-        Tracer overhead (Ch. 6 §6.3.3–6.3.4): strace works through ptrace. dd doing 500,000 one-byte read/write pairs took 0.51 s untraced and 58.49 s with strace filtering for a syscall dd never makes — more than a 100-fold slowdown — while BPF's syscount traced the whole host at ~6%. With strace attached, performance numbers are wrong, so measure the steady state with it attached.
-      - >-
-        Realistic errors (Ch. 6 §6.2.1, Card 6.1): read a syscall's ERRORS section before injecting. man 2 close lists EBADF, EINTR (interrupted by a signal), EIO and, on NFS, ENOSPC/EDQUOT. EINTR is plainly possible for any process, so a service that treats close errors as fatal is one signal away from dying.
-      - >-
-        The injector (Ch. 6 §6.4): -e inject=<syscall>:error=<errno>[:retval=][:signal=][:when=]. when=n tampers with only call n, n+ with n onward, and n+step with n and every step-th call after it; when=1+2 is "every other call", a blast-radius dial at the syscall level.
-      - >-
-        close vs. write (Cards 6.1, 6.2): injecting EIO into close killed System X on the very first close ("error closing socket", exit 1) and ab reported Connection refused. Failing every other write gave 0 failed requests but roughly halved throughput, because the trace shows each failed write retried until it succeeds.
-      - >-
-        Resilience is uneven (Card 6.2): the same binary is fatal on a path it takes once per request and resilient on its hottest path, so do not generalise from one syscall to the program. Availability and throughput gave opposite verdicts; choose which one your SLO cares about before you run the experiment.
+        strace can substitute an EIO error for close in one process. The INJECTED marker
+        identifies the artificial failure. Compare that line with the server's log and process
+        state: a response may already have been sent before close fails. This tests error
+        handling, not throughput; tracing itself adds overhead, and a synthetic error does
+        not reproduce every detail of a real failure.
     in_this_lab:
       - >-
-        legacy_server (main.c) serves one connection at a time: read the request, write() the HTTP header once with no retry, write the body through respond(), fsync, close. If close fails it calls err(1, "error closing socket") and exits with status 1.
-      - >-
-        respond() (respond.c) calls write() up to twice, so a failed body write is repaired by its retry. Under when=1+2 failures never come twice in a row, so every body write succeeds and each response ends on a successful call. The next header write therefore always lands on a failing call: when attached between requests, every response loses its header.
-      - >-
-        fsync on a socket returns -1 EINVAL on every request. It is a harmless pre-existing error, not the fault you inject.
-      - >-
-        strace -p attaches to the PID in server.pid and sees only calls made after attaching. Injected calls are marked (INJECTED); Ctrl-C detaches and ends the injection.
-      - >-
-        Compare HTTP status and size_download with the baseline. A response without its header is not valid HTTP: on this VM curl reported "Received HTTP/0.9 when not allowed" and 000, while the server kept running.
+        Target only the PID saved in server.pid. Use two VM terminals; Ctrl-C in the tracing
+        terminal detaches strace.
   predict: >-
-    The HTTP result and server state when close() returns EIO; response size and ab failures when every other write() returns EIO; ab throughput under a tracer that injects nothing.
+    Predict the triggering response, process state and next request after close returns
+    EIO.
   steps:
     - >-
-      Start legacy_server with its PID saved in server.pid; request one page.
+      Start the server and request a page; observe its normal syscalls without injecting.
     - >-
-      Trace write, close and fsync without injecting; request a page and count the calls.
+      Detach the observer, inject EIO into close and request another page.
     - >-
-      Inject EIO into close(); request a page, then read the server log and exit status.
+      Check the injection marker, server log and process state; try a second request to
+      test whether service continues.
     - >-
-      Restart the server; run ab -n 200 without a tracer, then under a non-injecting tracer.
-    - >-
-      Inject EIO into writes 1, 3, 5...; compare HTTP status, size_download and ab failures; stop the tracer and server.
+      Restart without the injector, confirm HTTP works again and stop the recorded server.
   answer_with: >-
-    The (INJECTED) strace lines, the server's exit status and log after the close fault, and ab results for baseline, control tracer and write injection. Separate three things: syscall failure, application outcome and tracer overhead.
-solution: 'Start ~/labs/lab08/legacy_server with its PID saved in server.pid, then follow Lab 8 for baseline tracing and the close/write injection controls.'
-verify_note: 'The checked-out C fixture compiles and no server PID recorded by the lab remains alive.'
+    Connect the injected close error to the server log and exit status. Explain the first
+    and next HTTP results separately.
+solution: >-
+  This server treats a close error as fatal and should exit with status 1. The triggering
+  request may already have received its response, but a dead process cannot serve later
+  requests. The fault exposes an application error-handling decision, not a Kubernetes or
+  network failure.
+verify_note: >-
+  The server responds after restart, then the test process is stopped.
 commands:
   - name: Start the compiled book server and record its exact PID
     where: VM terminal 1
@@ -79,7 +80,8 @@ commands:
       awk -F'(' '{print $1}' ~/labs/lab08-trace.txt | sort | uniq -c
       grep -E '= -1' ~/labs/lab08-trace.txt | head
     expect: >-
-      Many write calls, one fsync and one close per request. fsync on a socket returns -1 EINVAL, which is not an outage cause.
+      Many write calls, one fsync and one close per request. fsync on a socket returns -1
+      EINVAL, which is not an outage cause.
   - name: Inject EIO into close (leave attached)
     where: VM terminal 2
     run: !unsafe |
@@ -92,8 +94,29 @@ commands:
       sleep 1
       if kill -0 "$server" 2>/dev/null; then echo 'server still running'; else wait "$server"; echo "server exit=$?"; fi
       tail -3 ~/labs/lab08-server.log
+      curl -sS --max-time 3 -o /dev/null -w 'next request: %{http_code}\n' http://127.0.0.1:8080/
     expect: >-
-      strace shows close(...) = -1 EIO (Input/output error) (INJECTED); the server exits with status 1 after "error closing socket".
+      strace shows close(...) = -1 EIO (Input/output error) (INJECTED); the server exits
+      with status 1 after "error closing socket". The next request should fail to connect;
+      record its result separately from the first response.
+  - name: Restore HTTP service, then stop the test server
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab08
+      if kill -0 "$server" 2>/dev/null; then kill "$server"; wait "$server"; fi
+      ./legacy_server > ~/labs/lab08-server.log 2>&1 & server=$!
+      echo "$server" > server.pid
+      sleep 1
+      curl -sS --max-time 3 -o /dev/null -w '%{http_code} %{size_download}\n' http://127.0.0.1:8080/
+      kill "$server"; wait "$server"
+      rm -f ~/labs/lab08/server.pid
+    expect: >-
+      HTTP responds after restart; the test server is then stopped.
+optional_explanation: >-
+  Optional: alternating write errors and tracer cost. The blocks restart the server, compare
+  untraced and traced controls, inject alternating write errors, then clean up. Header writes
+  and body retries differ; a living process may send invalid HTTP.
+optional_commands:
   - name: Restart the server (detach any tracer first) and confirm the baseline
     where: VM terminal 1
     run: !unsafe |
@@ -123,7 +146,10 @@ commands:
       for i in 1 2 3 4 5; do curl -sS --max-time 3 -o /dev/null -w '%{http_code} %{size_download}\n' http://127.0.0.1:8080/; done
       ab -r -n 200 -c 1 -s 5 http://127.0.0.1:8080/ | grep -E 'Complete requests|Failed requests|Requests per second'
     expect: >-
-      Every request loses its header: curl reports "Received HTTP/0.9 when not allowed" and 000, and strace shows the HTTP/1.0 header write as (INJECTED). The header write in main.c has no retry; respond() retries each failed body write, so body writes succeed. Compare ab's results with the baseline and note the server keeps running.
+      Every request loses its header: curl reports "Received HTTP/0.9 when not allowed"
+      and 000, and strace shows the HTTP/1.0 header write as (INJECTED). The header write
+      in main.c has no retry; respond() retries each failed body write, so body writes succeed.
+      Compare ab's results with the baseline and note the server keeps running.
   - name: Recover (Ctrl-C the tracer first)
     where: VM terminal 1
     run: !unsafe |
@@ -131,7 +157,7 @@ commands:
       rm -f ~/labs/lab08/server.pid
 setup:
   - name: Free the shared WordPress port and compile the C fixture
-    command: |
+    command: !unsafe |
       # legacy_server listens on 8080, which Lab 07's WordPress stack also uses.
       if [[ -f "$HOME/labs/lab07/compose.yaml" ]]; then docker compose -f "$HOME/labs/lab07/compose.yaml" down; fi
       mkdir -p "$HOME/labs/lab08"
@@ -139,12 +165,12 @@ setup:
       cc -O0 -o "$HOME/labs/lab08/legacy_server" $(find . -name '*.c')
 verify:
   - name: Verify the syscall fixture is ready
-    command: |
+    command: !unsafe |
       test -x "$HOME/labs/lab08/legacy_server"
       if [[ -f "$HOME/labs/lab08/server.pid" ]]; then ! kill -0 "$(cat "$HOME/labs/lab08/server.pid")" 2>/dev/null; fi
 reset:
   - name: Stop only the PID recorded by Lab 08
-    command: |
+    command: !unsafe |
       pid_file="$HOME/labs/lab08/server.pid"
       if [[ -f "$pid_file" ]] && [[ "$(cat "$pid_file")" =~ ^[0-9]+$ ]]; then
         kill "$(cat "$pid_file")" 2>/dev/null || true

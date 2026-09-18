@@ -1,59 +1,57 @@
-title: 'Lab 16 — Maintainable resilience check'
+title: "Lab 16 — Design one clear experiment"
 concept: >-
-  A resilience check starts with a user promise, a measurable service-level indicator and a target. Its hypothesis links one defined fault to an acceptable outcome within a specified window. Baseline health, the observation period and minimum samples make that judgement meaningful. An injector completing successfully only proves that its action ran; the service outcome requires separate evidence.
+  A useful chaos experiment starts with a measurable service outcome. Its hypothesis states
+  what should happen when one defined fault occurs. A baseline tells you how the service
+  behaves without that fault, so the comparison has meaning.
 mechanism: >-
-  Design the checker as another fallible component: it can select the wrong target, stop midway or lose access to the API needed for rollback. Target-count guards, limited duration and a no-fault control bound and clarify the experiment. An independently reachable recovery path removes active faults even if automation fails. Test both a known breach and missing reporting before relying on an unattended check.
+  Choose an exact target and a finite duration. Define when to stop, how to remove the fault
+  and how to confirm service recovery. The removal path must remain available if the injector
+  fails. This exercise is a design on paper: a completed card is a plan, not evidence that
+  the system passed.
 task:
   question: >-
-    Could another engineer run your chaos experiment safely without asking you anything, including stopping it and recovering if the experiment itself breaks?
+    How would you test one resilience claim so the result has a clear meaning?
   brief:
+    theory_source: >-
+      chaos-theory.md: §§1.3, 2.5; Appendix C; Master Cheat Sheet §6.
     theory:
       - >-
-        Start from the business (Ch. 1 §1.2.1): a risk has a cost per unit of time; an SLI puts a number on it, an SLO is the agreed target, and an SLA is an SLO in a contract with a penalty. Work backward: business goal → SLO → a condition you can test continuously.
+        A useful chaos experiment starts with a measurable service outcome. Its hypothesis
+        states what should happen when one defined fault occurs. A baseline tells you how
+        the service behaves without that fault, so the comparison has meaning.
       - >-
-        The experiment model (Ch. 1 §1.3, App. C): observability → steady state → hypothesis → run → analysis. A hypothesis is condition → measurable outcome bounded by a number, and "the simpler your experiment, usually the better."
-      - >-
-        Design checklist — before (cheat sheet §6): a user-visible metric you can measure reliably; a steady state measured long enough and with the injection tooling attached; a falsifiable, numeric hypothesis; a failure the system genuinely admits is possible; a calibrated injection; a known blast radius; a teardown that runs even if the experiment crashes; exactly one experiment; and "Should I do this in production?"
-      - >-
-        Design checklist — during and after (cheat sheet §6): verify the injection landed only where intended and watch more than one signal. Afterwards explain the result mechanistically, rule out a tooling artefact with a near-zero control, name confounders, decide whether it becomes continuous, and confirm you cleaned up.
-      - >-
-        Blast-radius controls (Ch. 2 §2.5, cheat sheet §14): strategic — a small subset first, QA before production, automate early, care with randomness, scope by availability zone, prefer adding degraded capacity. Implementational — precise targeting, read the tool's match and filter counts, bound the failure (--duration, when=n+step, randomSample), script the teardown or use auto-revert (autoRestart, autoDelete, --rm), and have a stop condition and someone watching.
-      - >-
-        Match → filter → act (Ch. 11 §11.1, Card 11.3): a policy matches candidates, filters them (randomSample by ratio or size) and acts. The log prints matched, initial and filtered counts — "read them as your blast radius" — and autoRestart is the teardown; without it a failed scenario leaves capacity down.
-      - >-
-        Continuous, recorded checks (Ch. 11 §11.2, cheat sheet §7): one run proves nothing about other conditions, so run the check continuously against an internal SLO tighter than the SLA. Record results as metrics, not a dashboard refreshed by hand, and show how close values are to the limits that cause time-outs.
-      - >-
-        Testing in production (cheat sheet §14): it "boils down to whether you prefer the risk of hurting a portion of production traffic now, or potentially running into the bug later." Testing outside production is incomplete because data, scale, user behaviour and configuration drift, but production experiments are defensible only with blast-radius controls and never replace earlier testing.
+        Choose an exact target and a finite duration. Define when to stop, how to remove
+        the fault and how to confirm service recovery. The removal path must remain available
+        if the injector fails. This exercise is a design on paper: a completed card is a
+        plan, not evidence that the system passed.
     in_this_lab:
       - >-
-        Design only: nothing is deployed. The card is complete when a reviewer can name the target, expected result, stop command and recovery probe without asking you.
-      - >-
-        Each card field is a control: the preflight target count catches a selector matching 0 or too many objects; the abort condition and stop authority bound the run; an exact rollback plus an independent fallback remove the fault if automation or the API fails.
-      - >-
-        Stopping a schedule (for example suspending a CronJob) prevents new injections but does not remove one already active; the rollback must handle both.
-      - >-
-        Staged plan: a no-fault control (the checker works and nothing is injected), then one supervised run in a disposable environment, then an explicitly approved non-production pilot.
-      - >-
-        grep -n ':$' lists lines ending in a colon, which are the fields you have not answered.
+        Fill the prepared card for one service and one fault. Nothing is deployed or disrupted
+        in this lab.
   predict: >-
-    Which card field will be hardest to fill: usually target count, an independent rollback, or detecting missing results.
+    State what you expect to measure under one fault and why the service should behave that
+    way.
   steps:
     - >-
-      Choose one user-facing promise for a service you own, for example: a new build-agent Pod is usable within 60 s.
+      Choose one service outcome and write its normal baseline.
     - >-
-      Fill every field of experiment-card.md.
+      Choose one bounded fault and state the expected outcome in measurable terms.
     - >-
-      Append the failure review: selector matches zero or too many objects, injector dies, API unavailable during rollback, results stop arriving.
+      Write the stop condition, rollback and recovery check, including a fallback if the
+      normal removal path fails.
     - >-
-      Write the staged plan: no-fault control, then supervised disposable run, then approved pilot.
-    - >-
-      Run the unanswered-field check until it reports the card complete.
+      Read the card as another operator: can you run and stop the test without guessing?
   answer_with: >-
-    A complete card from which a reviewer can name the target, expected result, stop command and recovery probe. Nothing is deployed: this lab is design only.
-solution: 'Fill the prepared experiment card using Lab 16, review its own failure modes, and schedule a supervised disposable-environment no-fault control before implementation.'
-verify_note: 'A reviewer can identify the target, success criterion, abort condition, exact rollback, independent fallback, and recovery probe.'
+    Write a card another person can follow: measurable baseline, one fault, expected result,
+    stop condition, rollback and recovery evidence. Keep it a plan; do not invent observations.
+solution: >-
+  A complete experiment connects one controlled fault to one measurable outcome. It also
+  states how to stop and restore the service. If the outcome cannot be measured or the fault
+  cannot be removed, improve the design before considering a run.
+verify_note: >-
+  The card answers each field clearly; this is a design review, not a live test.
 commands:
-  - name: Open the experiment card and fill in every field
+  - name: Fill the short experiment card
     where: VM terminal 1
     run: !unsafe |
       cd ~/labs/lab16
@@ -62,7 +60,19 @@ commands:
     where: VM terminal 1
     run: !unsafe |
       cd ~/labs/lab16
-      grep -n ':$' experiment-card.md || echo 'all fields answered'
+      grep -nE ':[[:space:]]*$' experiment-card.md
+      check_status=$?
+      case "$check_status" in
+        0) echo 'Fill the fields listed above.' ;;
+        1) echo 'No blank fields found; review the answers for clarity.' ;;
+        *) echo 'Could not read the card; fix the file error before continuing.' >&2 ;;
+      esac
+    expect: >-
+      No blank fields remain. Read the answers too: this check does not validate their meaning.
+optional_explanation: >-
+  Optional: review automation failures and staged rollout. Complete the extra questions
+  only when turning the paper experiment into an operational check.
+optional_commands:
   - name: Record the review of the experiment's own failure modes
     where: VM terminal 1
     run: !unsafe |
@@ -78,28 +88,33 @@ commands:
       Staged plan (no-fault control, supervised disposable run, approved pilot):
       MARKDOWN
       ${EDITOR:-nano} experiment-card.md
-      grep -n ':$' experiment-card.md || echo 'card complete'
+      grep -nE ':[[:space:]]*$' experiment-card.md
+      check_status=$?
+      case "$check_status" in
+        0) echo 'Fill the fields listed above.' ;;
+        1) echo 'No blank fields found; review the answers for clarity.' ;;
+        *) echo 'Could not read the card; fix the file error before continuing.' >&2 ;;
+      esac
     expect: >-
-      A reviewer can name the target, expected result, stop command and recovery probe without asking the author.
+      A reviewer can name the target, expected result, stop command and recovery probe without
+      asking the author.
 setup:
   - name: Create the resilience experiment card
-    command: |
+    command: !unsafe |
       mkdir -p "$HOME/labs/lab16"
       cat > "$HOME/labs/lab16/experiment-card.md" <<'MARKDOWN'
       # Chaos Lab 16 experiment card
 
-      Service / owner / environment:
-      User promise and measurement source:
-      Baseline window and minimum sample count:
-      Hypothesis, threshold, and observation window:
-      Injection selector, maximum targets, fault, and duration:
-      Preflight target count, health baseline, and capacity check:
-      Abort condition and stop authority:
-      Exact rollback and independent fallback:
-      Recovery probe and recovery-time limit:
-      Evidence, reviewer, and next review date:
+      Service and environment:
+      Normal baseline and how to measure it:
+      One fault, exact target and maximum duration:
+      Expected outcome and measurement threshold:
+      Stop condition:
+      Rollback and fallback if normal removal fails:
+      Recovery check:
       MARKDOWN
 verify:
   - name: Verify experiment-card availability
-    command: test -s "$HOME/labs/lab16/experiment-card.md"
+    command: !unsafe |
+      test -s "$HOME/labs/lab16/experiment-card.md"
 reset: []

@@ -1,55 +1,110 @@
-title: 'Lab 15 — Retries under a short slowdown'
+title: "Lab 15 — Retries can multiply work"
 concept: >-
-  A user intent is one desired operation; an attempt is one execution of it. Retries can improve success during brief failures, but retries at several layers multiply demand. For example, up to two client attempts and two proxy attempts per client attempt can produce four backend attempts. Actual amplification depends on which failures trigger retries and whether earlier attempts succeed.
+  One user request can cause several attempts. If the client retries and NGINX retries each
+  client attempt, their limits multiply: two attempts at each layer allow up to four backend
+  arrivals. Actual amplification depends on which attempts fail or succeed.
 mechanism: >-
-  When a timeout expires, the caller may retry while the previous backend request is still executing or queued. Slow work occupies limited worker slots longer, which increases waiting, triggers more timeouts and adds further attempts. This feedback can outlast the original slowdown; persistent failure under continued load is metastability. The lab compares bounded runs so amplification and recovery can be measured rather than assumed.
+  A caller timing out does not necessarily cancel work already running downstream. Slow
+  requests hold worker slots while retries add more work. Retrying may recover an operation
+  or worsen contention. Compare backend arrivals per original request with successful user
+  outcomes, using the same load and slowdown in both runs.
 task:
   question: >-
-    During a 5-second backend slowdown, how many backend requests does each of 80 user requests create when both the client and NGINX retry? Does disabling client retries reduce that load, and what does it cost in successful requests?
+    How do retries change backend work per original request during the same slowdown?
   brief:
+    theory_source: >-
+      chaos-theory.md: §1.2.3 (retry amplification) and §1.5 (dependency failures).
     theory:
       - >-
-        Emergent properties (Ch. 1 §1.2.3): behaviour of the whole that no part possesses. In the book's DNS example every service retries DNS errors up to 10 times and users are told to retry too; the DNS server restarts into traffic amplified by the layers of retries, fails again and loops — no component has the property "creates infinite downtime", the system does.
+        One user request can cause several attempts. If the client retries and NGINX retries
+        each client attempt, their limits multiply: two attempts at each layer allow up
+        to four backend arrivals. Actual amplification depends on which attempts fail or
+        succeed.
       - >-
-        Retry storm and metastable failure (Ch. 1 §1.2.3 supplementary, cheat sheet §13): retries at several layers overwhelm a recovering dependency so it never recovers. A metastable failure is one that persists after the original trigger is gone, because recovery itself generates the load that keeps it down.
-      - >-
-        Retries buy availability and spend throughput (Card 6.2): System X retried every failed write, kept 0 failed requests and roughly halved throughput. Retry-on-failure is a throughput amplifier under a degraded dependency — the DNS retry-storm shape at a smaller scale.
-      - >-
-        Retries hide failures (Ch. 2 §2.2, §2.4): a load balancer that retransmits a failed request to another instance keeps the internal failure invisible to users, and max_fails ejects a backend after a single error. That retry is useful until every backend is slow at once, when there is nothing healthy left to retry onto.
-      - >-
-        Time-out ordering (Ch. 12 §12.1.4, ingress experiment 2): "Does your proxy have the same time-out as the service it proxies to? If you time out quicker, not only can you have outstanding requests being processed long after the proxy dropped the connection, but the consequent retries might accumulate and take down the target service." Check time-outs along the whole path: client → ingress → service → database.
-      - >-
-        Counting amplification (lab guide, not the book): backend requests per user intent can reach client attempts × proxy attempts per client attempt. The real figure depends on which failures trigger each layer's retry, and metastability is proven only if failures continue after the slowdown is removed.
+        A caller timing out does not necessarily cancel work already running downstream.
+        Slow requests hold worker slots while retries add more work. Retrying may recover
+        an operation or worsen contention. Compare backend arrivals per original request
+        with successful user outcomes, using the same load and slowdown in both runs.
     in_this_lab:
       - >-
-        NGINX on 127.0.0.1:8090 balances upstreams 9001 and 9002 with proxy_read_timeout 500ms, proxy_next_upstream error timeout and proxy_next_upstream_tries 2: a timed-out attempt is retried once on the other upstream. max_fails=0 means an upstream is never marked down.
-      - >-
-        Each upstream serves at most 4 requests at once; others wait up to 10 s for a slot. Work time comes from delay.txt (0.2 s normally, 1 s during the slowdown, capped at 2 s). A request NGINX abandoned keeps its slot until its work finishes.
-      - >-
-        client.py sends 80 intents, one every 0.25 s, through 8 worker threads, each attempt with a 2 s timeout. When both NGINX attempts time out, the client receives 504 after about 1 s; client.py treats that, a timeout or a connection error as a failed attempt. client.py 1 allows one retry after 0.2 s (up to 2 attempts); client.py 0 allows none. Worst case per intent: 2 x 2 = 4 backend arrivals.
-      - >-
-        Upstream counters are cumulative per process and printed every second. Subtract the pre-test arrivals (including the checkpoint curl) before dividing by 80.
+        Each case starts fresh upstreams and runs 80 requests. Five seconds after load starts,
+        response delay rises from 0.2 to 1 second for five seconds. NGINX permits two upstream
+        attempts per client attempt with a 0.5-second read timeout. Only the client retry
+        setting changes. The runner prints measurements and cleans up its processes.
   predict: >-
-    Amplification (backend arrivals / 80) and the number of successful intents with one client retry and with zero.
+    Predict backend arrivals per request and user successes with one client retry versus
+    none.
   steps:
     - >-
-      Start upstreams on ports 9001 and 9002 (4 slots each); confirm the NGINX proxy on 8090 answers and record pre-test arrivals.
+      Run the prepared case with one client retry; record amplification and successes out
+      of 80.
     - >-
-      Run client.py 1 (80 intents); from VM terminal 2, 5 s later set delay.txt to 1 for 5 s.
+      Run it again with zero client retries and compare the same measurements.
     - >-
-      After the work drains, compute (arrivals - pre-test) / 80 and count client outcomes.
-    - >-
-      Restart both upstreams to reset counters and repeat with client.py 0.
-    - >-
-      Stop the upstreams by PID and remove the ce-lab15 NGINX config.
+      Confirm normal delay and remove the proxy configuration. Explain the extra work without
+      assuming retries must improve success.
   answer_with: >-
-    Amplification and outcome counts for both runs. Name which layer retried (NGINX proxy_next_upstream, the client, or both) and state whether failures continued after the slowdown ended.
-solution: 'Use Lab 15 to create the two upstreams and proxy, apply the same five-second delay with one then zero client retries, and calculate arrivals divided by 80 intents.'
-verify_note: 'Ports 8090 and 9001–9002 are free before setup and the NGINX configuration is removed on reset.'
+    Compare arrivals / 80 and successful requests / 80 for both settings. Explain why the
+    retry limits bound attempts but do not guarantee a particular success rate.
+solution: >-
+  Removing client retries removes one source of extra work; proxy retries can still amplify
+  requests. Compare both runs using arrivals per original request and successes out of 80.
+  The retry limits give an upper bound, not a guaranteed multiplier. Continued failures
+  after the delay ends can indicate backlog; this short run alone does not prove a self-sustaining
+  failure.
+verify_note: >-
+  Normal delay is restored, upstream processes are stopped and the lab proxy config is removed.
 commands:
-  - name: Save the concurrency-limited upstream and the finite client
+  - name: Run with one client retry
     where: VM terminal 1
     run: !unsafe |
+      cd ~/labs/lab15
+      bash run-case.sh 1
+    expect: >-
+      The runner checks the baseline, runs 80 original requests with the timed slowdown,
+      prints arrivals and successes, then stops its upstreams.
+  - name: Repeat with no client retry
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab15
+      bash run-case.sh 0
+    expect: >-
+      Compare amplification and successes with the first run. Proxy retries remain enabled,
+      so zero client retries does not imply one backend arrival per original request.
+  - name: Confirm the delay is normal and remove the lab proxy
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab15
+      cat delay.txt
+      sudo rm -f /etc/nginx/conf.d/ce-lab15.conf
+      sudo nginx -t && sudo systemctl reload nginx
+    expect: >-
+      delay.txt is 0.2. Each completed runner stops its own upstreams; the proxy configuration
+      is now removed.
+setup:
+  - name: Prepare the retry-lab directory and baseline delay file
+    command: !unsafe |
+      mkdir -p "$HOME/labs/lab15"
+      printf '0.2\n' > "$HOME/labs/lab15/delay.txt"
+  - name: Install the exact Lab 15 NGINX proxy configuration
+    command: !unsafe |
+      sudo tee /etc/nginx/conf.d/ce-lab15.conf >/dev/null <<'NGX'
+      upstream ce_lab15 { server 127.0.0.1:9001 max_fails=0; server 127.0.0.1:9002 max_fails=0; }
+      server {
+        listen 127.0.0.1:8090;
+        location / {
+          proxy_pass http://ce_lab15;
+          proxy_connect_timeout 1s;
+          proxy_read_timeout 500ms;
+          proxy_next_upstream error timeout;
+          proxy_next_upstream_tries 2;
+        }
+      }
+      NGX
+      sudo nginx -t
+      sudo systemctl restart nginx
+  - name: Prepare the upstream and client programs
+    command: !unsafe |
       cd ~/labs/lab15
       cat > upstream.py <<'PY'
       import sys, time, threading
@@ -103,101 +158,68 @@ commands:
               time.sleep(0.25)
           for f in futures: f.result()
       PY
-  - name: Start both upstreams, pass the checkpoint, record pre-test arrivals
-    where: VM terminal 1, same shell
-    run: !unsafe |
-      cd ~/labs/lab15
-      echo 0.2 > delay.txt
-      python3 upstream.py 9001 > upstream1.log 2>&1 & first=$!
-      python3 upstream.py 9002 > upstream2.log 2>&1 & second=$!
-      sleep 1
-      curl -fsS --max-time 2 http://127.0.0.1:8090/
-      arrived() { tail -n1 "$1" | sed -E "s/.*'arrived': ([0-9]+).*/\1/"; }
-      sleep 2
-      pre=$(( $(arrived upstream1.log) + $(arrived upstream2.log) ))
-      echo "pre-test arrivals=$pre"
-    expect: >-
-      ok from the proxy and pre-test arrivals=1 (the checkpoint curl).
-  - name: Run 80 intents with one client retry
-    where: VM terminal 1, same shell
-    run: !unsafe |
-      python3 client.py 1 | tee client-retries.log
-  - name: Start right after the client, a five-second slowdown after five seconds
-    where: VM terminal 2
-    run: !unsafe |
-      cd ~/labs/lab15
-      sleep 5; echo 1 > delay.txt; sleep 5; echo 0.2 > delay.txt
-  - name: Let backend work drain, then calculate amplification and outcomes
-    where: VM terminal 1, same shell
-    run: !unsafe |
-      sleep 5
-      total=$(( $(arrived upstream1.log) + $(arrived upstream2.log) - pre ))
-      echo "backend arrivals=$total amplification=$(echo "scale=2; $total/80" | bc)"
-      awk '{outcome[$2]++; attempts+=$3} END {for (o in outcome) print "outcome", o, outcome[o]; print "client attempts", attempts}' client-retries.log
-      tail -n1 upstream1.log upstream2.log
-    expect: >-
-      Amplification is typically above 1.0: proxy retries (up to 2 per client attempt) plus client retries multiply backend arrivals during the slowdown.
-  - name: Reset counters by restarting the exact upstream PIDs, then repeat with zero client retries
-    where: VM terminal 1, same shell
-    run: !unsafe |
-      kill "$first" "$second"; wait "$first" "$second" 2>/dev/null
-      echo 0.2 > delay.txt
-      python3 upstream.py 9001 > upstream1.log 2>&1 & first=$!
-      python3 upstream.py 9002 > upstream2.log 2>&1 & second=$!
-      sleep 1
-      curl -fsS --max-time 2 http://127.0.0.1:8090/
-      sleep 2
-      pre=$(( $(arrived upstream1.log) + $(arrived upstream2.log) ))
-      python3 client.py 0 | tee client-no-retries.log
-  - name: Same slowdown for the zero-retry run (start right after that client)
-    where: VM terminal 2
-    run: !unsafe |
-      cd ~/labs/lab15
-      sleep 5; echo 1 > delay.txt; sleep 5; echo 0.2 > delay.txt
-  - name: Compare the zero-retry run
-    where: VM terminal 1, same shell
-    run: !unsafe |
-      sleep 5
-      total=$(( $(arrived upstream1.log) + $(arrived upstream2.log) - pre ))
-      echo "backend arrivals=$total amplification=$(echo "scale=2; $total/80" | bc)"
-      awk '{outcome[$2]++; attempts+=$3} END {for (o in outcome) print "outcome", o, outcome[o]; print "client attempts", attempts}' client-no-retries.log
-  - name: Clean up
-    where: VM terminal 1, same shell
-    run: !unsafe |
-      echo 0.2 > delay.txt
-      kill "$first" "$second"; wait "$first" "$second" 2>/dev/null || true
-      sudo rm -f /etc/nginx/conf.d/ce-lab15.conf
-      sudo nginx -t && sudo systemctl reload nginx
-setup:
-  - name: Prepare the retry-lab directory and baseline delay file
-    command: |
-      mkdir -p "$HOME/labs/lab15"
-      printf '0.2\n' > "$HOME/labs/lab15/delay.txt"
-  - name: Install the exact Lab 15 NGINX proxy configuration
-    command: |
-      sudo tee /etc/nginx/conf.d/ce-lab15.conf >/dev/null <<'NGX'
-      upstream ce_lab15 { server 127.0.0.1:9001 max_fails=0; server 127.0.0.1:9002 max_fails=0; }
-      server {
-        listen 127.0.0.1:8090;
-        location / {
-          proxy_pass http://ce_lab15;
-          proxy_connect_timeout 1s;
-          proxy_read_timeout 500ms;
-          proxy_next_upstream error timeout;
-          proxy_next_upstream_tries 2;
-        }
+  - name: Prepare the finite retry comparison runner
+    command: !unsafe |
+      cat > "$HOME/labs/lab15/run-case.sh" <<'SH'
+      #!/usr/bin/env bash
+      set -euo pipefail
+      cd "$HOME/labs/lab15"
+      retries=${1:?Use 0 or 1 client retries}
+      [[ "$retries" == 0 || "$retries" == 1 ]] || exit 2
+      first=''; second=''; slowdown=''
+      cleanup() {
+        if [[ -n "$slowdown" ]]; then kill "$slowdown" 2>/dev/null || true; wait "$slowdown" 2>/dev/null || true; fi
+        echo 0.2 > delay.txt
+        for pid in "$first" "$second"; do
+          if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi
+        done
       }
-      NGX
-      sudo nginx -t
-      sudo systemctl restart nginx
+      trap cleanup EXIT
+      trap 'exit 130' INT TERM
+      arrived() {
+        python3 - "$1" <<'PYCOUNT'
+      import ast, sys
+      from pathlib import Path
+      samples = [line for line in Path(sys.argv[1]).read_text().splitlines() if "{'arrived':" in line]
+      if not samples:
+          raise SystemExit('Missing upstream counters; inspect the log.')
+      print(ast.literal_eval(samples[-1].split(' ', 2)[2])['arrived'])
+      PYCOUNT
+      }
+      echo 0.2 > delay.txt
+      python3 upstream.py 9001 > "upstream1-$retries.log" 2>&1 & first=$!
+      python3 upstream.py 9002 > "upstream2-$retries.log" 2>&1 & second=$!
+      sleep 2
+      kill -0 "$first" "$second"
+      curl -fsS --max-time 2 http://127.0.0.1:8090/
+      sleep 2
+      pre=$(( $(arrived "upstream1-$retries.log") + $(arrived "upstream2-$retries.log") ))
+      echo "baseline arrivals=$pre; starting 80 requests with client retries=$retries"
+      (sleep 5; echo 1 > delay.txt; sleep 5; echo 0.2 > delay.txt) & slowdown=$!
+      python3 client.py "$retries" > "client-$retries.log"
+      wait "$slowdown"; slowdown=''
+      # Bounded slot waiting is 10 s, service time at most 2 s, reporter interval 1 s.
+      sleep 15
+      kill -0 "$first" "$second"
+      total=$(( $(arrived "upstream1-$retries.log") + $(arrived "upstream2-$retries.log") - pre ))
+      awk -v arrivals="$total" -v retries="$retries" '
+        $2 == "200" {success++} {attempts += $3}
+        END {
+          if (NR != 80) {print "Incomplete client sample: " NR "/80"; exit 1}
+          printf "client retries=%d original requests=80 client attempts=%d backend arrivals=%d amplification=%.2f successes=%d/80\n", retries, attempts, arrivals, arrivals/80, success
+        }' "client-$retries.log"
+      SH
 verify:
   - name: Verify retry-lab static prerequisites
-    command: |
+    command: !unsafe |
       test -f "$HOME/labs/lab15/delay.txt"
       sudo nginx -t
+      test -s "$HOME/labs/lab15/upstream.py"
+      test -s "$HOME/labs/lab15/client.py"
+      test -s "$HOME/labs/lab15/run-case.sh"
 reset:
   - name: Restore delay and remove only the Lab 15 proxy configuration
-    command: |
+    command: !unsafe |
       if [[ -d "$HOME/labs/lab15" ]]; then printf '0.2\n' > "$HOME/labs/lab15/delay.txt"; fi
       sudo rm -f /etc/nginx/conf.d/ce-lab15.conf
       sudo nginx -t && sudo systemctl stop nginx || true

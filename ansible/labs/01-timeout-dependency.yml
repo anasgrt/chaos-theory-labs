@@ -1,61 +1,90 @@
-title: 'Lab 01 — Refused versus silent dependency'
+title: "Lab 01 — A timeout makes a silent failure manageable"
 concept: >-
-  A dependency can fail quickly, respond too slowly, or never respond within a useful time. These are different conditions for the caller. An exception handler only runs after an operation returns or raises; it cannot rescue a call that remains blocked. While waiting, requests may occupy worker slots or connections, reducing the application's ability to serve other users.
+  An exception handler runs only after an operation raises an error. A refused TCP connection
+  produces an error promptly. Silently discarded packets provide no reply, so the connection
+  attempt can keep waiting before the handler is reached.
 mechanism: >-
-  In this lab, REJECT returns a TCP refusal while DROP silently discards traffic, leaving the client waiting for a response or timeout. A connection timeout limits connection establishment; a read timeout limits waiting on an established connection. The external watchdog bounds the demonstration. A whole-request deadline must also account for multiple dependency calls and retries, rather than restarting the full waiting budget at each step.
+  An application timeout limits that wait and lets the operation raise an error the handler
+  can catch. A connect timeout bounds connection establishment; a read timeout bounds waiting
+  after connection. The external watchdog instead terminates the test process. It keeps
+  the experiment short but does not make the application handle the dependency failure.
 task:
   question: >-
-    Redis failures are "handled" by an exception handler. When Redis refuses the connection versus silently drops packets, does the client fail fast? What actually bounds the wait: the handler, the external watchdog, or an application timeout?
+    Why does the exception handler run after refusal but not while packets are silently
+    dropped?
   brief:
+    theory_source: >-
+      chaos-theory.md: §1.5 and Experiment Card 1.1.
     theory:
       - >-
-        The FizzBuzzAAS outage (Ch. 1 §1.5): load balancer → two identical API instances → cache. Servers were reachable, reported healthy and ran the expected processes, yet "I don't see any errors, but all of these requests seem to stop at the cache lookup." The cache is a dependency on the request path; what the code does when it is slow or unreachable is the whole story.
+        An exception handler runs only after an operation raises an error. A refused TCP
+        connection produces an error promptly. Silently discarded packets provide no reply,
+        so the connection attempt can keep waiting before the handler is reached.
       - >-
-        Root cause in two layers (Ch. 1 §1.5): the code handled the cache being down (connection refused, no host) but had no time-outs for no response at all, and a badly rolled-out firewall policy silently blocked the cache. Two identical instances did not help: redundancy protects against machine failure, not logic failure.
-      - >-
-        Fail fast vs. hang (Ch. 1 §1.5): different failure modes. "A dropped packet (silence) behaves differently from a rejected connection (immediate error)." Code that handles one may be defenceless against the other.
-      - >-
-        DROP vs. REJECT (Ch. 1 §1.5 and its editorial note): -j DROP makes the kernel discard matching packets silently — no RST, no ICMP rejection — which reproduces a hang; -j REJECT produces the refused error the code already handled. A real rule needs a chain (OUTPUT for locally generated traffic) and a -d destination; the book's shorthand is not a literal command.
-      - >-
-        Why the handler never ran (Card 1.1): "With packets dropped, the socket waits; without a time-out, the request thread waits with it." Error handling covered connection refused and no host, not no response, while the team assumed graceful degradation because cache-down was "handled".
-      - >-
-        Lesson (Card 1.1, cheat sheet §13 Missing time-outs): every network call on a request path needs an explicit time-out; without one it is an unbounded wait. Handling "down" is not handling "slow" or "silent", and absence of errors in logs is not evidence of health.
-      - >-
-        Test it as an experiment (Ch. 1 §1.3, §1.5): hypothesis "If we drop connectivity to the cache, we continue getting a successful response." The team put inject and revert into integration-test setup and teardown and confirmed the old build broke and the fixed build survived. A refuted hypothesis is a problem found before clients found it.
-      - >-
-        Time-out scope (lab guide, not the book): a connect time-out limits establishing a connection, a read time-out limits waiting on an open one, and neither bounds a whole request with several calls or retries. An external watchdog that kills the process bounds the experiment, but the application reports nothing.
-      - >-
-        Blast radius (Card 1.1, Ch. 2 §2.5): a DROP rule affects every request routed through that host. Scope it to one destination, script the teardown so a crashed test cannot leave the rule behind, and prove the baseline works again afterwards.
+        An application timeout limits that wait and lets the operation raise an error the
+        handler can catch. A connect timeout bounds connection establishment; a read timeout
+        bounds waiting after connection. The external watchdog instead terminates the test
+        process. It keeps the experiment short but does not make the application handle
+        the dependency failure.
     in_this_lab:
       - >-
-        Fault: one iptables OUTPUT rule tagged ce-lab01, matching only TCP to 127.0.0.1:6379. REJECT uses --reject-with tcp-reset. With DROP, the kernel resends the connection request with doubling gaps (tcp_syn_retries=6 on this VM, about 127 s in total) before connect() gives up, far longer than the 5 s watchdog.
-      - >-
-        client.py (redis-py 4.3.4): without TIMEOUT both socket time-outs are None, meaning no limit. TIMEOUT=0.5 sets the connect and read time-outs. A refused connect raises ConnectionError; an expired connect time-out raises TimeoutError. Both are RedisError, so the handler prints DEGRADED plus the class name, then elapsed=. Retries are disabled, so one attempt shows the raw behaviour.
-      - >-
-        Watchdog: timeout 5s sends SIGTERM to the client after 5 s and exits with status 124. The killed client prints nothing, not even elapsed=.
-      - >-
-        Evidence and cleanup: the pkts counter of the ce-lab01 rule in iptables -nvL OUTPUT proves packets hit the fault. run.sh removes its rule in an EXIT trap; a trap cannot run after SIGKILL, so then delete the rule by hand and rerun the baseline client.
+        One ce-lab01 firewall rule targets TCP 127.0.0.1:6379. All fault runs use a five-second
+        watchdog; TIMEOUT=0.5 sets the client timeouts.
   predict: >-
-    For REJECT, DROP without a timeout, and DROP with TIMEOUT=0.5: will the client print DEGRADED, and after roughly how many seconds?
+    Predict which of the three attempts reaches the handler: REJECT, DROP, and DROP with
+    a 0.5-second timeout.
   steps:
     - >-
-      Baseline: redis-cli ping returns PONG and client.py prints OK True.
+      Confirm the prepared client succeeds without a fault.
     - >-
-      Add an iptables REJECT rule (comment ce-lab01) for 127.0.0.1:6379; run the client under timeout 5s and record output, exit code and elapsed time.
+      Run the prepared comparison and record each result and wait time.
     - >-
-      Replace it with a DROP rule; run the client without a timeout, then with TIMEOUT=0.5.
-    - >-
-      Remove every ce-lab01 rule and prove the client prints OK True again.
+      Confirm the client succeeds after cleanup. Explain which limit belongs to the application
+      and which belongs to the test.
   answer_with: >-
-    Three outcome plus elapsed-time pairs, exit=124 for the watchdog case, and no ce-lab01 rule left in iptables -S OUTPUT. Explain why the exception handler could not rescue the DROP case without a timeout.
-solution: 'Use the Core experiment in Lab 1 to create the Python client, run the commented REJECT and DROP comparison, and record all three elapsed outcomes.'
-verify_note: 'Redis answers PONG and no ce-lab01 OUTPUT rule remains after recovery.'
+    For each attempt, state whether the handler ran and what ended the wait. Use those observations
+    to explain why catching errors alone does not bound waiting.
+solution: >-
+  REJECT should reach the handler quickly. DROP without an application timeout should reach
+  the five-second watchdog instead. With TIMEOUT=0.5, the client should handle the timeout
+  near half a second. The handler needs an error; it does not create a time limit.
+verify_note: >-
+  The client succeeds again and no ce-lab01 rule remains.
 commands:
-  - name: Create the tiny Redis client and check the baseline
+  - name: Check the Redis baseline
     where: VM terminal 1
     run: !unsafe |
+      cd ~/labs/lab01
       redis-cli ping
-      mkdir -p ~/labs/lab01 && cd ~/labs/lab01
+      python3 client.py
+    expect: >-
+      PONG, then OK True.
+  - name: Predict, run, then prove recovery
+    where: VM terminal 1
+    run: !unsafe |
+      cd ~/labs/lab01
+      bash run.sh
+      python3 client.py
+      sudo iptables -S OUTPUT | grep ce-lab01; echo "grep exit=$? (1 means no lab rule remains)"
+    expect: >-
+      REJECT prints DEGRADED ConnectionError within milliseconds. DROP without a timeout
+      prints nothing and is stopped by the external watchdog (exit=124). DROP with TIMEOUT=0.5
+      prints DEGRADED TimeoutError near 0.5 s. The ce-lab01 rule shows pkts above 0. The
+      final client prints OK True.
+  - name: Manual rule removal, only if run.sh was killed
+    where: VM terminal 2
+    run: !unsafe |
+      sudo iptables -D OUTPUT -p tcp -d 127.0.0.1 --dport 6379 -m comment --comment ce-lab01 -j DROP
+      sudo iptables -D OUTPUT -p tcp -d 127.0.0.1 --dport 6379 -m comment --comment ce-lab01 -j REJECT --reject-with tcp-reset
+      python3 ~/labs/lab01/client.py
+setup:
+  - name: Start the dedicated Redis dependency
+    command: !unsafe |
+      sudo systemctl start redis-server
+  - name: Prepare the Redis client
+    command: !unsafe |
+      mkdir -p "$HOME/labs/lab01"
+      cd "$HOME/labs/lab01"
       cat > client.py <<'PY'
       import os, time, redis
       from redis.retry import Retry
@@ -71,12 +100,8 @@ commands:
           print('DEGRADED', type(exc).__name__)
       print(f'elapsed={time.monotonic()-start:.3f}s')
       PY
-      python3 client.py
-    expect: >-
-      PONG, then OK True.
-  - name: Save the bounded REJECT/DROP comparison script
-    where: VM terminal 1
-    run: !unsafe |
+  - name: Prepare the bounded comparison script
+    command: !unsafe |
       cd ~/labs/lab01
       cat > run.sh <<'SH'
       #!/usr/bin/env bash
@@ -102,34 +127,19 @@ commands:
       echo 'Rule counters after the DROP runs (pkts must be above 0)'
       sudo iptables -nvL OUTPUT --line-numbers | grep -E 'num|ce-lab01'
       SH
-  - name: Predict, run, then prove recovery
-    where: VM terminal 1
-    run: !unsafe |
-      cd ~/labs/lab01
-      bash run.sh
-      python3 client.py
-      sudo iptables -S OUTPUT | grep ce-lab01; echo "grep exit=$? (1 means no lab rule remains)"
-    expect: >-
-      REJECT prints DEGRADED ConnectionError within milliseconds. DROP without a timeout prints nothing and is stopped by the external watchdog (exit=124). DROP with TIMEOUT=0.5 prints DEGRADED TimeoutError near 0.5 s. The ce-lab01 rule shows pkts above 0. The final client prints OK True.
-  - name: Manual rule removal, only if run.sh was killed
-    where: VM terminal 2
-    run: !unsafe |
-      sudo iptables -D OUTPUT -p tcp -d 127.0.0.1 --dport 6379 -m comment --comment ce-lab01 -j DROP
-      sudo iptables -D OUTPUT -p tcp -d 127.0.0.1 --dport 6379 -m comment --comment ce-lab01 -j REJECT --reject-with tcp-reset
-      python3 ~/labs/lab01/client.py
-setup:
-  - name: Start the dedicated Redis dependency
-    command: sudo systemctl start redis-server
 verify:
   - name: Verify Redis and firewall recovery
-    command: |
+    command: !unsafe |
       redis-cli ping | grep -qx PONG
       ! sudo iptables -S OUTPUT | grep -q -- '--comment ce-lab01'
+      test -s "$HOME/labs/lab01/client.py"
+      test -s "$HOME/labs/lab01/run.sh"
 reset:
   - name: Remove only Lab 01 firewall rules
-    command: |
+    command: !unsafe |
       rule=(-p tcp -d 127.0.0.1 --dport 6379 -m comment --comment ce-lab01)
       sudo iptables -D OUTPUT "${rule[@]}" -j DROP 2>/dev/null || true
       sudo iptables -D OUTPUT "${rule[@]}" -j REJECT --reject-with tcp-reset 2>/dev/null || true
   - name: Return Redis to its shared baseline state
-    command: sudo systemctl stop redis-server
+    command: !unsafe |
+      sudo systemctl stop redis-server

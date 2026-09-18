@@ -34,15 +34,14 @@
           - selected_lab.task.predict | default('') | length > 0
           - selected_lab.task.steps | default([]) | length > 0
           - selected_lab.task.answer_with | default('') | length > 0
-        fail_msg: "{{ lab_definition }} needs task.question, task.brief.theory, task.brief.in_this_lab, task.predict, task.steps and task.answer_with."
+          - selected_lab.commands | default([]) | length > 0
+        fail_msg: "{{ lab_definition }} needs task.question, task.brief.theory, task.brief.in_this_lab, task.predict, task.steps, task.answer_with and core commands."
 
   tasks:
     - name: Show the lab model before setup
       ansible.builtin.debug:
         msg:
           - "{{ selected_lab.title }}"
-          - "Concept: {{ selected_lab.concept }}"
-          - "Mechanism: {{ selected_lab.mechanism }}"
           - "Question: {{ selected_lab.task.question }}"
       when: lab_action == 'setup'
 
@@ -127,5 +126,5 @@
           - "{{ selected_lab.title }}"
           - "Solution: {{ selected_lab.solution }}"
           - "Verify: {{ selected_lab.verify_note }}"
-          - Use ansible/run-lab.sh to print the practical commands.
+          - Use question for the core procedure and solution to compare observations.
       when: lab_action == 'solution' and lab_text_output | length == 0

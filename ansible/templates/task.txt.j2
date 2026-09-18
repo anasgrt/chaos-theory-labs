@@ -8,12 +8,16 @@
 QUESTION TO ANSWER
   {{ wrap(selected_lab.task.question, 2) }}
 
-THEORY YOU NEED (from the book)
-{% for point in selected_lab.task.brief.theory %}
-  - {{ wrap(point, 4) }}
-{% endfor %}
+THEORY BEFORE YOU START
+{% for paragraph in selected_lab.task.brief.theory %}
+  {{ wrap(paragraph, 2) }}
 
-HOW IT APPLIES IN THIS LAB
+{% endfor %}
+{% if selected_lab.task.brief.theory_source is defined %}
+  Source: {{ wrap(selected_lab.task.brief.theory_source, 10) }}
+{% endif %}
+
+IN THIS LAB
 {% for point in selected_lab.task.brief.in_this_lab %}
   - {{ wrap(point, 4) }}
 {% endfor %}
@@ -26,9 +30,12 @@ STEPS
   {{ '%-3s' | format(loop.index ~ '.') }}{{ wrap(step, 5) }}
 {% endfor %}
 
-YOUR ANSWER MUST SHOW
+EXPLAIN THE RESULT
   {{ wrap(selected_lab.task.answer_with, 2) }}
 
-Stuck? Exact commands:  ./ansible/run-lab.sh {{ lab_id }} solution
+{% include 'commands.txt.j2' %}
+
+After writing your explanation, compare with:
+./ansible/run-lab.sh {{ lab_id }} solution
 Show this task again:   ./ansible/run-lab.sh {{ lab_id }} question
 Remove the fixture:     ./ansible/run-lab.sh {{ lab_id }} reset
