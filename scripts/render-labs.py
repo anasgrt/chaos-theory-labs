@@ -1,94 +1,114 @@
 #!/usr/bin/env python3
-"""Render the learner guide from the lab definitions; --check detects drift."""
+"""Render the learner guide from the same definitions as the terminal cards."""
 import argparse
-from pathlib import Path
-import yaml
+from lab_content import ROOT, load_labs
 
-ROOT = Path(__file__).resolve().parents[1]
-
-class Loader(yaml.SafeLoader):
-    pass
-
-Loader.add_constructor('!unsafe', lambda loader, node: loader.construct_scalar(node))
 
 def render():
-    labs = [(p.stem[:2], yaml.load(p.read_text(), Loader=Loader))
-            for p in sorted((ROOT / 'ansible/labs').glob('[0-9][0-9]-*.yml'))]
-    parts = ['''# Chaos labs — understand the result
+    labs = load_labs()
+    parts = ['''# Chaos labs
 
-Each lab connects one question to a controlled comparison. Read the theory, predict the result, run the core procedure, and explain your observations before opening the solution. The explanations come from `chaos-theory.md`; the commands adapt them to this repository's fixtures.
+Study the theory on each card, predict a result, then run a controlled comparison.
+The card explains the mechanisms and measurements needed to answer its question.
+[chaos-theory.md](chaos-theory.md) is the deeper reference; citations use its original section numbers.
 
-## Start here
+## Workflow
 
-1. From the Mac project folder, run `./up.sh` and complete Lab 00.
-2. Prepare the chosen lab with `./ansible/run-lab.sh NN setup`, then check its baseline with `./ansible/run-lab.sh NN verify`. Setup prepares the fixture and supporting programs; it does not inject the fault. Rerunning setup resets the fixture.
-3. Read `./ansible/run-lab.sh NN question`, which includes the core commands. Use `vagrant ssh` for the named VM terminals. Run commands in Bash without exit-on-error: some failures are deliberate observations.
-4. Record your prediction, observed comparison and explanation. Then open the solution or run `./ansible/run-lab.sh NN solution`. Finish recovery and any optional work before `./ansible/run-lab.sh NN reset` on the Mac.
+1. Run `./lab.sh provision` once to prepare the shared VM.
+2. Choose any lab. Read `./lab.sh NN question`, then run `./lab.sh NN setup`.
+3. Open `./lab.sh ssh`, predict, and run the procedure in its named terminals.
+4. Record and explain your results, then compare with `./lab.sh NN solution`.
+5. Complete recovery and save any results outside the VM.
+6. Run `./lab.sh NN reset` to remove only that lab's resources and files.
 
-Stop if the baseline fails. A setup error, failed injector or missing measurement is not evidence of resilience. If the outcome differs from your prediction, check that the fault took effect and that recovery passed; report the result you actually observed. Expected timings and counts are not guarantees.
+All labs use one VM. Each setup supplies its own fixture; Kubernetes labs create
+separate named kind clusters inside that VM. No lab requires another lab. Reset
+finished labs to free resources. `./lab.sh stop` halts the whole VM and preserves
+its files. See [the README](../README.md) for requirements and capacity.
 
-Use only the named targets in the disposable VM, one fault at a time. Keep another VM terminal available for cleanup. A stopped injector does not always remove its effect; use each lab's recovery procedure. Lab 00 establishes a snapshot as a fallback.
+Setup prepares the fixture; the procedure injects the fault. Repeating setup resets
+the fixture (Lab 16 preserves your written card). Verify checks readiness before the
+experiment; the card's recovery check tests its final state. Stop if the baseline
+fails. A missing measurement or an injector that never reached its target is not a pass.
 
-**Dependencies:** Labs 11–13 require Lab 10's `chaos` cluster. Lab 08 setup stops Lab 07's stack because both use port 8080. Lab 14 uses a separate `ha` cluster: remove `chaos` and allocate at least 16 GiB VM memory first, as described in README.md. Lab 16 is design only. Other labs use the shared Lab 00 environment.
+Keep a second shell in the selected VM available for recovery. Run commands in
+Bash without `set -e`; some failures are observations. Keep the same shell when
+commands reuse variables. Fallback blocks are only for failed recovery. Expected
+patterns are not measurements. Kind nodes within a lab share one VM, so they do
+not simulate independent physical machines or availability zones.
 
-**A complete answer:** what changed → the evidence → why the mechanism explains it → whether recovery passed. Use your own numbers and outputs. Optional comparisons are not completion requirements. Prepared scripts remain readable under `~/labs/labNN/`; understanding their implementation is optional unless it is the subject of the question.
+## Theory to lab map
 
-## Labs
-
+| Lab | Question | Theory source |
+| --- | --- | --- |
 ''']
-    for num, d in labs:
-        parts.append(f'- [Lab {num}: {d["title"].split(" — ", 1)[1]}](#lab-{num})\n')
+    for number, lab in labs.items():
+        parts.append(f'| [{number}](#lab-{number}) | {lab["task"]["question"]} | {lab["task"]["brief"]["theory_source"]} |\n')
 
-    def commands(items, expectations=False):
-        for index, c in enumerate(items, 1):
-            parts.append(f'**{index}. {c["name"]}** — {c.get("where", "VM terminal 1")}\n\n')
-            parts.append('```bash\n' + c['run'].rstrip() + '\n```\n\n')
-            if expectations and c.get('expect'):
-                parts.append('Expected observation: ' + c['expect'] + '\n\n')
+    def commands(items):
+        for index, command in enumerate(items, 1):
+            parts.append(f'**{index}. {command["name"]}** — {command.get("where", "VM terminal 1")}\n\n')
+            parts.append('```bash\n' + command['run'].rstrip() + '\n```\n\n')
 
-    for num, d in labs:
-        t = d['task']; b = t['brief']
-        parts.append(f'\n<a id="lab-{num}"></a>\n\n## {d["title"]}\n\n**Question:** {t["question"]}\n\n')
-        parts.append('\n\n'.join(b['theory']) + '\n\n')
-        parts.append('**Source:** ' + b['theory_source'] + '\n\n')
-        parts.append('**In this lab:** ' + ' '.join(b['in_this_lab']) + '\n\n')
-        parts.append('**Predict:** ' + t['predict'] + '\n\n')
-        parts.append('\n'.join(f'{i}. {s}' for i, s in enumerate(t['steps'], 1)) + '\n\n')
-        parts.append('**Explain the result:** ' + t['answer_with'] + '\n\n')
-        parts.append('<details>\n<summary>Core procedure — run after predicting</summary>\n\n')
-        parts.append(f'Run `./ansible/run-lab.sh {num} setup` and `verify` on the Mac first. Use the named terminals and keep the same shell when blocks reuse variables. Fallback blocks are only for failed cleanup.\n\n')
-        commands(d['commands'])
-        parts.append('**Recovery check:** ' + d['verify_note'] + '\n\n</details>\n\n')
-        parts.append('<details>\n<summary>Solution — compare after explaining your result</summary>\n\n' + d['solution'] + '\n\n')
-        parts.append('Expected patterns below are conditional on a working baseline and a successful injection. Record differences; do not substitute these patterns for your measurements.\n\n')
-        for i, c in enumerate(d['commands'], 1):
-            if c.get('expect'):
-                parts.append(f'**Step {i}:** {c["expect"]}\n\n')
-        parts.append('</details>\n\n')
-        if d.get('optional_commands'):
-            parts.append('<details>\n<summary>Optional comparison — beyond the core question</summary>\n\n' + d['optional_explanation'] + '\n\n')
-            commands(d['optional_commands'], expectations=True)
+    for number, lab in labs.items():
+        task = lab['task']
+        brief = task['brief']
+        parts.append(f'\n<a id="lab-{number}"></a>\n\n## {lab["title"]}\n\n')
+        parts.append(f'**Question:** {task["question"]}\n\n**Before you run:** {lab["prerequisites"]}\n\n')
+        parts.append('### Theory you need\n\n' + '\n\n'.join(brief['theory']) + '\n\n')
+        parts.append('**Source:** ' + brief['theory_source'] + '\n\n')
+        parts.append('**The experiment:** ' + ' '.join(brief['in_this_lab']) + '\n\n')
+        parts.append('### How to read the evidence\n\n| Signal | Meaning |\n| --- | --- |\n')
+        for reading in brief['readings']:
+            parts.append(f'| {reading["signal"]} | {reading["meaning"]} |\n')
+        parts.append('\n**Predict:** ' + task['predict'] + '\n\n')
+        evidence = task['evidence']
+        parts.append('### Record your results\n\n| ' + ' | '.join(evidence['columns']) + ' |\n')
+        parts.append('| ' + ' | '.join('---' for _ in evidence['columns']) + ' |\n')
+        for row in evidence['rows']:
+            parts.append('| ' + row + ' | —' * (len(evidence['columns']) - 1) + ' |\n')
+        parts.append('\n### Procedure\n\n')
+        commands(lab['commands'])
+        parts.append('**Recovery check:** ' + lab['verify_note'] + '\n\n')
+        if lab.get('fallback'):
+            parts.append('<details>\n<summary>If normal recovery fails</summary>\n\n')
+            commands(lab['fallback'])
             parts.append('</details>\n\n')
-        parts.append(f'After recovery and any optional work, reset from the Mac: `./ansible/run-lab.sh {num} reset`.\n')
+        parts.append('**Answer:** ' + task['answer_with'] + '\n\n')
+        parts.append('**Check your understanding:** ' + task['transfer'] + '\n\n')
+        parts.append('<details>\n<summary>Solution — open after writing your answer</summary>\n\n')
+        parts.append(lab['solution'] + '\n\n')
+        for index, command in enumerate(lab['commands'], 1):
+            if command.get('expect'):
+                parts.append(f'**Step {index}:** {command["expect"]}\n\n')
+        parts.append('**Understanding check:** ' + lab['transfer_solution'] + '\n\n</details>\n\n')
+        parts.append(f'After recovery, save results outside the VM, then destroy this lab from the host: `./lab.sh {number} reset`.\n')
     parts.append('''
-## Source and verification
+## Maintaining the labs
 
-Edit `ansible/labs/*.yml`, then regenerate this guide with `python3 scripts/render-labs.py`. The terminal cards use those same definitions. `chaos-theory.md` remains the detailed reference; source citations use the original section numbers retained in that file rather than its renumbered chapter headings.
+Run authoring commands from the repository root. Edit `labs/NN-topic/lab.yml` for
+teaching content and inline procedures. Supporting programs live beside it in
+`labs/NN-topic/files/` and are copied by setup. Run
+`python3 scripts/render-labs.py` to regenerate this guide and
+`python3 scripts/check-labs.py` to check definitions, rendered cards, command syntax
+and guide consistency. See [lab-design.md](lab-design.md) for the content contract and source qualifications.
 
-Local validation checks document consistency, rendering and command syntax. It does not establish live Ubuntu, Docker or Kubernetes outcomes. A successful experiment supports only the conditions and measurements actually tested.
+Local checks cannot establish live Ubuntu, Docker or Kubernetes outcomes. Use the
+per-lab setup, verify, experiment and recovery checks to collect that evidence.
 ''')
     return ''.join(parts)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
-    target = ROOT / 'chaos-labs.md'
+    target = ROOT / 'docs/chaos-labs.md'
     content = render()
     if args.check:
-        if not target.exists() or target.read_text() != content:
-            parser.exit(1, 'chaos-labs.md is stale; run scripts/render-labs.py\n')
+        if not target.exists() or target.read_text(encoding='utf-8') != content:
+            parser.exit(1, 'docs/chaos-labs.md is stale; run scripts/render-labs.py\n')
         print('Guide matches all lab definitions.')
     else:
-        target.write_text(content)
-        print('Rendered chaos-labs.md from 17 lab definitions.')
+        target.write_text(content, encoding='utf-8', newline='\n')
+        print(f'Rendered {len(load_labs())} labs.')

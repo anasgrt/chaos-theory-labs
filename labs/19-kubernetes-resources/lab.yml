@@ -1,0 +1,90 @@
+title: Lab 19 — Unscheduled Pods versus memory-killed containers
+kubernetes: true
+task:
+  question: Did the workload fail before placement or after exceeding its memory limit?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§10.6.1–10.6.2.'
+    theory_sections: [10.6.1, 10.6.2]
+    theory:
+    - Requests and limits answer different questions. The scheduler accounts for requested resources against node allocatable capacity and existing requests. It does not place a Pod merely because live CPU usage looks low. CPU 20m means 0.02 CPU; CPU 1000 means one thousand CPUs, not one thousand millicores.
+    - An impossible request leaves this Pod unassigned with PodScheduled=False and reason Unschedulable. No application container has started, so application logs cannot diagnose its execution. Scheduling events describe constraints; inspect the current Pod UID because a previous object may have used the same name.
+    - A memory limit is enforced at runtime through the container's memory cgroup. Kubernetes Mi means MiB (1048576 bytes). The OOM fixture requests 16 MiB but has a 32 MiB limit and deliberately touches 96 MiB. Its request fits; its allocation does not. A memory request is not the maximum amount the application may use.
+    - OOMKilled in lastState.terminated, an exit code and a rising restartCount identify a different stage from Unschedulable. Exit 137 alone cannot identify OOM. CrashLoopBackOff describes a delay before repeated restarts, not their root cause. Inspect the previous instance's logs while the Pod still exists.
+    - These standalone Pods use restartPolicy Always by default. Kubelet can restart a container inside the same Pod UID. The procedure intentionally deletes and recreates the Pod between configurations because scheduling and resource fields cannot all be edited in place. That intentional UID change is not evidence of self-healing by a Deployment.
+    - Repair the demonstrated cause. Restarting cannot make a 1000-CPU request fit. Repeated restarts cannot make the same 96 MiB allocation fit a 32 MiB limit. In a real workload, investigate memory growth before choosing a measured limit; simply removing limits can move the failure to the node.
+    in_this_lab:
+    - Use namespace ce-lab19 on this lab’s chaos cluster. Compare a healthy HTTP process, an impossible CPU request and a bounded memory allocation; then restore the healthy fixture.
+    readings:
+    - {signal: 'nodeName / PodScheduled / events', meaning: 'Distinguish no placement from a node-assigned runtime problem. Events are filtered by this Pod UID.'}
+    - {signal: 'requests / limits / allocatable', meaning: 'Read configured quantities and node capacity. No metrics-server is required for this diagnosis.'}
+    - {signal: 'lastState.terminated / restartCount', meaning: 'The previous container result and restart count remain attached to this Pod. Capture them before deleting it.'}
+    - {signal: 'logs --previous', meaning: 'Reads the previous container instance, not a previous Pod with the same name. Missing logs are not proof that no failure happened.'}
+    - {signal: 'k19', meaning: 'kubectl using Lab 19’s private kubeconfig, kind-lab19 context and only namespace ce-lab19.'}
+  predict: Predict node assignment, available logs and restart evidence for the impossible request and the memory limit failure.
+  answer_with: Diagnose the earliest failed stage in each case using conditions, current-UID events, resources, termination reason and logs. Show that the restored Pod is Ready.
+  evidence:
+    columns: [Phase, UID / node, Scheduled / Ready, Reason / restarts]
+    rows: [Healthy, 1000 CPU request, 32 MiB limit / 96 MiB allocation, Healthy restored]
+  transfer: Would increasing the CPU limit fix an unschedulable Pod whose CPU request exceeds every node's capacity?
+solution: The impossible request fails during scheduling and has no running application to debug. The OOM fixture is scheduled, starts and exceeds its runtime memory bound; kubelet restarts it within the same UID. Use the recorded reason and previous logs to explain the crash rather than treating CrashLoopBackOff as a diagnosis.
+transfer_solution: No. Placement uses the request and available allocatable capacity. Increasing a limit does not reduce that request or add a suitable node.
+verify_note: The healthy resource-web Pod is Ready, and its current container has no OOM termination or repeated restarts.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 19 setup, then ./lab.sh ssh. No other lab is required.
+files: [good.yaml, unscheduled.yaml, oom.yaml]
+commands:
+- name: Inspect a healthy placement and its configured resources
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab19/helpers.sh
+    k19 get nodes -o custom-columns='NAME:.metadata.name,CPU:.status.allocatable.cpu,MEMORY:.status.allocatable.memory'
+    k19 get pod resource-web -o json | jq '{uid:.metadata.uid,node:.spec.nodeName,resources:.spec.containers[0].resources,status:.status}'
+    k19 logs resource-web
+- name: Replace it with an impossible request and diagnose placement
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k19 delete pod resource-web --wait=true --timeout=30s
+    k19 apply -f ~/labs/lab19/unscheduled.yaml
+    k19 wait pod/resource-web --for=jsonpath='{.status.conditions[?(@.type=="PodScheduled")].reason}'=Unschedulable --timeout=60s
+    k19 get pod resource-web -o json | jq '{uid:.metadata.uid,node:.spec.nodeName,resources:.spec.containers[0].resources,conditions:.status.conditions}'
+    uid=$(k19 get pod resource-web -o jsonpath='{.metadata.uid}')
+    k19 get events --field-selector "involvedObject.uid=$uid"
+    k19 logs resource-web --request-timeout=5s
+  expect: No assigned node; scheduling evidence reports insufficient CPU on eligible workers. Logs cannot show an application that has not started.
+- name: Replace it with a schedulable memory failure and preserve crash evidence
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k19 delete pod resource-web --wait=true --timeout=30s
+    k19 apply -f ~/labs/lab19/oom.yaml
+    k19 wait pod/resource-web --for=jsonpath='{.status.containerStatuses[0].lastState.terminated.reason}'=OOMKilled --timeout=90s
+    k19 get pod resource-web -o json | tee ~/labs/lab19/oom-evidence.json | jq '{uid:.metadata.uid,node:.spec.nodeName,resources:.spec.containers[0].resources,containers:.status.containerStatuses}'
+    k19 logs resource-web --previous | tee ~/labs/lab19/previous.log
+    uid=$(k19 get pod resource-web -o jsonpath='{.metadata.uid}')
+    k19 get events --field-selector "involvedObject.uid=$uid"
+  expect: A node is assigned; the previous container is OOMKilled and the allocation message identifies the deliberately oversized work. Recheck if the restart status is still updating.
+- name: Restore a healthy workload and verify recovery
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k19 delete pod resource-web --wait=true --timeout=30s
+    k19 apply -f ~/labs/lab19/good.yaml
+    k19 wait pod/resource-web --for=condition=Ready --timeout=60s
+    k19 get pod resource-web -o json | jq '{uid:.metadata.uid,node:.spec.nodeName,containers:.status.containerStatuses}'
+  expect: A new deliberately recreated Pod is Ready. The fault evidence remains in the saved files.
+setup:
+- name: Prepare the isolated resource namespace and helper
+  command: !unsafe |
+    mkdir -p ~/labs/lab19
+    cat > ~/labs/lab19/helpers.sh <<'SH'
+    k19() { kubectl --kubeconfig="$HOME/labs/lab19/kubeconfig" --context=kind-lab19 --namespace=ce-lab19 --request-timeout=10s "$@"; }
+    SH
+    source ~/labs/lab19/helpers.sh
+    k19 get nodes >/dev/null
+    k19 create namespace ce-lab19 --dry-run=client -o yaml | k19 apply -f -
+    k19 apply -f ~/labs/lab19/good.yaml
+    k19 wait pod/resource-web --for=condition=Ready --timeout=90s
+verify:
+- name: Verify the resource baseline
+  command: !unsafe |
+    source ~/labs/lab19/helpers.sh
+    k19 wait pod/resource-web --for=condition=Ready --timeout=30s
+    k19 get pod resource-web -o json | jq -e '.spec.containers[0].resources.requests.cpu == "20m" and .spec.containers[0].resources.limits.memory == "128Mi" and .status.containerStatuses[0].restartCount == 0' >/dev/null
+reset: []

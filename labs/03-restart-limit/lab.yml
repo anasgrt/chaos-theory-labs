@@ -1,0 +1,146 @@
+title: Lab 03 — Restart policies have limits
+units: [ce-lab03-a.service, ce-lab03-b.service, ce-lab03-proxy.service]
+task:
+  question: Why does one crash recover while a burst of crashes can leave the same service failed?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§2.4–2.6 and Experiment Cards 2.1–2.2.'
+    theory:
+    - A supervisor separates a service’s desired state from its current process. Restart=always asks systemd
+      to start a replacement after a crash. It is still subject to start-rate limiting; the request for
+      a restart and permission to start are separate decisions.
+    - This fixture explicitly sets StartLimitIntervalSec=20 and StartLimitBurst=4. Starts consume the
+      allowance, including initial or manual starts; successful uptime does not instantly erase it. A
+      single kill after reset-failed can recover, whereas enough closely spaced starts exhaust the allowance
+      and stop automatic recovery.
+    - 'NGINX sends requests to A or B and can try another usable backend on a connection failure. If A
+      gives up restarting, B may still answer. Measure A’s state and client HTTP results independently:
+      successful HTTP through the proxy cannot identify which backend served it.'
+    - reset-failed clears the failed state and start counter; start requests recovery. Disabling the limit
+      would permit more restart attempts, but would not fix the cause of the crashes. A passing single-crash
+      experiment therefore says little about a repeated-crash condition.
+    in_this_lab:
+    - 'A and B serve through NGINX. The core experiment targets only A: Restart=always, at most four starts
+      per 20 seconds. B stays available during this comparison.'
+    readings:
+    - signal: ActiveState / Result
+      meaning: ActiveState shows whether A is running or failed. Result and the journal explain a refused
+        restart.
+    - signal: NRestarts
+      meaning: Counts automatic restarts; it is not the complete count of all starts used by the rate
+        limiter.
+    - signal: Start request repeated too quickly
+      meaning: Evidence that the start-rate limit was reached. A later kill saying the unit is inactive
+        is a consequence, not another successful injection.
+    - signal: HTTP response
+      meaning: A successful response tests the proxy path, not the health of both backends.
+  predict: Predict A’s state after one kill and after six rapid kill attempts, with Restart=always unchanged.
+  answer_with: Compare A’s state after one crash and after the burst. Quote the start-limit evidence and
+    explain why Restart=always did not guarantee another start.
+  evidence:
+    columns:
+    - Phase
+    - A state / result
+    - HTTP result
+    - Journal evidence
+    rows:
+    - Baseline
+    - One crash
+    - Crash burst
+    - Recovered
+  transfer: What would disabling the start limit prove, and what defect would remain?
+solution: Restart=always requests a restart, but the start-rate limit can refuse it. One crash can remain
+  within the allowance; repeated starts can exhaust it and leave A failed. The journal, not a successful
+  response through B, establishes what happened to A. If the limit was not reached, report that observation
+  rather than claiming it was.
+verify_note: Both backends are active and the proxy responds successfully.
+commands:
+- name: Check baseline and clear the previous start counter
+  where: VM terminal 1
+  run: !unsafe |
+    sudo systemctl reset-failed ce-lab03-a
+    systemctl is-active ce-lab03-a ce-lab03-b
+    curl -fsS --max-time 3 http://127.0.0.1:8003/
+- name: Kill A once and inspect its recovery
+  where: VM terminal 1
+  run: !unsafe |
+    sudo systemctl kill --kill-whom=main --signal=KILL ce-lab03-a
+    sleep 1
+    curl -fsS --max-time 3 http://127.0.0.1:8003/
+    systemctl show ce-lab03-a -p ActiveState -p NRestarts
+  expect: A should return to active. A successful proxy response alone cannot prove that A restarted.
+- name: Repeat crashes rapidly and inspect the refused restart
+  where: VM terminal 1
+  run: !unsafe |
+    for i in $(seq 1 6); do
+      sudo systemctl kill --kill-whom=main --signal=KILL ce-lab03-a || true
+      sleep 1
+    done
+    systemctl show ce-lab03-a -p ActiveState -p Result -p NRestarts
+    sudo journalctl -u ce-lab03-a -n 15 --no-pager
+    curl -sS --max-time 3 -o /dev/null -w "proxy HTTP=%{http_code}\n" http://127.0.0.1:8003/
+  expect: Look for "Start request repeated too quickly" and a failed unit. Result and restart counts can
+    vary with timing and systemd version; check the journal.
+- name: Recover and prove the proxy works again
+  where: VM terminal 1
+  run: !unsafe |
+    sudo systemctl reset-failed ce-lab03-a ce-lab03-b
+    sudo systemctl start ce-lab03-a ce-lab03-b
+    systemctl is-active ce-lab03-a ce-lab03-b
+    # The backends need a moment to bind, and NGINX retries a failed backend after fail_timeout=1s.
+    for i in $(seq 1 10); do curl -fsS --max-time 3 http://127.0.0.1:8003/ && break; sleep 0.5; done
+setup:
+- name: Create the restart-limit fixture
+  command: !unsafe |
+    mkdir -p "$HOME/labs/lab03/www" "$HOME/labs/lab03/nginx"
+    printf 'lab03 OK\n' | tee "$HOME/labs/lab03/www/index.html" >/dev/null
+    for pair in a:8001 b:8002; do
+      name=${pair%:*}; port=${pair#*:}
+      sudo tee "/etc/systemd/system/ce-lab03-$name.service" >/dev/null <<UNIT
+    [Unit]
+    Description=Chaos lab 03 $name
+    StartLimitIntervalSec=20
+    StartLimitBurst=4
+    [Service]
+    User=$USER
+    ExecStart=/usr/bin/python3 -m http.server $port --bind 127.0.0.1 --directory $HOME/labs/lab03/www
+    Restart=always
+    RestartSec=200ms
+    UNIT
+    done
+    cat > "$HOME/labs/lab03/nginx.conf" <<'NGX'
+    worker_processes 1;
+    pid nginx.pid;
+    error_log stderr;
+    events { worker_connections 128; }
+    http {
+      access_log off;
+      client_body_temp_path client_temp;
+      proxy_temp_path proxy_temp;
+      fastcgi_temp_path fastcgi_temp;
+      uwsgi_temp_path uwsgi_temp;
+      scgi_temp_path scgi_temp;
+      upstream ce_lab03 { server 127.0.0.1:8001 max_fails=1 fail_timeout=1s; server 127.0.0.1:8002 max_fails=1 fail_timeout=1s; }
+      server { listen 127.0.0.1:8003; location / { proxy_pass http://ce_lab03; } }
+    }
+    NGX
+    sudo tee /etc/systemd/system/ce-lab03-proxy.service >/dev/null <<UNIT
+    [Unit]
+    Description=Lab 03 proxy
+    [Service]
+    User=$USER
+    ExecStart=/usr/sbin/nginx -p $HOME/labs/lab03/nginx/ -c $HOME/labs/lab03/nginx.conf -g "daemon off;"
+    UNIT
+    nginx -t -p "$HOME/labs/lab03/nginx/" -c "$HOME/labs/lab03/nginx.conf"
+    sudo systemctl daemon-reload
+    sudo systemctl start ce-lab03-a ce-lab03-b ce-lab03-proxy
+    for i in $(seq 1 20); do curl -fsS --max-time 2 http://127.0.0.1:8003/ && break; sleep 0.2; done
+verify:
+- name: Verify both backends and proxy baseline
+  command: !unsafe |
+    systemctl is-active --quiet ce-lab03-a
+    systemctl is-active --quiet ce-lab03-b
+    curl -fsS --max-time 3 http://127.0.0.1:8003/ | grep -qx 'lab03 OK'
+reset: []
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 03 setup, then ./lab.sh ssh. No other lab is required.
+transfer_solution: It would test whether the rate limit caused the supervisor to give up. The application
+  would still crash, and rapid restarts would still consume resources and need monitoring.

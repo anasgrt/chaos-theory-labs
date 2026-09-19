@@ -1,0 +1,30 @@
+---
+- name: Verify real Ansible rendering and fixture installation after repository moves
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    repository: "{{ playbook_dir }}/../.."
+  tasks:
+    - name: Require the temporary test output directory
+      ansible.builtin.assert:
+        that: layout_output is defined and layout_output | length > 0
+
+    - name: Find definitions in the public lab tree
+      ansible.builtin.find:
+        paths: "{{ repository }}/labs"
+        patterns: lab.yml
+        recurse: true
+        depth: 2
+        file_type: file
+      register: definitions
+
+    - name: Exercise every definition
+      ansible.builtin.include_tasks: layout-lab.yml
+      loop: "{{ definitions.files | map(attribute='path') | sort }}"
+      loop_control:
+        loop_var: definition
+      vars:
+        lab_definition: "{{ definition }}"
+        lab_id: "{{ definition | dirname | basename | regex_replace('-.*$', '') }}"
+        lab_workspace: "{{ layout_output }}/{{ lab_id }}"

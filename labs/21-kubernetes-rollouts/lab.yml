@@ -1,0 +1,122 @@
+title: Lab 21 — Configuration freshness and a stalled rollout
+kubernetes: true
+task:
+  question: Why can a ConfigMap update leave old behavior running, and why can a rollout fail while the application stays available?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§10.8.1–10.8.2.'
+    theory_sections: [10.8.1, 10.8.2]
+    theory:
+    - A ConfigMap is a separate API object. This application reads its message through an environment variable when its container starts. Updating the ConfigMap does not rewrite the environment of existing processes and does not change the Deployment's Pod template, so it does not itself create a rollout.
+    - A projected ConfigMap volume behaves differently. Ordinary projected files can update eventually, but the application must reread or reload them; a subPath mount does not receive those updates. Do not infer environment refresh from file-projection behavior. This lab tests environment injection specifically.
+    - A Deployment rollout occurs when its Pod template changes. rollout restart changes a template annotation and creates new Pods; they read the current ConfigMap. Record Pod UIDs and the actual HTTP response from each Pod so a mixture of old and new processes cannot hide behind a single sampled response.
+    - This Deployment has two replicas, maxUnavailable=0 and maxSurge=1. During this update it can add one Pod while keeping two replicas available. minReadySeconds=2 requires a new Pod to remain Ready for two seconds before it counts as available. The strategy governs replacement; a PodDisruptionBudget does not control this rollout.
+    - A wrong readiness port can leave a new process Running but unready. It must not replace an available old replica under this strategy. When no rollout progress occurs for the configured 30-second deadline, the Deployment reports ProgressDeadlineExceeded. Kubernetes reports the stall; it does not automatically undo the change.
+    - Rollout history stores Pod-template revisions, not snapshots of separate ConfigMaps. Undo to the recorded good revision repairs the bad readiness port, but does not restore the ConfigMap's old message. Recovery requires checking both template and configuration, then confirming the intended responses and replica counts.
+    in_this_lab:
+    - Use namespace ce-lab21, two Python HTTP replicas, an environment-backed message and a deliberately wrong readiness port. Query every Pod directly through the API proxy; this measures application responses, not Service routing.
+    readings:
+    - {signal: 'ConfigMap value / per-Pod HTTP', meaning: 'Compare desired configuration with each running process. An updated object is not proof that every process consumed it.'}
+    - {signal: 'UID / revision / ReplicaSets', meaning: 'UID changes show replacement. The Deployment revision identifies a Pod template; ReplicaSet desired/current/ready counts show rollout progress.'}
+    - {signal: 'Available / Progressing', meaning: 'Availability of old replicas and progress of the new template are separate conditions. Both must be interpreted with the replica counts.'}
+    - {signal: 'readiness port / restartCount', meaning: 'A bad readiness destination can block rollout without crashing or restarting the process.'}
+    - {signal: 'k21 / responses', meaning: 'kubectl targets kind-lab21 and ce-lab21. responses prints each Pod name and its HTTP body; a missing or failed query returns nonzero.'}
+  predict: Predict Pod UIDs and response values after only the ConfigMap changes, after restart, during the bad probe rollout and after undo.
+  answer_with: Explain configuration freshness and rollout progress separately. Record the stable revision before the fault, diagnose the new Pod, show old replicas remain available, and prove what undo did and did not restore.
+  evidence:
+    columns: [Phase, ConfigMap / responses, UIDs / Ready replicas, Revision / conditions]
+    rows: [Version one, ConfigMap version two only, Restarted consumers, Wrong readiness port, Undo to stable revision, Version one restored]
+  transfer: Would undo to the original Pod-template revision necessarily restore the original environment value from the ConfigMap?
+solution: Existing processes keep their injected environment until recreated. Restarting the rollout makes new containers read version-two. The bad readiness port prevents the surge Pod from becoming available; the two old replicas remain, and the Deployment eventually reports a stalled rollout. Undo repairs the template but leaves the ConfigMap at version-two. Explicit configuration restoration plus a consumer rollout returns version-one.
+transfer_solution: No. That revision still refers to the same ConfigMap key. Newly created containers read its current value; the ConfigMap must be restored separately or configurations versioned under distinct names.
+verify_note: The ConfigMap says version-one, exactly two Pods are Ready, both HTTP responses say version-one, and the readiness port is 8080.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 21 setup, then ./lab.sh ssh. No other lab is required.
+files: [app.yaml]
+commands:
+- name: Record configuration, identities and actual responses
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab21/helpers.sh
+    k21 get configmap app-config -o jsonpath='{.data.message}{"\n"}'
+    k21 get pods -l app=config-web -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,READY:.status.conditions[?(@.type=="Ready")].status'
+    responses
+- name: Change only the ConfigMap and query the same processes
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k21 patch configmap app-config --type=merge -p '{"data":{"message":"version-two"}}'
+    k21 get configmap app-config -o jsonpath='{.data.message}{"\n"}'
+    k21 get pods -l app=config-web -o custom-columns='NAME:.metadata.name,UID:.metadata.uid'
+    responses
+  expect: The object changes to version-two while the existing UIDs still return version-one.
+- name: Roll out new consumers and save the good template revision
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k21 rollout restart deployment/config-web
+    k21 rollout status deployment/config-web --request-timeout=0 --timeout=120s
+    responses
+    stable_revision=$(k21 get deployment config-web -o json | jq -r '.metadata.annotations["deployment.kubernetes.io/revision"]')
+    echo "stable revision=$stable_revision"
+    k21 rollout history deployment/config-web
+  expect: New Pods consume version-two. Wait for old terminating Pods to disappear before treating the response set as the final two consumers.
+- name: Break only the new template's readiness port and diagnose the stall
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k21 patch deployment config-web --type=json -p '[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/port","value":9999}]'
+    k21 wait deployment/config-web --for=jsonpath='{.status.conditions[?(@.type=="Progressing")].reason}'=ProgressDeadlineExceeded --timeout=90s --request-timeout=0
+    k21 rollout status deployment/config-web --timeout=5s
+    k21 get deployment config-web -o json | jq '{desired:.spec.replicas,status:.status}'
+    k21 get rs -l app=config-web
+    k21 get pods -l app=config-web -o json | jq '.items[] | {name:.metadata.name,uid:.metadata.uid,probe:.spec.containers[0].readinessProbe,conditions:.status.conditions,restarts:.status.containerStatuses[0].restartCount}'
+    responses
+  expect: The new Pod stays unready at port 9999, while old available Pods remain. Even the misprobed process can answer direct HTTP on 8080. The rollout reports failure rather than automatically rolling back.
+- name: Undo the bad template and inspect the separate configuration
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k21 rollout undo deployment/config-web --to-revision="$stable_revision"
+    k21 rollout status deployment/config-web --request-timeout=0 --timeout=120s
+    k21 get configmap app-config -o jsonpath='{.data.message}{"\n"}'
+    responses
+    k21 get deployment config-web -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.port}{"\n"}'
+  expect: The good readiness port is restored, but the separate ConfigMap still says version-two.
+- name: Restore configuration explicitly and verify every consumer
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k21 patch configmap app-config --type=merge -p '{"data":{"message":"version-one"}}'
+    k21 rollout restart deployment/config-web
+    k21 rollout status deployment/config-web --request-timeout=0 --timeout=120s
+    sleep 3
+    k21 get pods -l app=config-web
+    responses
+    k21 get deployment config-web -o json | jq '{desired:.spec.replicas,ready:.status.readyReplicas,conditions:.status.conditions}'
+  expect: Two Ready consumers return version-one and the new rollout completes.
+setup:
+- name: Prepare the isolated configuration exercise
+  command: !unsafe |
+    mkdir -p ~/labs/lab21
+    cat > ~/labs/lab21/helpers.sh <<'SH'
+    k21() { kubectl --kubeconfig="$HOME/labs/lab21/kubeconfig" --context=kind-lab21 --namespace=ce-lab21 --request-timeout=10s "$@"; }
+    responses() {
+      local pods pod body
+      pods=$(k21 get pods -l app=config-web -o json) || return 1
+      pods=$(printf '%s' "$pods" | jq -er '[.items[] | select(.metadata.deletionTimestamp == null)] | if length > 0 then .[].metadata.name else error("No current consumers") end') || return 1
+      for pod in $pods; do
+        body=$(k21 get --raw "/api/v1/namespaces/ce-lab21/pods/$pod:8080/proxy/") || return 1
+        printf '%s %s\n' "$pod" "$body"
+      done
+    }
+    SH
+    source ~/labs/lab21/helpers.sh
+    k21 get nodes >/dev/null
+    k21 create namespace ce-lab21 --dry-run=client -o yaml | k21 apply -f -
+    k21 apply -f ~/labs/lab21/app.yaml
+    k21 rollout status deployment/config-web --request-timeout=0 --timeout=120s
+verify:
+- name: Verify configuration and both running consumers
+  command: !unsafe |
+    source ~/labs/lab21/helpers.sh
+    k21 rollout status deployment/config-web --timeout=30s
+    test "$(k21 get configmap app-config -o jsonpath='{.data.message}')" = version-one
+    k21 get deployment config-web -o json | jq -e '.spec.template.spec.containers[0].readinessProbe.httpGet.port == 8080 and .status.readyReplicas == 2' >/dev/null
+    output=$(responses)
+    test "$(printf '%s\n' "$output" | wc -l)" -eq 2
+    test "$(printf '%s\n' "$output" | grep -c ' version-one$')" -eq 2
+reset: []

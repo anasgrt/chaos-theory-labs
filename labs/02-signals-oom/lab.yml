@@ -1,0 +1,87 @@
+title: Lab 02 — Prove why a process was killed
+units: [ce-lab02.service]
+task:
+  question: Why is exit status 137 insufficient to diagnose an OOM kill?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §2.3 (exit codes, signals and OOM), §5.5.2 (memory limits).'
+    theory:
+    - 'A signal is a notification sent to a process. SIGTERM (15) can be handled for cleanup; SIGKILL
+      (9) cannot be caught. Bash commonly reports signal termination as 128 + signal number, so a SIGKILL
+      gives 137. A program may also explicitly exit with 137: status alone is not a diagnosis.'
+    - 'The kernel can invoke the out-of-memory (OOM) killer when it cannot satisfy memory demand. A cgroup
+      has its own memory boundary: its processes can hit MemoryMax even while the rest of the VM has available
+      memory. The allocator here repeatedly creates and touches bytes, so it demands real memory rather
+      than merely reserving virtual addresses.'
+    - MemoryMax=128M and MemorySwapMax=0 constrain this experiment. RuntimeMaxSec=20s is a separate time
+      bound. An OOM kill, that timer, and a deliberate SIGKILL can all stop the process; identify which
+      happened by matching the unit, PID and time in the logs.
+    - The systemd-run command reports the transient unit’s outcome; its shell status need not equal the
+      child’s Bash status. Collect the unit result and kernel evidence. systemd-oomd is a userspace memory-pressure
+      killer, so an oomd action is a different cause from a kernel OOM kill.
+    in_this_lab:
+    - The allocator runs only in ce-lab02, with 128 MiB memory, no swap and a 20-second runtime bound.
+    readings:
+    - signal: deliberate KILL exit
+      meaning: Read $? immediately after the process. An intervening command would replace it.
+    - signal: journalctl -u ce-lab02
+      meaning: 'Look for the recorded termination signal and result: oom-kill and timeout describe different
+        causes.'
+    - signal: journalctl -k
+      meaning: Match a memory-cgroup OOM / Killed process line to this allocator and experiment time.
+    - signal: journalctl -u systemd-oomd
+      meaning: A matching userspace-kill entry changes the diagnosis; unrelated historical entries do
+        not.
+  predict: Will a deliberate SIGKILL and a memory-limit kill have different exit statuses? Which evidence
+    can distinguish them?
+  answer_with: Compare the known SIGKILL with the allocator result. Cite the matching log that identifies
+    the allocator’s cause; status 137 alone is not enough.
+  evidence:
+    columns:
+    - Case
+    - Termination
+    - Matching cause evidence
+    rows:
+    - Known SIGKILL
+    - Memory-limited allocator
+  transfer: Does free memory elsewhere in the VM rule out a cgroup OOM kill?
+solution: The allocator should trigger a cgroup OOM kill before its runtime bound. Status 137 is consistent
+  with SIGKILL, but only the matching memory-kill evidence explains why. If the logs show a runtime timeout
+  or a userspace kill, report that cause instead.
+verify_note: The allocator is stopped and its termination evidence has been recorded.
+commands:
+- name: Record a deliberate SIGKILL
+  where: VM terminal 1
+  run: !unsafe |
+    python3 -c 'import os,signal; os.kill(os.getpid(),signal.SIGKILL)'
+    echo "deliberate KILL exit=$?"
+  expect: Bash normally reports 137. Here you know the cause because the program deliberately sent SIGKILL.
+- name: Cause a cgroup-bounded OOM and collect unit plus kernel evidence
+  where: VM terminal 1
+  run: !unsafe |
+    since=$(date --iso-8601=seconds)
+    sudo systemd-run --unit=ce-lab02 --wait --collect \
+      -p MemoryMax=128M -p MemorySwapMax=0 -p RuntimeMaxSec=20s \
+      /usr/bin/python3 -c 'a=[]
+    while True: a.append(b"x"*1000000)'
+    sudo journalctl -u ce-lab02 --since "$since" --no-pager
+    sudo journalctl -k --since "$since" --no-pager | grep -iE 'oom|killed process'
+    sudo journalctl -u systemd-oomd --since "$since" --no-pager
+  expect: The unit fails before the 20 s bound, with oom-kill in the unit log and a matching kernel line.
+    An oomd entry means userspace acted instead.
+- name: Stop the allocator if it remains active
+  where: VM terminal 1
+  run: !unsafe |
+    sudo systemctl stop ce-lab02.service 2>/dev/null || true
+setup:
+- name: Create the Lab 02 workspace
+  command: !unsafe |
+    mkdir -p "$HOME/labs/lab02"
+verify:
+- name: Verify memory-control readiness
+  command: !unsafe |
+    grep -qw memory /sys/fs/cgroup/cgroup.controllers
+    ! systemctl is-active --quiet ce-lab02.service
+reset: []
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 02 setup, then ./lab.sh ssh. No other lab is required.
+transfer_solution: No. The allocator is constrained by its cgroup boundary. VM-wide availability and the
+  cgroup’s remaining allowance are different quantities.

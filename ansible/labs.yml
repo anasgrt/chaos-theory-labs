@@ -5,19 +5,27 @@
   vars:
     lab_action: setup
     lab_definition: ''
-    # Local file for plain-text output; set by run-lab.sh.
+    lab_id: "{{ lab_definition | dirname | basename | regex_replace('-.*$', '') }}"
+    lab_root: /home/vagrant/labs
+    lab_workspace: "{{ lab_root }}/lab{{ lab_id }}"
+    lab_cluster: "lab{{ lab_id }}"
+    # Local file for plain-text output; set by lab.sh.
     lab_text_output: ''
 
   pre_tasks:
     - name: Validate the lifecycle action
       ansible.builtin.assert:
-        that: lab_action in ['setup', 'verify', 'question', 'solution', 'reset']
-        fail_msg: Use setup, verify, question, solution, or reset.
+        that: lab_action in ['setup', 'verify', 'reset']
+        fail_msg: Use lab.sh NN setup, verify or reset. Cards use the local reader.
 
     - name: Validate the selected lab definition
       ansible.builtin.assert:
-        that: lab_definition | length > 0
-        fail_msg: Select a lab through ansible/run-lab.sh.
+        that:
+          - lab_definition | length > 0
+          - lab_id is match('^[0-9]{2}$')
+          - lab_definition | basename == 'lab.yml'
+          - (lab_definition | dirname | basename).startswith(lab_id + '-')
+        fail_msg: Select a lab through lab.sh.
 
     - name: Load the selected lab definition
       ansible.builtin.include_vars:
@@ -32,12 +40,41 @@
           - selected_lab.task.brief.theory | default([]) | length > 0
           - selected_lab.task.brief.in_this_lab | default([]) | length > 0
           - selected_lab.task.predict | default('') | length > 0
-          - selected_lab.task.steps | default([]) | length > 0
+          - selected_lab.task.brief.readings | default([]) | length > 0
+          - selected_lab.task.evidence.columns | default([]) | length > 0
+          - selected_lab.task.evidence.rows | default([]) | length > 0
+          - selected_lab.task.transfer | default('') | length > 0
+          - selected_lab.transfer_solution | default('') | length > 0
+          - selected_lab.prerequisites | default('') | length > 0
           - selected_lab.task.answer_with | default('') | length > 0
           - selected_lab.commands | default([]) | length > 0
-        fail_msg: "{{ lab_definition }} needs task.question, task.brief.theory, task.brief.in_this_lab, task.predict, task.steps, task.answer_with and core commands."
+        fail_msg: "{{ lab_definition }} is incomplete; run scripts/check-labs.py for the content contract."
+
+    - name: Enforce the shared VM boundary
+      ansible.builtin.include_tasks: tasks/identity.yml
+
+    - name: Check shared provisioning is complete
+      ansible.builtin.stat:
+        path: "{{ lab_root }}/.provisioned"
+      register: shared_provisioning
+
+    - name: Require the shared prerequisites
+      ansible.builtin.assert:
+        that: shared_provisioning.stat.exists
+        fail_msg: Run ./lab.sh provision once before setting up labs.
 
   tasks:
+    - name: Clean only the selected lab before setup or reset
+      ansible.builtin.include_tasks: tasks/reset.yml
+      when: lab_action in ['setup', 'reset']
+
+    - name: Create the selected lab workspace
+      ansible.builtin.file:
+        path: "{{ lab_workspace }}"
+        state: directory
+        mode: '0755'
+      when: lab_action == 'setup'
+
     - name: Show the lab model before setup
       ansible.builtin.debug:
         msg:
@@ -45,15 +82,19 @@
           - "Question: {{ selected_lab.task.question }}"
       when: lab_action == 'setup'
 
-    - name: Reset prior state before setup
-      ansible.builtin.shell: |
-        set -euo pipefail
-        {{ item.command }}
-      args:
-        executable: /bin/bash
-      loop: "{{ selected_lab.reset | default([]) }}"
-      loop_control:
-        label: "{{ item.name }}"
+    - name: Install this lab's Kubernetes command helper
+      ansible.builtin.template:
+        src: lab-env.sh.j2
+        dest: "{{ lab_workspace }}/env.sh"
+        mode: '0644'
+      when: lab_action == 'setup' and selected_lab.kubernetes | default(false)
+
+    - name: Prepare an independent Kubernetes cluster when required
+      ansible.builtin.include_tasks: tasks/kubernetes.yml
+      when: lab_action == 'setup' and selected_lab.kubernetes | default(false) and lab_id != '14'
+
+    - name: Install files owned by the selected lab
+      ansible.builtin.include_tasks: tasks/fixtures.yml
       when: lab_action == 'setup'
 
     - name: Set up the selected lab
@@ -76,19 +117,8 @@
       loop: "{{ selected_lab.verify | default([]) }}"
       loop_control:
         label: "{{ item.name }}"
-      when: lab_action == 'verify'
+      when: lab_action in ['setup', 'verify']
       changed_when: false
-
-    - name: Reset the selected lab
-      ansible.builtin.shell: |
-        set -euo pipefail
-        {{ item.command }}
-      args:
-        executable: /bin/bash
-      loop: "{{ selected_lab.reset | default([]) }}"
-      loop_control:
-        label: "{{ item.name }}"
-      when: lab_action == 'reset'
 
     # Rendered as plain text on the controller: debug output would JSON-escape
     # the quotes and newlines that heredocs and scripts need to stay pasteable.
@@ -99,32 +129,9 @@
         mode: '0600'
       delegate_to: localhost
       check_mode: false
-      when: lab_action in ['setup', 'question'] and lab_text_output | length > 0
+      when: lab_action == 'setup' and lab_text_output | length > 0
 
     - name: Show the lab task
       ansible.builtin.debug:
-        msg:
-          - "{{ selected_lab.title }}"
-          - "Question: {{ selected_lab.task.question }}"
-          - "Predict first: {{ selected_lab.task.predict }}"
-          - "Do: {{ selected_lab.task.steps }}"
-          - "Your answer must show: {{ selected_lab.task.answer_with }}"
-      when: lab_action in ['setup', 'question'] and lab_text_output | length == 0
-
-    - name: Render the solution path and practical commands
-      ansible.builtin.template:
-        src: solution.txt.j2
-        dest: "{{ lab_text_output }}"
-        mode: '0600'
-      delegate_to: localhost
-      check_mode: false
-      when: lab_action == 'solution' and lab_text_output | length > 0
-
-    - name: Show the solution path
-      ansible.builtin.debug:
-        msg:
-          - "{{ selected_lab.title }}"
-          - "Solution: {{ selected_lab.solution }}"
-          - "Verify: {{ selected_lab.verify_note }}"
-          - Use question for the core procedure and solution to compare observations.
-      when: lab_action == 'solution' and lab_text_output | length == 0
+        msg: "{{ lookup('ansible.builtin.template', 'task.txt.j2') }}"
+      when: lab_action == 'setup' and lab_text_output | length == 0

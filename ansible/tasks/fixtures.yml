@@ -1,0 +1,15 @@
+---
+- name: Validate each fixture path stays inside its lab
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item is match('^[A-Za-z0-9][A-Za-z0-9_.-]*$')
+    fail_msg: Fixture names must be plain filenames within this lab's files directory.
+  loop: "{{ selected_lab.files | default([]) }}"
+
+- name: Install the selected lab programs
+  ansible.builtin.copy:
+    src: "{{ lab_definition | dirname }}/files/{{ item }}"
+    dest: "{{ lab_workspace }}/{{ item }}"
+    mode: '0644'
+  loop: "{{ selected_lab.files | default([]) }}"

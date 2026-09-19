@@ -1,41 +1,48 @@
-{% set lab_id = lab_definition | basename | regex_replace('-.*$', '') %}
-{% macro wrap(text, indent) %}{{ text | wordwrap(width=78 - indent, break_long_words=false, break_on_hyphens=false) | indent(indent) }}{% endmacro %}
+{% macro wrap(text) %}{{ text | wordwrap(width=78, break_long_words=false, break_on_hyphens=false) }}{% endmacro %}
+{{ selected_lab.title }}
+{{ '=' * (selected_lab.title | length) }}
 
-{{ '#' * 78 }}
-  YOUR TASK: {{ selected_lab.title }}
-{{ '#' * 78 }}
+QUESTION
+{{ wrap(selected_lab.task.question) }}
 
-QUESTION TO ANSWER
-  {{ wrap(selected_lab.task.question, 2) }}
+BEFORE YOU RUN
+{{ wrap(selected_lab.prerequisites) }}
 
-THEORY BEFORE YOU START
+THEORY YOU NEED
 {% for paragraph in selected_lab.task.brief.theory %}
-  {{ wrap(paragraph, 2) }}
+{{ wrap(paragraph) }}
 
 {% endfor %}
-{% if selected_lab.task.brief.theory_source is defined %}
-  Source: {{ wrap(selected_lab.task.brief.theory_source, 10) }}
-{% endif %}
+Source: {{ wrap(selected_lab.task.brief.theory_source) }}
 
-IN THIS LAB
+THE EXPERIMENT
 {% for point in selected_lab.task.brief.in_this_lab %}
-  - {{ wrap(point, 4) }}
+{{ wrap(point) }}
 {% endfor %}
 
-PREDICT FIRST (write it in your journal before you start)
-  {{ wrap(selected_lab.task.predict, 2) }}
+HOW TO READ THE EVIDENCE
+{% for reading in selected_lab.task.brief.readings %}
+{{ reading.signal }}
+{{ wrap(reading.meaning) }}
 
-STEPS
-{% for step in selected_lab.task.steps %}
-  {{ '%-3s' | format(loop.index ~ '.') }}{{ wrap(step, 5) }}
 {% endfor %}
+PREDICT
+{{ wrap(selected_lab.task.predict) }}
 
-EXPLAIN THE RESULT
-  {{ wrap(selected_lab.task.answer_with, 2) }}
+RECORD YOUR RESULTS
+{{ selected_lab.task.evidence.columns | join(' | ') }}
+{% for row in selected_lab.task.evidence.rows %}
+{{ row }}{% for column in selected_lab.task.evidence.columns[1:] %} | ____{% endfor %}
+
+{% endfor %}
 
 {% include 'commands.txt.j2' %}
 
-After writing your explanation, compare with:
-./ansible/run-lab.sh {{ lab_id }} solution
-Show this task again:   ./ansible/run-lab.sh {{ lab_id }} question
-Remove the fixture:     ./ansible/run-lab.sh {{ lab_id }} reset
+ANSWER
+{{ wrap(selected_lab.task.answer_with) }}
+
+CHECK YOUR UNDERSTANDING
+{{ wrap(selected_lab.task.transfer) }}
+
+Compare your answer: ./lab.sh {{ lab_id }} solution
+Remove this lab's resources and files (save results first): ./lab.sh {{ lab_id }} reset

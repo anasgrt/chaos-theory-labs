@@ -1,0 +1,262 @@
+title: Lab 14 — Quorum, convergence and application availability
+kubernetes: true
+task:
+  question: How does quorum loss affect committed configuration, Deployment convergence and existing HTTP
+    traffic?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§12.1.1, 12.1.4 and 12.3.3–12.3.4.'
+    theory:
+    - 'etcd stores Kubernetes state and uses Raft consensus. A change needs a majority of the configured
+      voting members: floor(n/2) + 1. For three members that is two. Stopping a member does not remove
+      it from membership or lower the required majority. floor rounds down; failure tolerance is
+      n minus the required majority, assuming the survivors can communicate.'
+    - A leader coordinates committed changes. Losing one member can cause a transition or election but
+      leaves a possible majority. Losing two prevents new commits. A minority cannot accept independent
+      changes without risking conflicting histories.
+    - The management path is kubectl → API server → etcd. The existing application path is HTTP client
+      → NodePort routing → already-running web Pod. That routing need not perform an etcd write for every
+      request, so these two paths can have different availability during quorum loss.
+    - Test a real ConfigMap change, not only a read that might be cached, and separately probe HTTP. Move
+      a static etcd manifest out of kubelet’s watched directory to stop that member. Restore the same
+      manifests through Docker, a path independent of the Kubernetes API. This recovers temporarily stopped
+      members with intact data; it is not a backup-restore experiment.
+    - A successful scale request commits a desired replica count; it does not mean those replicas are
+      already Ready. Compare spec.replicas with status.readyReplicas and wait for rollout completion.
+      This separates the storage operation from controller, scheduler and kubelet convergence.
+    - 'A client timeout is an unknown result: the caller lacks an acknowledgement and must not infer that
+      no change committed. After recovery, read the ConfigMap value and Deployment spec before overwriting
+      them. Restore an idempotent target, meaning it is safe to repeat: set replicas to two rather than
+      incrementing on each retry. Verify the observed result. A successful
+      GET during disruption can be cached or use a different path and is weaker evidence than a new committed
+      write.'
+    - Record etcd member identities and leader before and after losing one member. This lab stops a fixed
+      member; a leader change is only expected if the stopped member was leader or another election occurred.
+      Do not label every single-member failure a leader-election experiment. Two surviving voters suffice
+      regardless of which member was previously leader.
+    in_this_lab:
+    - Use Lab 14's own lab14 cluster. Move static etcd manifests to stop members and restore the same manifests
+      to recover them; Docker provides a fallback independent of kubectl.
+    - Setup points control-plane kubelets at the HA API load balancer, so restoring a local etcd member
+      is not tied to that member's unavailable API server.
+    readings:
+    - signal: endpoint status / health
+      meaning: Status identifies members and leader. Health checks test whether the endpoint can participate
+        successfully; read all three after restoration.
+    - signal: crictl ps --name etcd
+      meaning: Confirms the selected member actually stopped. Moving the file alone is only the injection
+        request.
+    - signal: ConfigMap patch
+      meaning: Change the state value each phase. A successful committed change exercises the write path;
+        a no-op or cached get is weaker evidence.
+    - signal: HTTP code
+      meaning: 200 from the recorded worker NodePort measures the existing data path, independently of
+        kubectl.
+    - signal: spec.replicas / readyReplicas
+      meaning: Desired replica count is committed configuration; Ready count is asynchronous workload
+        convergence. A scale command alone measures only the former.
+    - signal: ConfigMap value / resourceVersion
+      meaning: Read the value after recovery to resolve an uncertain write. resourceVersion is an opaque
+        version identifier, not a number for timing or arithmetic.
+    - signal: Member ID / leader / raft term
+      meaning: Identify whether the chosen stopped member was leader before attributing an election to
+        that fault.
+    theory_sections:
+    - 12.3.3
+    - 12.3.4
+  predict: Calculate quorum for 3, 4 and 5 voting members. Predict ConfigMap writes, scaling convergence
+    and HTTP for one and two stopped members; predict whether a leader change is required for the fixed
+    first target.
+  answer_with: Compare all five phases. Separate write acceptance, Ready replica convergence and existing
+    HTTP. Resolve timed-out writes by reading stored values after recovery, explain any leader change
+    from member evidence, and calculate failure tolerance for 3, 4 and 5 voters.
+  evidence:
+    columns:
+    - Phase
+    - Write / stored value
+    - Desired / Ready replicas
+    - HTTP / leader evidence
+    rows:
+    - 3 voters / baseline 2 replicas
+    - 2 voters / scale to 3
+    - 1 voter / attempted scale to 1
+    - Restored before overwriting
+    - Restored target 2 replicas
+  transfer: Would four configured members tolerate two failures?
+solution: Two surviving members can commit; one cannot. Existing HTTP traffic may continue because it
+  does not need a new etcd write for each request. Brief transition errors are possible even with quorum.
+  Restoring these members tests temporary quorum recovery, not recovery from permanent data loss. With
+  quorum, desired replicas can change and controllers can converge to three. Without it, the experiment
+  cannot reliably commit another scale target, although existing traffic may work. Read persisted state
+  after recovery before setting the explicit two-replica baseline. An unchanged leader after losing a
+  follower is expected, not failed fault injection.
+verify_note: All three etcd endpoints are healthy, the recovered ConfigMap value is readable, desired
+  and Ready replicas are two, and HTTP succeeds.
+commands:
+- name: Establish HTTP and write baselines
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab14/helpers.sh
+    h get nodes
+    h rollout status deployment/quorum-web --request-timeout=0 --timeout=180s
+    PORT=$(h get svc quorum-web -o jsonpath='{.spec.ports[0].nodePort}')
+    IP=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' lab14-worker)
+    curl -fsS --max-time 3 "http://$IP:$PORT/" >/dev/null && echo 'HTTP baseline ok'
+    h patch configmap quorum-probe --type merge -p '{"data":{"state":"baseline"}}'
+    ec lab14-control-plane endpoint status --cluster -w table
+    ec lab14-control-plane member list -w table
+    h get deployment quorum-web -o custom-columns=DESIRED:.spec.replicas,READY:.status.readyReplicas
+  expect: Four Ready nodes, 2/2 web pods, HTTP ok, "configmap/quorum-probe patched" and a table with three
+    members, one IS LEADER=true.
+- name: Stop one etcd member and probe both paths
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    stop_etcd lab14-control-plane2
+    docker exec lab14-control-plane2 crictl ps --name etcd
+    h patch configmap quorum-probe --type merge -p '{"data":{"state":"one-down"}}'
+    curl -sS --max-time 3 -o /dev/null -w '%{http_code}\n' "http://$IP:$PORT/"
+
+    ec lab14-control-plane endpoint status -w table
+    ec lab14-control-plane3 endpoint status -w table
+    h scale deployment/quorum-web --replicas=3
+    h rollout status deployment/quorum-web --request-timeout=0 --timeout=180s
+    h get deployment quorum-web -o custom-columns=DESIRED:.spec.replicas,READY:.status.readyReplicas
+  expect: No etcd container on lab14-control-plane2; the write normally succeeds because two of three members
+    keep quorum (a single failure can come from the stopped member's API server before the load balancer
+    drops it, so retry once); HTTP returns 200. Scaling to three should commit and converge while quorum
+    survives. Endpoint status from a surviving member identifies the leader.
+- name: Lose quorum and attempt both configuration and scaling writes
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    stop_etcd lab14-control-plane3
+    docker exec lab14-control-plane3 crictl ps --name etcd
+    h patch configmap quorum-probe --type merge -p '{"data":{"state":"two-down"}}'
+    echo "ConfigMap write exit=$?"
+    h scale deployment/quorum-web --replicas=1
+    echo "scale exit=$?"
+    h get deployment quorum-web -o custom-columns=DESIRED:.spec.replicas,READY:.status.readyReplicas
+    curl -sS --max-time 3 -o /dev/null -w 'HTTP=%{http_code}\n' "http://$IP:$PORT/"
+  expect: With only one voter, no new writes can commit. Record client errors and any readable state separately.
+    Existing HTTP may continue; a timeout is not a general proof that a submitted operation never committed.
+- name: Restore members, then resolve uncertain operations before changing state
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    start_etcd lab14-control-plane2
+    start_etcd lab14-control-plane3
+    healthy=0
+    for i in $(seq 1 18); do
+      if ec lab14-control-plane endpoint health --cluster; then healthy=1; break; fi
+      sleep 5
+    done
+    test "$healthy" -eq 1 || echo 'STOP: use fallback; do not claim quorum recovery.'
+    observed=0
+    for i in $(seq 1 18); do
+      if h get configmap quorum-probe -o jsonpath='{.data.state}{" resourceVersion="}{.metadata.resourceVersion}{"\n"}' &&
+         h get deployment quorum-web -o custom-columns=DESIRED:.spec.replicas,READY:.status.readyReplicas; then
+        observed=1; break
+      fi
+      sleep 5
+    done
+    test "$observed" -eq 1 || echo 'STOP: retain the unknown result; do not overwrite it before readback works.'
+    ec lab14-control-plane endpoint status --cluster -w table
+  expect: Record persisted values before the next step. Failed requests during quorum loss normally leave
+    one-down and three replicas, but the observed state resolves any client uncertainty.
+- name: Restore the explicit baseline and verify convergence and HTTP independently
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    if [[ ${healthy:-0} -eq 1 && ${observed:-0} -eq 1 ]]; then
+      h patch configmap quorum-probe --type merge -p '{"data":{"state":"recovered"}}'
+      h scale deployment/quorum-web --replicas=2
+      h rollout status deployment/quorum-web --request-timeout=0 --timeout=180s
+      h get configmap quorum-probe -o jsonpath='{.data.state}{"\n"}'
+      h get deployment quorum-web -o custom-columns=DESIRED:.spec.replicas,READY:.status.readyReplicas
+      ec lab14-control-plane endpoint health --cluster
+      curl -fsS --max-time 3 "http://$IP:$PORT/" >/dev/null && echo 'HTTP recovery ok'
+    else
+      echo 'STOP: complete quorum recovery and readback in the previous step before overwriting state.'
+    fi
+  expect: All three endpoints are healthy; the recovered value is readable, desired and Ready replicas
+    are both two, and HTTP works.
+setup:
+- name: Create the separate HA kind cluster
+  command: !unsafe |
+    memory_kib=$(awk '/MemTotal:/ {print $2}' /proc/meminfo)
+    if (( memory_kib < 15 * 1024 * 1024 )); then
+      echo 'Lab 14 requires a VM configured with at least 16 GiB RAM; see README.' >&2
+      exit 1
+    fi
+    mkdir -p "$HOME/labs/lab14"
+    for host in registry-1.docker.io auth.docker.io dl.k8s.io; do
+      timeout 5s getent ahostsv4 "$host" >/dev/null || {
+        echo "Required DNS lookup failed for $host. Docker/kind image registry DNS is unavailable in the VM; restore DNS before Lab 14." >&2
+        exit 1
+      }
+    done
+    cat > "$HOME/labs/lab14/kind.yaml" <<'YAML'
+    kind: Cluster
+    apiVersion: kind.x-k8s.io/v1alpha4
+    name: lab14
+    nodes:
+    - role: control-plane
+    - role: control-plane
+    - role: control-plane
+    - role: worker
+    YAML
+    kind get clusters | grep -Fx lab14 >/dev/null || timeout 30m kind create cluster --name lab14 --config "$HOME/labs/lab14/kind.yaml" --kubeconfig "$HOME/labs/lab14/kubeconfig" --wait 180s
+    "$HOME/labs/install-kubectl-for-kind.sh" lab14
+    # Keep kubelet's API path available when its own stacked etcd member is stopped.
+    for node in lab14-control-plane lab14-control-plane2 lab14-control-plane3; do
+      cluster=$(docker exec "$node" kubectl --kubeconfig=/etc/kubernetes/kubelet.conf config view --minify -o jsonpath='{.contexts[0].context.cluster}')
+      test -n "$cluster"
+      docker exec "$node" kubectl --kubeconfig=/etc/kubernetes/kubelet.conf config set-cluster "$cluster" --server=https://lab14-external-load-balancer:6443
+      docker exec "$node" systemctl restart kubelet
+    done
+    "$HOME/labs/load-lab-images-into-kind.sh" lab14 nginx:1.27
+    kubectl --kubeconfig="$HOME/labs/lab14/kubeconfig" --context=kind-lab14 create deployment quorum-web --image=nginx:1.27 --replicas=2 --dry-run=client -o yaml | kubectl --kubeconfig="$HOME/labs/lab14/kubeconfig" --context=kind-lab14 apply -f -
+    kubectl --kubeconfig="$HOME/labs/lab14/kubeconfig" --context=kind-lab14 rollout status deployment/quorum-web --timeout=180s
+    kubectl --kubeconfig="$HOME/labs/lab14/kubeconfig" --context=kind-lab14 expose deployment quorum-web --type=NodePort --port=80 --dry-run=client -o yaml | kubectl --kubeconfig="$HOME/labs/lab14/kubeconfig" --context=kind-lab14 apply -f -
+    kubectl --kubeconfig="$HOME/labs/lab14/kubeconfig" --context=kind-lab14 create configmap quorum-probe --from-literal=state=baseline --dry-run=client -o yaml | kubectl --kubeconfig="$HOME/labs/lab14/kubeconfig" --context=kind-lab14 apply -f -
+- name: Prepare the HA helpers
+  command: !unsafe |
+    cat > ~/labs/lab14/helpers.sh <<'SH'
+    h() { kubectl --kubeconfig="$HOME/labs/lab14/kubeconfig" --context=kind-lab14 --namespace=default --request-timeout=5s "$@"; }
+    stop_etcd() {
+      docker exec "$1" mv /etc/kubernetes/manifests/etcd.yaml /root/ce-etcd.yaml || return 1
+      local containers
+      for i in $(seq 1 30); do
+        containers=$(docker exec "$1" crictl ps --name etcd -q) || return 1
+        [ -z "$containers" ] && return 0
+        sleep 2
+      done
+      echo "STOP: etcd on $1 is still running; restore the manifest." >&2
+      return 1
+    }
+    start_etcd() { docker exec "$1" mv /root/ce-etcd.yaml /etc/kubernetes/manifests/etcd.yaml; }
+    ec() {
+      local node=$1 container; shift
+      container=$(docker exec "$node" crictl ps --name etcd -q)
+      [ -n "$container" ] || return 1
+      docker exec "$node" crictl exec "$container" etcdctl \
+        --endpoints=https://127.0.0.1:2379 --dial-timeout=3s --command-timeout=5s \
+        --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+        --cert=/etc/kubernetes/pki/etcd/server.crt \
+        --key=/etc/kubernetes/pki/etcd/server.key "$@"
+    }
+    SH
+verify:
+- name: Verify HA cluster write baseline
+  command: !unsafe |
+    h() { kubectl --kubeconfig="$HOME/labs/lab14/kubeconfig" --context=kind-lab14 --request-timeout=5s "$@"; }
+    test "$(h get nodes --no-headers | awk '$2 == "Ready" {count++} END {print count+0}')" = 4
+    h patch configmap quorum-probe --type merge -p '{"data":{"state":"verified"}}' >/dev/null
+    test -s "$HOME/labs/lab14/helpers.sh"
+reset: []
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 14 setup, then ./lab.sh ssh. No other lab is required.
+transfer_solution: No. Four members require three votes and tolerate one failure, just as three members
+  tolerate one. Five members require three and tolerate two.
+fallback:
+- name: Independent fallback that restores the manifests without kubectl
+  where: VM terminal 2
+  run: !unsafe |
+    for node in lab14-control-plane2 lab14-control-plane3; do
+      docker exec "$node" sh -c 'test -f /root/ce-etcd.yaml && mv /root/ce-etcd.yaml /etc/kubernetes/manifests/etcd.yaml; ls /etc/kubernetes/manifests'
+    done

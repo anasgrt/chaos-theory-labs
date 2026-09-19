@@ -1,0 +1,17 @@
+---
+- name: Load the real lab definition
+  ansible.builtin.include_vars:
+    file: "{{ reset_definitions.files | map(attribute='path') | select('search', '/' + lab_id + '-[^/]+/lab.yml$') | first }}"
+    name: reset_selected_lab
+
+- ansible.builtin.include_tasks: ../../ansible/tasks/reset.yml
+  vars:
+    selected_lab: "{{ reset_selected_lab }}"
+
+- name: Inspect removed workspace
+  ansible.builtin.stat:
+    path: "{{ lab_workspace }}"
+  register: removed_workspace
+
+- ansible.builtin.assert:
+    that: not removed_workspace.stat.exists

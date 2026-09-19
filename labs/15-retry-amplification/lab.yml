@@ -1,0 +1,109 @@
+title: Lab 15 — Count how layered retries multiply work
+units: [ce-lab15.service]
+task:
+  question: How much extra backend work do layered retries create when the same dependency keeps failing?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §1.2.3 (emergent retry amplification), §12.1.4 (ingress retry accumulation).
+      This fixture isolates attempt multiplication using HTTP 503.'
+    theory:
+    - 'An original user request is not the same as an attempt. One retry means up to two attempts. When
+      a client retries a proxy call and the proxy retries each upstream call, the per-layer attempt limits
+      multiply: at most client attempts × proxy attempts backend arrivals per original request.'
+    - Here HTTP 503 means Service Unavailable. NGINX can make two upstream attempts for that response,
+      and the client makes either one or two proxy
+      attempts. Both upstreams deliberately return 503 throughout the fault phase. A successful attempt
+      stops retries early, so the maximum is reached only when the earlier attempts continue failing.
+    - Measure amplification as backend arrivals / original requests, and useful work as successful original
+      requests / original requests. More attempts do not imply more successes. Keep the original request
+      count and failure condition identical when changing the client retry count.
+    - Layered retry amplification is the first step in the book’s emergent retry-storm example. This small,
+      sequential experiment isolates multiplication; it does not simulate overloaded worker queues or
+      prove self-sustaining failure. In a real system, retries of slow requests may add work while earlier
+      attempts are still running; bounded attempts, a total deadline and backoff address different parts
+      of that problem.
+    in_this_lab:
+    - 'Each case sends 20 sequential requests in three phases: healthy, both upstreams returning HTTP
+      503, and recovered. NGINX allows two upstream attempts. Repeat with zero and one client retry. The
+      runner owns its proxy inside ce-lab15.service, has a 60-second runtime limit,
+      and removes the fault and processes on exit. Reset stops that unit and its children.'
+    readings:
+    - signal: original / client attempts
+      meaning: Each case has 20 original requests. Count all proxy attempts, including retries, separately.
+    - signal: backend arrivals
+      meaning: Sum the two upstream request logs within the phase. Probe and health requests are excluded.
+    - signal: amplification
+      meaning: backend arrivals / 20. Compare it with the theoretical upper bound; fewer arrivals can
+        indicate early success or a failure before reaching a backend.
+    - signal: successes
+      meaning: Counts original requests ending in HTTP 200, not the number of attempts. Compare outcomes
+        alongside cost.
+  predict: For 20 requests, calculate the maximum backend arrivals with zero versus one client retry,
+    given two proxy attempts. Predict success counts during a persistent 503 fault.
+  answer_with: Compare client attempts, backend arrivals / 20 and successful original requests / 20. Explain
+    which attempt limits multiply and why restoring HTTP success stops retries early.
+  evidence:
+    columns:
+    - Case / phase
+    - Client attempts
+    - Backend arrivals / amplification
+    - Successes / 20
+    rows:
+    - 'No client retry: baseline'
+    - 'No client retry: 503 fault'
+    - 'No client retry: recovered'
+    - 'One client retry: baseline'
+    - 'One client retry: 503 fault'
+    - 'One client retry: recovered'
+  transfer: If both layers permit three retries, what is the maximum amplification?
+solution: Healthy phases should make 20 client attempts and 20 backend arrivals, with 20 successes. During
+  persistent 503, no client retry allows 20 client attempts and up to 40 backend arrivals; one client
+  retry allows 40 and up to 80. Both can still yield zero user successes. These are predicted counts for
+  this controlled failure, not universal amplification factors. Recovery demonstrates that retries stop
+  on success. This experiment establishes multiplication of work, not a self-sustaining overload.
+verify_note: Each runner removes the fail marker and stops its own upstreams and proxy. Both recovered
+  phases should return 20/20 successes.
+commands:
+- name: Measure baseline, persistent failure and recovery without a client retry
+  where: VM terminal 1
+  run: !unsafe |
+    cd ~/labs/lab15
+    sudo systemd-run --unit=ce-lab15 --collect --wait --pipe --uid="$(id -u)" --property=RuntimeMaxSec=60s --working-directory="$PWD" /bin/bash "$PWD/run-case.sh" 0 | tee no-client-retry.txt
+    echo "runner exit=${PIPESTATUS[0]} (0 means completed; nonzero means failure or the 60-second limit)"
+  expect: Three phase summaries, each with 20 original requests. Check the baseline before using the fault
+    result.
+- name: Repeat the same three phases with one client retry
+  where: VM terminal 1
+  run: !unsafe |
+    cd ~/labs/lab15
+    sudo systemd-run --unit=ce-lab15 --collect --wait --pipe --uid="$(id -u)" --property=RuntimeMaxSec=60s --working-directory="$PWD" /bin/bash "$PWD/run-case.sh" 1 | tee one-client-retry.txt
+    echo "runner exit=${PIPESTATUS[0]}"
+  expect: The fault can produce twice as many backend arrivals, still without a successful original request.
+    Healthy and recovered phases should stop after their first successful attempt.
+- name: Check cleanup and compare the summaries
+  where: VM terminal 1
+  run: !unsafe |
+    cd ~/labs/lab15
+    test ! -e fail && echo 'fault marker removed'
+    ss -ltn '( sport = :8090 or sport = :9001 or sport = :9002 )'
+    cat no-client-retry.txt one-client-retry.txt
+  expect: No listeners remain on the three lab ports. Logs and summaries remain available for your answer.
+setup:
+- name: Check the isolated retry fixture
+  command: !unsafe |
+    mkdir -p "$HOME/labs/lab15/nginx"
+    nginx -t -p "$HOME/labs/lab15/nginx/" -c "$HOME/labs/lab15/nginx.conf"
+verify:
+- name: Verify free ports and clean fault state
+  command: !unsafe |
+    test ! -e "$HOME/labs/lab15/fail"
+    test -s "$HOME/labs/lab15/run-case.sh"
+    test -z "$(ss -H -ltn '( sport = :8090 or sport = :9001 or sport = :9002 )')"
+reset: []
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 15 setup, then ./lab.sh ssh. No other lab is required.
+transfer_solution: Three retries means four attempts at each layer, so at most 4 × 4 = 16 backend arrivals
+  per original request, provided every attempt reaches the backend and keeps failing.
+files:
+- upstream.py
+- client.py
+- run-case.sh
+- nginx.conf

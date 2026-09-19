@@ -1,0 +1,16 @@
+---
+- name: Validate the shared VM inventory before any mutation
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname == 'chaos'
+    fail_msg: Use lab.sh; the inventory must target the shared chaos VM.
+
+- name: Read the actual VM hostname
+  ansible.builtin.command: hostname
+  register: lab_hostname
+  changed_when: false
+
+- name: Refuse a connection outside the teaching VM
+  ansible.builtin.assert:
+    that: lab_hostname.stdout == 'chaos-labs'
+    fail_msg: The connected host is not the chaos-labs VM. No lab changes were made.

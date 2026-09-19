@@ -1,0 +1,207 @@
+title: Lab 10 — Ownership, disruption budgets and Service routing
+kubernetes: true
+task:
+  question: What do ownership, disruption budgets and Service routing each guarantee during Pod replacement?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§10.4, 10.5.1–10.5.2; Experiment Card 10.1.'
+    theory:
+    - A Pod groups containers and has its own object identity (UID). A Deployment expresses the desired
+      replica count; its ReplicaSet creates Pods to maintain that count. Deleting one managed Pod leaves
+      the desired count unchanged, so reconciliation creates a different Pod rather than resurrecting
+      the deleted object.
+    - The controller creates the replacement, the scheduler chooses a node, and kubelet starts its containers.
+      These are asynchronous steps. The old Pod may still be terminating while the new one starts; a temporarily
+      larger object count is not itself a failure.
+    - A Service selects Pods by labels and routes through eligible endpoints. Readiness determines whether
+      a Pod is eligible; Running alone is insufficient. Here readiness opens TCP port 8080, whereas the
+      client asks /healthz for an HTTP result. Endpoint changes and existing connections can lag behind
+      Pod changes.
+    - Measure both recovery of replica count and sampled client availability. With 100 probes, sampled
+      availability is successful HTTP responses / 100. Zero failed probes means none of these probes saw
+      failure; requests between samples or other paths remain untested. Goldpinger’s local /healthz response
+      is not a measurement of every peer connection.
+    - Follow ownerReferences from Pod to ReplicaSet to Deployment. Labels select resources; ownership
+      identifies the controller responsible for replacement. Kubernetes does not recreate an unmanaged
+      Pod merely because a Service selects it.
+    - A PodDisruptionBudget (PDB) constrains voluntary evictions through the Eviction API. With three
+      healthy selected Pods and minAvailable=3, disruptionsAllowed is zero. An eviction should be refused
+      with a disruption-budget error; Forbidden would instead mean an authorization failure. Direct Pod
+      DELETE bypasses this check, and a PDB cannot prevent node failures.
+    - After replacement, deliberately change only the Service selector to match no Pods. The Pods can
+      stay Ready while the Service loses eligible endpoints. Restoring the selector repairs discovery
+      without restarting the application. EndpointSlices report addresses and conditions, not a per-request
+      success guarantee.
+    - A failure domain is a set of replicas that one failure can remove together. Replicas on the same
+      node share node failure; separate kind nodes still share the host VM. Replica count alone does
+      not establish resilience to either shared failure.
+    in_this_lab:
+    - The chaos cluster has three Goldpinger replicas. The readiness probe checks TCP 8080; HTTP probes
+      sample /healthz through the Service.
+    readings:
+    - signal: Pod name / UID
+      meaning: Compare before and after deletion to identify the replacement. A changed process restart
+        count inside the same Pod would be a different event.
+    - signal: READY / endpointslices
+      meaning: READY reports the configured readiness result. EndpointSlice addresses and readiness show
+        the backend set used for routing.
+    - signal: probes.log
+      meaning: Each row contains a timestamp and HTTP code. Count non-200 rows only after all 100 samples
+        finish.
+    - signal: k helper
+      meaning: Runs kubectl against kind-lab10 in namespace chaos-labs. Node queries are cluster-scoped
+        even though the helper specifies a namespace.
+    - signal: ownerReferences
+      meaning: Read the Pod owner, then that ReplicaSet’s owner. A selected Pod and an owned Pod are different
+        relationships.
+    - signal: disruptionsAllowed / eviction error
+      meaning: Wait for the PDB controller to report currentHealthy=3 and disruptionsAllowed=0. Only a
+        budget rejection tests the intended guard.
+    - signal: Service selector / ready endpoints
+      meaning: An extra unmatched selector label makes the selector’s AND expression false. Count endpoints
+        with ready=true, including an empty set.
+    theory_sections:
+    - 10.5.1
+    - 10.5.2
+  predict: Predict whether the PDB blocks eviction and direct deletion separately. Then predict Pod readiness
+    and HTTP results when only the Service selector is wrong.
+  answer_with: Trace Pod → ReplicaSet → Deployment. Compare eviction rejection with direct deletion, replacement
+    UID and failed samples out of 100. Explain the wrong-selector result using Pod readiness and EndpointSlice
+    evidence, then show recovery.
+  evidence:
+    columns:
+    - Phase
+    - Identity / Ready Pods
+    - PDB / ready endpoints
+    - HTTP evidence
+    rows:
+    - Baseline ownership
+    - Eviction request
+    - Direct deletion (100 probes)
+    - Wrong selector
+    - Selector restored
+  transfer: Would three replicas on the same node establish resilience to losing that node?
+solution: 'The ReplicaSet creates a replacement because the desired replica count remains three. Remaining
+  backends may serve requests during that work, but endpoint changes and in-flight requests can still
+  produce failures. A replacement proves reconciliation; the probe results measure sampled service availability.
+  Zero failed samples means no failure was observed by these probes, not that every possible request succeeded.
+  The ownership chain explains replacement. The PDB rejects an eviction but does not intercept direct
+  DELETE. A selector mismatch isolates a discovery error: Ready processes remain, but no matching backends
+  can serve the Service.'
+verify_note: Three replicas and three eligible Service endpoints are restored, HTTP succeeds, and lab10-budget
+  is absent.
+commands:
+- name: Checkpoint the prepared chaos cluster
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab10/env.sh
+    k get nodes
+    k get pods -l app=goldpinger -o wide
+    k auth can-i list pods --as=system:serviceaccount:chaos-labs:goldpinger
+    k auth can-i delete pods --as=system:serviceaccount:chaos-labs:goldpinger
+    NODE_IP=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' lab10-control-plane)
+    curl -fsS --max-time 3 "http://$NODE_IP:30080/healthz"; echo
+    k get endpointslices -l kubernetes.io/service-name=goldpinger -o wide
+    k get pods -l app=goldpinger -o custom-columns='NAME:.metadata.name,UID:.metadata.uid'
+  expect: Three Ready replicas, matching endpoints and a working /healthz probe. The workload may list
+    Pods but may not delete them.
+- name: Trace ownership and test a voluntary eviction guard
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    victim=$(k get pods -l app=goldpinger -o jsonpath='{.items[0].metadata.name}')
+    rs=$(k get pod "$victim" -o jsonpath='{.metadata.ownerReferences[0].name}')
+    k get pod "$victim" -o jsonpath='{.metadata.uid}{" owner="}{.metadata.ownerReferences}{"\n"}'
+    k get rs "$rs" -o jsonpath='{.metadata.ownerReferences}{"\n"}'
+    k create pdb lab10-budget --selector=app=goldpinger --min-available=3 --dry-run=client -o yaml | k apply -f -
+    k wait pdb/lab10-budget --for=jsonpath='{.status.currentHealthy}'=3 --timeout=60s
+    k wait pdb/lab10-budget --for=jsonpath='{.status.disruptionsAllowed}'=0 --timeout=60s
+    k get pdb lab10-budget
+    printf '{"apiVersion":"policy/v1","kind":"Eviction","metadata":{"name":"%s","namespace":"chaos-labs"}}\n' "$victim" > ~/labs/lab10/eviction.json
+    k create --raw "/api/v1/namespaces/chaos-labs/pods/$victim/eviction" -f ~/labs/lab10/eviction.json
+    k get pod "$victim" -o custom-columns='NAME:.metadata.name,UID:.metadata.uid'
+  expect: The eviction is refused because it would violate the budget; the original UID still exists.
+    Stop if the error is Forbidden or if eviction succeeds, since those do not establish the intended
+    comparison.
+- name: Start 100 probes about 0.2 s apart (start this right before the deletion)
+  where: VM terminal 2
+  run: !unsafe |
+    source ~/labs/lab10/env.sh
+    NODE_IP=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' lab10-control-plane)
+    for i in $(seq 1 100); do
+      code=$(curl -s --max-time 1 -o /dev/null -w '%{http_code}' "http://$NODE_IP:30080/healthz")
+      printf '%s %s\n' "$(date --iso-8601=ns)" "$code"
+      sleep 0.2
+    done | tee ~/labs/lab10/probes.log
+- name: Directly delete the same Pod despite the PDB; observe replacement for up to 60 seconds
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    echo "victim=$victim deleted_at=$(date --iso-8601=ns)"
+    k delete pod "$victim" --wait=false
+    timeout 60s kubectl --kubeconfig="$HOME/labs/lab10/kubeconfig" --context=kind-lab10 --namespace=chaos-labs get pods -l app=goldpinger -w
+    # timeout exit 124 ends observation, not the Kubernetes experiment.
+- name: After all 100 probes finish in terminal 2, collect recovery evidence
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k rollout status deployment/goldpinger --request-timeout=0 --timeout=180s
+    k get pods -l app=goldpinger -o custom-columns='NAME:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status,START:.status.startTime,NODE:.spec.nodeName'
+    k get pod "$victim" 2>&1 | tail -1
+    k get endpointslices -l kubernetes.io/service-name=goldpinger -o wide
+    samples=$(wc -l < ~/labs/lab10/probes.log)
+    if [ "$samples" -eq 100 ]; then
+      echo "non-200 samples: $(grep -vc ' 200$' ~/labs/lab10/probes.log)"
+      grep -v ' 200$' ~/labs/lab10/probes.log | head
+    else
+      echo "Only $samples/100 samples recorded; wait for terminal 2 to finish before counting."
+    fi
+    k get pods -l app=goldpinger -o custom-columns='NAME:.metadata.name,UID:.metadata.uid'
+  expect: The victim is NotFound, a new pod name replaced it, all READY=True, three endpoints and a counted
+    number of non-200 samples (0 or a few, right after the deletion).
+- name: Break only Service selection and compare all three signals
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k delete pdb lab10-budget --ignore-not-found
+    k patch svc goldpinger --type merge -p '{"spec":{"selector":{"experiment":"lab10-no-match"}}}'
+    sleep 5
+    k get pods -l app=goldpinger
+    k get svc goldpinger -o jsonpath='{.spec.selector}{"\n"}'
+    k get endpointslices -l kubernetes.io/service-name=goldpinger -o json | jq '[.items[].endpoints[]? | select(.conditions.ready == true)] | length'
+    curl -sS --max-time 3 -o /dev/null -w 'HTTP=%{http_code}\n' "http://$NODE_IP:30080/healthz"
+  expect: Ready Pods can coexist with zero eligible Service endpoints and a failed request. Recheck endpoints
+    if updates are still converging.
+- name: Restore the selector and confirm routing recovery
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k patch svc goldpinger --type merge -p '{"spec":{"selector":{"experiment":null}}}'
+    for i in $(seq 1 15); do
+      curl -fs --max-time 2 "http://$NODE_IP:30080/healthz" && break
+      sleep 1
+    done
+    k get endpointslices -l kubernetes.io/service-name=goldpinger -o json | jq '[.items[].endpoints[]? | select(.conditions.ready == true)] | length'
+    curl -fsS --max-time 3 "http://$NODE_IP:30080/healthz"; echo
+  expect: Three eligible endpoints and successful HTTP return without a workload rollout.
+setup: []
+verify:
+- name: Verify pod-recovery baseline
+  command: !unsafe |
+    k() { kubectl --kubeconfig="$HOME/labs/lab10/kubeconfig" --context=kind-lab10 --namespace=chaos-labs --request-timeout=10s "$@"; }
+    test "$(k get pods -l app=goldpinger --no-headers | awk '$2 == "1/1" && $3 == "Running" {count++} END {print count+0}')" = 3
+    k auth can-i list pods --as=system:serviceaccount:chaos-labs:goldpinger | grep -qx yes
+    # can-i exits 1 for a "no" answer, so compare its output instead of the pipeline status.
+    delete_answer=$(k auth can-i delete pods --as=system:serviceaccount:chaos-labs:goldpinger || true)
+    test "$delete_answer" = no
+    endpoints=$(k get endpointslices -l kubernetes.io/service-name=goldpinger -o json)
+    test "$(printf '%s' "$endpoints" | jq '[.items[].endpoints[]? | select(.conditions.ready == true)] | length')" = 3
+    budget=$(k get pdb lab10-budget --ignore-not-found -o name)
+    test -z "$budget"
+    node_ip=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' lab10-control-plane)
+    curl -fsS --max-time 3 "http://$node_ip:30080/healthz" >/dev/null
+reset: []
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 10 setup, then ./lab.sh ssh. No other lab is required.
+transfer_solution: No. Replica count does not guarantee placement across failure domains. This experiment
+  deletes one Pod; it does not test node or zone loss.
+fallback:
+- name: Restore Service selection and remove the experiment PDB
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    source ~/labs/lab10/env.sh
+    k patch svc goldpinger --type merge -p '{"spec":{"selector":{"experiment":null}}}'
+    k delete pdb lab10-budget --ignore-not-found

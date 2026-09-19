@@ -1,0 +1,42 @@
+---
+- name: Validate the workspace and owned service names
+  ansible.builtin.assert:
+    that:
+      - lab_id is match('^[0-9]{2}$')
+      - lab_workspace == lab_root + '/lab' + lab_id
+      - lab_cluster == 'lab' + lab_id
+      - (selected_lab.units | default([]) | reject('match', '^ce-lab' + lab_id + '(-[a-z0-9-]+)?\.(service|scope)$') | list | length) == 0
+
+- name: Stop only this lab's service units
+  ansible.builtin.include_tasks: stop-unit.yml
+  loop: "{{ selected_lab.units | default([]) }}"
+  loop_control:
+    loop_var: lab_unit
+
+- name: Remove this lab's processes, containers, mounts and fault rules
+  ansible.builtin.shell: |
+    set -euo pipefail
+    {{ item.command }}
+  args:
+    executable: /bin/bash
+  loop: "{{ selected_lab.reset | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Inspect clusters without using the Kubernetes API
+  ansible.builtin.command: kind get clusters
+  register: reset_clusters
+  changed_when: false
+  when: selected_lab.kubernetes | default(false)
+
+- name: Delete only this lab's kind cluster, including a broken control plane
+  ansible.builtin.command:
+    argv: [kind, delete, cluster, --name, "{{ lab_cluster }}", --kubeconfig, "{{ lab_workspace }}/kubeconfig"]
+  when: selected_lab.kubernetes | default(false) and lab_cluster in reset_clusters.stdout_lines
+
+- name: Remove this lab's files and results
+  ansible.builtin.file:
+    path: "{{ lab_workspace }}"
+    state: absent
+  become: true
+  when: lab_action == 'reset' or not (selected_lab.preserve_on_setup | default(false))

@@ -1,0 +1,5 @@
+# Source this file to target only Lab {{ lab_id }}.
+k() {
+  kubectl --kubeconfig="$HOME/labs/lab{{ lab_id }}/kubeconfig" \
+    --context=kind-lab{{ lab_id }} --namespace=chaos-labs --request-timeout=10s "$@"
+}

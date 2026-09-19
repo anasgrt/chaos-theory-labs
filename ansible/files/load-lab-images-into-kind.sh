@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cluster_name=${1:-chaos}
-shift || true
-lab_images=("${@:-bloomberg/goldpinger:v3.11.3}")
+cluster_name=${1:?Supply the selected lab cluster name}
+shift
+[[ $# -gt 0 ]] || { echo 'Supply at least one cached image.' >&2; exit 1; }
+lab_images=("$@")
 
 case "$(uname -m)" in
   x86_64) platform=linux/amd64 ;;
@@ -28,7 +29,7 @@ save_supports_platform=false
 
 for image in "${lab_images[@]}"; do
   docker image inspect "$image" >/dev/null || {
-    printf 'Required local image not found: %s. Re-run ansible/run.sh to cache it.\n' "$image" >&2
+    printf 'Required local image not found: %s. Run ./lab.sh provision on the host to cache it.\n' "$image" >&2
     exit 1
   }
 

@@ -1,0 +1,139 @@
+title: Lab 08 — A syscall error tests application handling
+task:
+  question: Why can one request succeed even though its close error stops the server?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§6.2–6.4 and Experiment Cards 6.1–6.2.'
+    theory:
+    - A syscall crosses the application/kernel boundary. write sends bytes through a file descriptor;
+      close releases a descriptor. The application receives a result or error and decides whether to retry,
+      continue or exit. A syscall error and a process exit status are different observations.
+    - strace -p attaches to one running process. -e trace=close selects the displayed calls; -e inject=close:error=EIO
+      skips the selected real calls and makes them report an I/O error. The INJECTED marker distinguishes this artificial
+      error from a naturally occurring one. Attaching after startup avoids injecting into unrelated initialization
+      calls.
+    - The server’s request path writes the response before closing the connection. Failure on a later
+      close can therefore occur after the client received bytes. Test the triggering request, the process
+      state, and the next request separately; a successful first response cannot establish that the service
+      continues.
+    - 'Observe a normal request with tracing before injecting. Tracing adds overhead, so this lab tests
+      error handling rather than throughput. The normal trace may include an ignored fsync error: seeing
+      an error does not prove that it caused the exit. Follow the actual sequence from injected call to
+      server log to later availability.'
+    - On Linux, a real close can release the descriptor even when it reports an error. Skipping close
+      with this injection tests the application's error path, not every real close side effect.
+      Do not infer a descriptor leak from the error code alone or blindly retry close on a descriptor
+      number that may have been reused.
+    in_this_lab:
+    - Target only the PID saved in server.pid. Use two VM terminals; Ctrl-C in the tracing terminal detaches
+      strace.
+    readings:
+    - signal: strace return / INJECTED
+      meaning: The syscall returns -1 with EIO. The marker confirms the injected path was reached.
+    - signal: HTTP code / size_download
+      meaning: Code is the response status and size_download is body bytes received. 000 means no HTTP
+        status was obtained, not a server status code.
+    - signal: wait "$server" / log
+      meaning: In the shell that started the child, wait reports its exit status. Correlate that with
+        the “error closing socket” message.
+    - signal: Next request
+      meaning: Tests continued service after the triggering request; this is independent of whether the
+        earlier response completed.
+  predict: Predict the triggering response, process state and next request after close returns EIO.
+  answer_with: Connect the injected close error to the server log and exit status. Explain the first and
+    next HTTP results separately.
+  evidence:
+    columns:
+    - Phase
+    - HTTP code / bytes
+    - Process state / exit
+    - Trace or log evidence
+    rows:
+    - Normal traced request
+    - Injected request
+    - Next request
+    - Restarted
+  transfer: Does this test show that every real close error leaves a file descriptor open?
+solution: This server treats a close error as fatal and should exit with status 1. The triggering request
+  may already have received its response, but a dead process cannot serve later requests. The fault exposes
+  an application error-handling decision, not a Kubernetes or network failure.
+verify_note: The server responds after restart, then the test process is stopped.
+commands:
+- name: Start the compiled book server and record its exact PID
+  where: VM terminal 1
+  run: !unsafe |
+    cd ~/labs/lab08
+    ./legacy_server > ~/labs/lab08/server.log 2>&1 & server=$!
+    echo "$server" > server.pid
+    sleep 1
+    curl -fsS --max-time 3 http://127.0.0.1:8080/ | head -3
+    echo "server PID=$server"
+  expect: 'HTML lines from the server. Keep this terminal: wait "$server" only works in it.'
+- name: Observe writes, closes and fsyncs without changing behaviour (Ctrl-C to detach)
+  where: VM terminal 2
+  run: !unsafe |
+    PID=$(cat ~/labs/lab08/server.pid)
+    sudo strace -p "$PID" -e trace=write,close,fsync -o ~/labs/lab08/trace.txt
+- name: Request one page while the tracer is attached
+  where: VM terminal 1
+  run: !unsafe |
+    curl -sS --max-time 3 -o /dev/null -w '%{http_code} %{size_download}\n' http://127.0.0.1:8080/
+- name: After Ctrl-C in terminal 2, inspect the trace
+  where: VM terminal 2
+  run: !unsafe |
+    awk -F'(' '{print $1}' ~/labs/lab08/trace.txt | sort | uniq -c
+    grep -E '= -1' ~/labs/lab08/trace.txt | head
+  expect: Many write calls, one fsync and one close per request. fsync on a socket returns -1 EINVAL,
+    which is not an outage cause.
+- name: Inject EIO into close (leave attached)
+  where: VM terminal 2
+  run: !unsafe |
+    PID=$(cat ~/labs/lab08/server.pid)
+    sudo strace -p "$PID" -e trace=close -e inject=close:error=EIO
+- name: Request one page and read the application outcome
+  where: VM terminal 1
+  run: !unsafe |
+    curl -sS --max-time 3 -o /dev/null -w '%{http_code} %{size_download}\n' http://127.0.0.1:8080/
+    sleep 1
+    if kill -0 "$server" 2>/dev/null; then echo 'server still running'; else wait "$server"; echo "server exit=$?"; fi
+    tail -3 ~/labs/lab08/server.log
+    curl -sS --max-time 3 -o /dev/null -w 'next request: %{http_code}\n' http://127.0.0.1:8080/
+  expect: strace shows close(...) = -1 EIO (Input/output error) (INJECTED); the server exits with status
+    1 after "error closing socket". The next request should fail to connect; record its result separately
+    from the first response.
+- name: Restore HTTP service, then stop the test server
+  where: VM terminal 1
+  run: !unsafe |
+    cd ~/labs/lab08
+    if kill -0 "$server" 2>/dev/null; then kill "$server"; wait "$server"; fi
+    ./legacy_server > ~/labs/lab08/server.log 2>&1 & server=$!
+    echo "$server" > server.pid
+    sleep 1
+    curl -sS --max-time 3 -o /dev/null -w '%{http_code} %{size_download}\n' http://127.0.0.1:8080/
+    kill "$server"; wait "$server"
+    rm -f ~/labs/lab08/server.pid
+  expect: HTTP responds after restart; the test server is then stopped.
+setup:
+- name: Compile the book’s syscall fixture
+  command: !unsafe |
+    mkdir -p "$HOME/labs/lab08"
+    cd "$HOME/labs/book/examples/who-you-gonna-call/src"
+    cc -O0 -o "$HOME/labs/lab08/legacy_server" $(find . -name '*.c')
+verify:
+- name: Verify the syscall fixture is ready
+  command: !unsafe |
+    test -x "$HOME/labs/lab08/legacy_server"
+    if [[ -f "$HOME/labs/lab08/server.pid" ]]; then ! kill -0 "$(cat "$HOME/labs/lab08/server.pid")" 2>/dev/null; fi
+reset:
+- name: Stop only the PID recorded by Lab 08
+  command: !unsafe |
+    pid_file="$HOME/labs/lab08/server.pid"
+    if [[ -f "$pid_file" ]]; then
+      pid=$(cat "$pid_file")
+      if [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$(readlink "/proc/$pid/exe" 2>/dev/null)" == "$HOME/labs/lab08/legacy_server" ]]; then
+        kill "$pid" 2>/dev/null || true
+      fi
+    fi
+    rm -f "$pid_file" "$HOME/labs/lab08/legacy_server" "$HOME/labs/lab08/trace.txt" "$HOME/labs/lab08/server.log"
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 08 setup, then ./lab.sh ssh. No other lab is required.
+transfer_solution: No. strace can skip the real call and substitute an error. Real close errors have syscall-specific
+  semantics. The supported conclusion is about this application’s reaction to the injected return value.

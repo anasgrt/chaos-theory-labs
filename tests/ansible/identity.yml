@@ -1,0 +1,54 @@
+---
+- name: Verify rejection before changes to a different lab
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lab_id: '11'
+  tasks:
+    - name: Reject an inventory without the selected lab identity
+      block:
+        - ansible.builtin.include_tasks: ../../ansible/tasks/identity.yml
+        - ansible.builtin.fail:
+            msg: Identity guard unexpectedly accepted localhost.
+      rescue:
+        - ansible.builtin.assert:
+            that: ansible_failed_task.name == 'Validate the shared VM inventory before any mutation'
+
+    - name: Reject a guest hostname that differs from the selected VM
+      vars:
+        inventory_hostname: chaos
+      block:
+        - name: Create the controlled hostname fixture
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: chaos-identity-
+          register: identity_hostname_fixture
+
+        - name: Supply a hostname outside the teaching VM
+          ansible.builtin.copy:
+            dest: "{{ identity_hostname_fixture.path }}/hostname"
+            mode: '0755'
+            content: |
+              #!/bin/sh
+              printf '%s\n' 'identity-test-controller'
+
+        - name: Check the identity with the controlled hostname
+          environment:
+            PATH: "{{ identity_hostname_fixture.path }}:{{ lookup('env', 'PATH') }}"
+          block:
+            - ansible.builtin.include_tasks: ../../ansible/tasks/identity.yml
+
+        - ansible.builtin.fail:
+            msg: Identity guard unexpectedly accepted the controlled foreign hostname.
+      rescue:
+        - ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == "Refuse a connection outside the teaching VM"
+              - lab_hostname.stdout == 'identity-test-controller'
+      always:
+        - name: Remove the controlled hostname fixture
+          ansible.builtin.file:
+            path: "{{ identity_hostname_fixture.path }}"
+            state: absent
+          when: identity_hostname_fixture.path is defined

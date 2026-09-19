@@ -1,15 +1,22 @@
-CORE PROCEDURE
-Run setup and verify first. Use the named terminals; keep the same shell when
-later blocks reuse variables. Run in Bash without exit-on-error: some failures
-are deliberate observations. Stop if the baseline fails. Fallback blocks are
-only for failed cleanup.
+PROCEDURE
+Run setup and verify on the host first. Commands below run in the named
+terminals. Keep the same shell when blocks reuse variables. Use Bash without
+set -e: some failures are the observations. Stop if the baseline fails.
 {% for step in selected_lab.commands %}
 
-[{{ loop.index }}] {{ step.name }}
-    where: {{ step.where | default('VM terminal 1') }}
+[{{ loop.index }}] {{ step.name }} — {{ step.where | default('VM terminal 1') }}
 
 {{ step.run | trim }}
 {% endfor %}
 
 RECOVERY CHECK
 {{ selected_lab.verify_note | wordwrap(width=78, break_long_words=false, break_on_hyphens=false) }}
+{% if selected_lab.fallback | default([]) %}
+
+IF NORMAL RECOVERY FAILS
+{% for step in selected_lab.fallback %}
+{{ step.name }} — {{ step.where | default('VM terminal 2') }}
+
+{{ step.run | trim }}
+{% endfor %}
+{% endif %}

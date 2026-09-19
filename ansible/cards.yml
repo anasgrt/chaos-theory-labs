@@ -1,0 +1,44 @@
+---
+- name: Read lab cards locally without a VM
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Validate the read-only action
+      ansible.builtin.assert:
+        that:
+          - lab_action in ['list', 'question', 'solution']
+          - lab_text_output | length > 0
+
+    - name: Load the selected definition
+      ansible.builtin.include_vars:
+        file: "{{ lab_definition }}"
+        name: selected_lab
+      when: lab_action != 'list'
+
+    - name: Render the selected card
+      ansible.builtin.template:
+        src: "{{ 'task.txt.j2' if lab_action == 'question' else 'solution.txt.j2' }}"
+        dest: "{{ lab_text_output }}"
+        mode: '0600'
+      when: lab_action != 'list'
+
+    - name: Find the lab definitions
+      ansible.builtin.find:
+        paths: "{{ playbook_dir }}/../labs"
+        patterns: lab.yml
+        recurse: true
+        depth: 2
+        file_type: file
+      register: card_definitions
+      when: lab_action == 'list'
+
+    - name: Render the lab list
+      ansible.builtin.copy:
+        content: |
+          {% for path in card_definitions.files | map(attribute='path') | select('search', '/[0-9]{2}-[^/]+/lab.yml$') | sort %}
+          {{ (lookup('ansible.builtin.file', path).splitlines() | first) | regex_replace('^title: ', '') }}
+          {% endfor %}
+        dest: "{{ lab_text_output }}"
+        mode: '0600'
+      when: lab_action == 'list'

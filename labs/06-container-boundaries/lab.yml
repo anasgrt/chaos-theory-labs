@@ -1,0 +1,93 @@
+title: Lab 06 — Separate containers can share a full filesystem
+task:
+  question: Why can one container prevent another from writing to a shared filesystem?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §5.4 and Experiment Card 5.1. The tmpfs fixture adapts the shared-storage
+      example.'
+    theory:
+    - Containers can see different root filesystems yet share the same storage capacity. A bind mount
+      exposes a host directory inside a container; mounting that same directory into two containers does
+      not make two copies of its free space.
+    - This experiment uses a 32 MiB tmpfs, a small memory-backed filesystem, as the shared capacity pool.
+      It demonstrates the shared-capacity mechanism from the book without filling the VM’s root disk.
+      It does not measure disk throughput or reproduce Docker image-layer storage.
+    - A write needs both permission and available capacity. dd writes a known number of bytes; when the
+      filesystem cannot hold more, it can write only part of the data and then return ENOSPC (“No space
+      left on device”). A fresh container still sees the same full mount.
+    - Use the identical one-MiB probe before filling, while full, and after deleting the filling file.
+      A failure only in the full phase, supported by df, connects the symptom to shared capacity. CPU
+      and PID cgroup limits would not create more capacity on this mount.
+    in_this_lab:
+    - Two disposable containers mount the same 32 MiB tmpfs. Only this small lab mount is filled.
+    readings:
+    - signal: dd bs=1M count=1
+      meaning: Attempts to write one MiB. Record the write's error directly. In the filling command,
+        df runs after dd, so the container can exit zero even though dd failed.
+    - signal: df -h /data
+      meaning: Shows capacity of the shared mount. Avail approaching zero supports the ENOSPC explanation.
+    - signal: --rm
+      meaning: Removes the container after exit. It does not delete data written into the host bind mount.
+    - signal: mountpoint
+      meaning: A false result after recovery confirms the temporary filesystem was unmounted.
+  predict: Will a fresh container be able to write after another fills their shared mount?
+  answer_with: Compare the identical write before filling, while full and after freeing space. Explain
+    which resource the two containers share.
+  evidence:
+    columns:
+    - Phase
+    - Probe result
+    - Available space / error
+    rows:
+    - Empty
+    - Full
+    - Space freed
+  transfer: Why does deleting the container that filled the mount not recover the space?
+solution: The new container has a separate process environment but uses the same full tmpfs. Its write
+  therefore fails until the filling file is removed. Success before filling and after freeing space supports
+  shared-capacity exhaustion as the explanation. Container separation alone does not protect this shared
+  resource.
+verify_note: No ce-lab06 test container remains and the shared tmpfs is unmounted.
+commands:
+- name: Mount the small shared filesystem and prove a write works
+  where: VM terminal 1
+  run: !unsafe |
+    mkdir -p ~/labs/lab06/shared
+    sudo mount -t tmpfs -o size=32m tmpfs "$HOME/labs/lab06/shared"
+    docker run --rm --name ce-lab06-writer -v "$HOME/labs/lab06/shared:/data" ubuntu:24.04 sh -c 'dd if=/dev/zero of=/data/probe bs=1M count=1'
+    sudo rm -f ~/labs/lab06/shared/probe
+    df -h ~/labs/lab06/shared
+  expect: The one-MiB write succeeds before space is consumed.
+- name: Fill it from one container and repeat the same write from another
+  where: VM terminal 1
+  run: !unsafe |
+    docker run --rm --name ce-lab06-writer -v "$HOME/labs/lab06/shared:/data" ubuntu:24.04 sh -c 'dd if=/dev/zero of=/data/full bs=1M count=40; df -h /data'
+    docker run --rm --name ce-lab06-writer -v "$HOME/labs/lab06/shared:/data" ubuntu:24.04 sh -c 'dd if=/dev/zero of=/data/probe bs=1M count=1'
+  expect: The filling write and the second container’s probe reach No space left on device.
+- name: Free the space, repeat the write, and unmount
+  where: VM terminal 1
+  run: !unsafe |
+    sudo rm -f ~/labs/lab06/shared/full ~/labs/lab06/shared/probe
+    docker run --rm --name ce-lab06-writer -v "$HOME/labs/lab06/shared:/data" ubuntu:24.04 sh -c 'dd if=/dev/zero of=/data/probe bs=1M count=1'
+    sudo rm -f ~/labs/lab06/shared/probe
+    df -h ~/labs/lab06/shared
+    sudo umount ~/labs/lab06/shared
+    mountpoint ~/labs/lab06/shared; echo "status=$? (nonzero means unmounted)"
+  expect: The same probe succeeds after capacity is freed.
+setup:
+- name: Create the Lab 06 shared-path mountpoint
+  command: !unsafe |
+    mkdir -p "$HOME/labs/lab06/shared"
+verify:
+- name: Verify the clean container-limit baseline
+  command: !unsafe |
+    test -z "$(docker ps -aq --filter 'name=^/ce-lab06-')"
+    ! mountpoint -q "$HOME/labs/lab06/shared"
+reset:
+- name: Remove only Lab 06 containers and tmpfs
+  command: !unsafe |
+    docker ps -aq --filter 'name=^/ce-lab06-' | xargs -r docker rm -f
+    if mountpoint -q "$HOME/labs/lab06/shared"; then sudo umount "$HOME/labs/lab06/shared"; fi
+    rm -f "$HOME/labs/lab06/shared/full" "$HOME/labs/lab06/shared/probe"
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 06 setup, then ./lab.sh ssh. No other lab is required.
+transfer_solution: Its file is stored in the host bind mount, outside the disposable container layer.
+  Remove that file or the temporary filesystem to release the capacity.

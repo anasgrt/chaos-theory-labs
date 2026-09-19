@@ -1,0 +1,36 @@
+---
+- name: Inspect the named lab unit
+  ansible.builtin.command:
+    argv: [systemctl, show, "{{ lab_unit }}", --property=LoadState, --value]
+  register: unit_load_state
+  changed_when: false
+
+- name: Stop the lab unit and its child processes
+  ansible.builtin.systemd_service:
+    name: "{{ lab_unit }}"
+    state: stopped
+  become: true
+  when: unit_load_state.stdout != 'not-found'
+
+- name: Clear the unit's recorded failure, if any
+  ansible.builtin.command:
+    argv: [systemctl, reset-failed, "{{ lab_unit }}"]
+  become: true
+  failed_when: false
+  changed_when: false
+
+- name: Remove the lab's unit and drop-in files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  become: true
+  loop:
+    - "/etc/systemd/system/{{ lab_unit }}"
+    - "/etc/systemd/system/{{ lab_unit }}.d"
+  register: removed_unit
+
+- name: Reload systemd after removing a lab unit
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  become: true
+  when: removed_unit.changed
