@@ -1,4 +1,5 @@
 {% macro wrap(text) %}{{ text | wordwrap(width=78, break_long_words=false, break_on_hyphens=false) }}{% endmacro %}
+{% macro bullet(text) %}- {{ text | wordwrap(width=76, break_long_words=false, break_on_hyphens=false) | indent(2) }}{% endmacro %}
 {{ selected_lab.title }}
 {{ '=' * (selected_lab.title | length) }}
 
@@ -15,34 +16,38 @@ THEORY YOU NEED
 {% endfor %}
 Source: {{ wrap(selected_lab.task.brief.theory_source) }}
 
-THE EXPERIMENT
+EXPERIMENT
 {% for point in selected_lab.task.brief.in_this_lab %}
-{{ wrap(point) }}
+{{ bullet(point) }}
 {% endfor %}
 
-HOW TO READ THE EVIDENCE
-{% for reading in selected_lab.task.brief.readings %}
-{{ reading.signal }}
-{{ wrap(reading.meaning) }}
-
-{% endfor %}
-PREDICT
+Before running:
 {{ wrap(selected_lab.task.predict) }}
 
-RECORD YOUR RESULTS
-{{ selected_lab.task.evidence.columns | join(' | ') }}
-{% for row in selected_lab.task.evidence.rows %}
-{{ row }}{% for column in selected_lab.task.evidence.columns[1:] %} | ____{% endfor %}
-
+Measurement key (use while working through the steps):
+{% for reading in selected_lab.task.brief.readings %}
+{{ bullet(reading.signal ~ ': ' ~ reading.meaning) }}
 {% endfor %}
 
 {% include 'commands.txt.j2' %}
 
-ANSWER
-{{ wrap(selected_lab.task.answer_with) }}
+WRITE YOUR ANSWER
+Use the observations you recorded beside each step.
+{{ wrap('Cases to compare: ' ~ (selected_lab.task.evidence.rows | join('; ')) ~ '.') }}
+{{ wrap('For each case, keep: ' ~ (selected_lab.task.evidence.columns[1:] | join('; ')) ~ '.') }}
+{% for prompt in selected_lab.task.answer_with %}
 
-CHECK YOUR UNDERSTANDING
+{{ wrap(loop.index ~ '. ' ~ prompt) }}
+{% endfor %}
+
+Apply the same reasoning:
 {{ wrap(selected_lab.task.transfer) }}
 
-Compare your answer: ./lab.sh {{ lab_id }} solution
-Remove this lab's resources and files (save results first): ./lab.sh {{ lab_id }} reset
+COMPARE AND CLEAN UP - HOST TERMINAL
+Compare your answer:
+
+./lab.sh {{ lab_id }} solution
+
+Save your results, then remove only this lab's resources and files:
+
+./lab.sh {{ lab_id }} reset

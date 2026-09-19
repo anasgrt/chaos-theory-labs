@@ -62,9 +62,13 @@ task:
     - 10.5.4
   predict: Compare the 300 ms peer budget with TCP readiness and one-second HTTP readiness at 400 ms and
     1400 ms. Predict endpoint eligibility and restart counts separately.
-  answer_with: Report all seven rows. Explain the 400 ms disagreement under both probe types, the readiness
-    transition at 1400 ms, and why direct peer discovery may still find an unready Pod. Show readiness
-    recovery without a restart within the HTTP comparison.
+  answer_with:
+  - Compare peer health and latency at TCP / 0, 100 and 400 ms. Explain any disagreement with TCP readiness.
+  - Compare HTTP / 0, 400 and 1400 ms. How do the 300 ms peer budget and one-second readiness budget explain
+    the results?
+  - What happened to the slow Pod endpoint, and can peers still discover its IP directly?
+  - Use HTTP / removed, UID and restart counts to distinguish readiness recovery from restarting or replacing
+    the Pod.
   evidence:
     columns:
     - Probe / dose
@@ -80,62 +84,84 @@ task:
     - HTTP / 1400 ms
     - HTTP / removed
   transfer: Would adding liveness with the same slow dependency necessarily improve availability?
-solution: The 100 ms dose should increase observed peer latency while leaving enough of the 300 ms budget
-  to succeed. At 400 ms the same operation should time out. The TCP listener can still accept connections,
-  so readiness can remain true in both cases. Removing the toxic should restore peer success without a
-  Pod restart. Boolean health has a threshold; readiness only describes its configured test. HTTP readiness
-  still disagrees with peers at 400 ms because its deadline is longer. At 1400 ms it also fails, removing
-  eligibility without a restart. Recovery within the same Pod demonstrates a readiness transition, not
-  a replacement. Direct Pod discovery is not filtered by Service endpoint readiness.
+solution:
+- With adequate timing margin, 100 ms should increase peer latency while remaining within the 300 ms budget.
+  At 400 ms peer pings should time out, while TCP readiness can still succeed because the proxy accepts
+  a connection before forwarding delayed data. Record the actual result from each peer and use fresh PingTime values.
+- At HTTP / 0 both checks should succeed. At 400 ms peers can miss their 300 ms budget while HTTP readiness
+  remains within one second. At 1400 ms both budgets are exceeded; readiness changes after consecutive
+  failed checks. Missing or stale peer reports do not establish a timed-out request.
+- When HTTP readiness fails, the slow Pod endpoint should become ineligible for ordinary Service routing.
+  Baseline replicas may keep the Service available. Goldpinger discovers labelled Pod IPs directly, so
+  an unready endpoint does not necessarily stop direct peer pings.
+- Removing the toxic should restore fresh peer success and Ready/endpoint readiness with the same HTTP-comparison
+  UID and restart counts. A changed UID between TCP and HTTP baselines was intentional recreation. A change
+  during fault removal would require a different explanation than readiness-only recovery.
 verify_note: The toxic is removed and the original three replicas are Ready.
 commands:
-- name: Connect the prepared proxy and establish the no-delay baseline
+- name: Connect the proxy and record TCP readiness with no delay
   where: VM terminal 1
   run: !unsafe |
     source ~/labs/lab11/connect-proxy.sh
+    curl -fsS --max-time 5 "$T/proxies/slow/toxics"; echo
     pings
     readiness
   expect: The extra replica is Ready and peer reports for its IP show OK true. Establish this baseline
     before adding delay.
-- name: Add 100 ms, below the peer budget
-  where: VM terminal 1
+  record: Fill TCP / 0 ms with each baseline peer report, its PingTime, the slow Pod Ready/endpoint conditions,
+    UID and restart counts.
+- name: Set 100 ms delay and record the TCP comparison
+  where: VM terminal 1, same shell
   run: !unsafe |
-    curl -fsS --max-time 5 -H 'Content-Type: application/json' -X POST "$T/proxies/slow/toxics"       -d '{"name":"lat","type":"latency","stream":"upstream","toxicity":1,"attributes":{"latency":100,"jitter":0}}'
+    curl -fsS --max-time 5 -H 'Content-Type: application/json' -X POST "$T/proxies/slow/toxics" \
+      -d '{"name":"lat","type":"latency","stream":"upstream","toxicity":1,"attributes":{"latency":100,"jitter":0}}'
+    curl -fsS --max-time 5 "$T/proxies/slow/toxics"; echo
     sleep 8
     pings
     readiness
   expect: With enough margin, peer pings remain healthy but take longer. Readiness should remain true;
     record actual responses.
-- name: Change the same toxic to 400 ms, above the budget
-  where: VM terminal 1
+  record: Fill TCP / 100 ms with the configured toxic, all three peer reports, Ready/endpoint conditions,
+    UID and restart counts.
+- name: Set 400 ms delay and record the TCP comparison
+  where: VM terminal 1, same shell
   run: !unsafe |
-    curl -fsS --max-time 5 -H 'Content-Type: application/json' -X POST "$T/proxies/slow/toxics/lat"       -d '{"attributes":{"latency":400,"jitter":0}}'
+    curl -fsS --max-time 5 -H 'Content-Type: application/json' -X POST "$T/proxies/slow/toxics/lat" \
+      -d '{"attributes":{"latency":400,"jitter":0}}'
     curl -fsS --max-time 5 "$T/proxies/slow/toxics"; echo
     sleep 8
     pings
     readiness
   expect: Look for failed peer pings while the Pod remains Ready. The 400 ms delay exceeds the 300 ms
     ping budget; readiness only checks TCP connection establishment.
-- name: Recreate only the experimental Pod with HTTP readiness
+  record: Fill TCP / 400 ms with the same measurements. Compare report PingTime to the printed observation
+    time; repeat pings if reports are stale.
+- name: Switch only the extra Pod to HTTP readiness and record its baseline
   where: VM terminal 1, same shell
   run: !unsafe |
     curl -fsS --max-time 5 -X DELETE "$T/proxies/slow/toxics/lat"
     stop_forward
     k delete pod goldpinger-slow --wait=true --timeout=60s
     source ~/labs/lab11/connect-proxy.sh ~/labs/lab11/slow-http.yaml
+    curl -fsS --max-time 5 "$T/proxies/slow/toxics"; echo
     pings
     readiness
   expect: Record a fresh UID for the HTTP configuration and a healthy baseline before injecting again.
-- name: Compare 400 ms with the longer readiness budget
+  record: Fill HTTP / 0 ms with the new UID and fresh baseline peer, Ready, endpoint and restart readings.
+    Distinguish this deliberate recreation from later recovery.
+- name: Set 400 ms delay and record the HTTP comparison
   where: VM terminal 1, same shell
   run: !unsafe |
     curl -fsS --max-time 5 -H 'Content-Type: application/json' -X POST "$T/proxies/slow/toxics" \
       -d '{"name":"lat","type":"latency","stream":"upstream","toxicity":1,"attributes":{"latency":400,"jitter":0}}'
+    curl -fsS --max-time 5 "$T/proxies/slow/toxics"; echo
     sleep 10
     pings
     readiness
   expect: Peer requests can fail at 300 ms while HTTP readiness still succeeds within one second.
-- name: Exceed both budgets and watch eligibility without restarting
+  record: Fill HTTP / 400 ms with the toxic, peer reports, Ready/endpoint conditions, UID and restart
+    counts.
+- name: Set 1400 ms delay and watch HTTP readiness change
   where: VM terminal 1, same shell
   run: !unsafe |
     curl -fsS --max-time 5 -H 'Content-Type: application/json' -X POST "$T/proxies/slow/toxics/lat" \
@@ -145,7 +171,9 @@ commands:
     pings
   expect: The slow Pod becomes unready and its endpoint is not ready. UID and restart counts stay unchanged;
     other Service endpoints remain available.
-- name: Remove the fault, verify recovery, delete the pod and stop the port-forward
+  record: Fill HTTP / 1400 ms with the toxic and timestamped Ready/endpoint changes, peer reports, UID
+    and restart counts.
+- name: Remove the toxic and record recovery in the same Pod
   where: VM terminal 1, same shell
   run: !unsafe |
     curl -fsS --max-time 5 -X DELETE "$T/proxies/slow/toxics/lat"
@@ -154,12 +182,19 @@ commands:
     sleep 8
     pings
     readiness
+  expect: The toxic list should be empty, fresh peer pings should recover, and Ready/endpoint readiness
+    should return without a UID or restart-count change.
+  record: Fill HTTP / removed with the toxic list, refreshed peer reports, Ready/endpoint conditions,
+    UID and restart counts. Compare its UID with HTTP / 0 ms.
+- name: Stop the port-forward and remove the extra Pod
+  where: VM terminal 1, same shell
+  run: !unsafe |
     stop_forward
     k delete pod goldpinger-slow --wait=true --timeout=60s
-    k rollout status deployment/goldpinger --timeout=180s
+    k rollout status deployment/goldpinger --request-timeout=0 --timeout=180s
     k get pods -l app=goldpinger
-  expect: No toxic remains, peer pings recover, and the original three replicas are Ready after the extra
-    Pod is deleted.
+  record: Record the final Pod list and readiness, the delete result and the rollout result.
+  expect: The baseline Deployment should finish its rollout with three Ready replicas.
 setup:
 - name: Check this lab's Goldpinger baseline
   command: !unsafe |
@@ -235,7 +270,7 @@ reset:
       fi
     fi
     rm -f "$pid_file"
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 11 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 11 setup on the host. No other lab is required.
 transfer_solution: No. A healthy process can fail a dependency-based liveness check and restart repeatedly
   without repairing that dependency. Readiness controls routing; liveness should detect a condition a
   restart can plausibly fix.

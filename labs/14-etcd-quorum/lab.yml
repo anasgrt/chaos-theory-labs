@@ -66,9 +66,13 @@ task:
   predict: Calculate quorum for 3, 4 and 5 voting members. Predict ConfigMap writes, scaling convergence
     and HTTP for one and two stopped members; predict whether a leader change is required for the fixed
     first target.
-  answer_with: Compare all five phases. Separate write acceptance, Ready replica convergence and existing
-    HTTP. Resolve timed-out writes by reading stored values after recovery, explain any leader change
-    from member evidence, and calculate failure tolerance for 3, 4 and 5 voters.
+  answer_with:
+  - Calculate quorum and tolerated failures for 3, 4 and 5 configured voting members.
+  - With one member stopped, compare the write/readback, replica convergence, HTTP and member/leader evidence.
+  - With two members stopped, compare both write attempts and existing HTTP. What does a client timeout
+    establish?
+  - What did the recovered stored values show before you overwrote them, and what proves the final baseline
+    was restored?
   evidence:
     columns:
     - Phase
@@ -82,52 +86,83 @@ task:
     - Restored before overwriting
     - Restored target 2 replicas
   transfer: Would four configured members tolerate two failures?
-solution: Two surviving members can commit; one cannot. Existing HTTP traffic may continue because it
-  does not need a new etcd write for each request. Brief transition errors are possible even with quorum.
-  Restoring these members tests temporary quorum recovery, not recovery from permanent data loss. With
-  quorum, desired replicas can change and controllers can converge to three. Without it, the experiment
-  cannot reliably commit another scale target, although existing traffic may work. Read persisted state
-  after recovery before setting the explicit two-replica baseline. An unchanged leader after losing a
-  follower is expected, not failed fault injection.
+solution:
+- 'Quorum is floor(n/2)+1 and tolerated failures are n-quorum: 3 voters need 2 and tolerate 1; 4 need
+  3 and tolerate 1; 5 need 3 and tolerate 2. Stopping a member does not remove it from configured membership.'
+- Two surviving voters can commit the one-down value and the desired replica count of three. A completed
+  rollout and Ready count of three separately establish convergence. HTTP can remain available. A leader
+  change is required only if the stopped member was leader or another election occurred; compare recorded
+  member IDs and leader status rather than assuming an election.
+- 'With one surviving voter, new commits cannot proceed. Record the actual ConfigMap/scale errors and
+  HTTP result separately: existing routing and web processes can keep serving without new etcd writes.
+  A timeout means the caller did not receive an acknowledgement; it is not a general proof that a submitted
+  operation never committed.'
+- After endpoint health returns, read stored ConfigMap state/resourceVersion and Deployment spec before
+  changing them. The expected unchanged targets are one-down and three replicas, but the observed values
+  resolve uncertainty. Then set recovered and replicas=2 idempotently; successful readback, two Ready
+  replicas, three healthy etcd endpoints and HTTP verify distinct parts of recovery.
 verify_note: All three etcd endpoints are healthy, the recovered ConfigMap value is readable, desired
   and Ready replicas are two, and HTTP succeeds.
 commands:
-- name: Establish HTTP and write baselines
+- name: Calculate quorum and establish the baseline
   where: VM terminal 1
   run: !unsafe |
+    for voters in 3 4 5; do
+      quorum=$((voters / 2 + 1))
+      echo "voters=$voters quorum=$quorum tolerated_failures=$((voters - quorum))"
+    done
     source ~/labs/lab14/helpers.sh
     h get nodes
     h rollout status deployment/quorum-web --request-timeout=0 --timeout=180s
     PORT=$(h get svc quorum-web -o jsonpath='{.spec.ports[0].nodePort}')
     IP=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' lab14-worker)
-    curl -fsS --max-time 3 "http://$IP:$PORT/" >/dev/null && echo 'HTTP baseline ok'
+    curl -sS --max-time 3 -o /dev/null -w 'HTTP=%{http_code}\n' "http://$IP:$PORT/"
     h patch configmap quorum-probe --type merge -p '{"data":{"state":"baseline"}}'
+    h get configmap quorum-probe -o jsonpath='{.data.state}{" resourceVersion="}{.metadata.resourceVersion}{"\n"}'
     ec lab14-control-plane endpoint status --cluster -w table
     ec lab14-control-plane member list -w table
     h get deployment quorum-web -o custom-columns=DESIRED:.spec.replicas,READY:.status.readyReplicas
+  record: 'Record quorum/failure-tolerance calculations and the baseline row: stored value/version, desired/Ready
+    replicas, HTTP status, member identities and current leader.'
   expect: Four Ready nodes, 2/2 web pods, HTTP ok, "configmap/quorum-probe patched" and a table with three
     members, one IS LEADER=true.
-- name: Stop one etcd member and probe both paths
+- name: Stop one member and test writes, HTTP and leader state
   where: VM terminal 1, same shell
   run: !unsafe |
     stop_etcd lab14-control-plane2
+    echo "stop member exit=$?"
     docker exec lab14-control-plane2 crictl ps --name etcd
-    h patch configmap quorum-probe --type merge -p '{"data":{"state":"one-down"}}'
+    if ! h patch configmap quorum-probe --type merge -p '{"data":{"state":"one-down"}}'; then
+      echo 'First write failed; wait five seconds and retry the same idempotent value once.'
+      sleep 5
+      h patch configmap quorum-probe --type merge -p '{"data":{"state":"one-down"}}'
+    fi
+    h get configmap quorum-probe -o jsonpath='{.data.state}{" resourceVersion="}{.metadata.resourceVersion}{"\n"}'
     curl -sS --max-time 3 -o /dev/null -w '%{http_code}\n' "http://$IP:$PORT/"
 
     ec lab14-control-plane endpoint status -w table
     ec lab14-control-plane3 endpoint status -w table
+  record: Record stop exit and runtime list before interpreting the fault. Fill the two-voter write/value,
+    HTTP and leader fields; compare the stopped member ID to the baseline leader. If stop member exit
+    is nonzero or the target still runs, use recovery before continuing.
+  expect: Stop exit must be zero and the target runtime list empty before continuing. Two voters retain
+    quorum; the write should succeed after any transient load-balancer/election delay, while HTTP may
+    continue. An unchanged leader is expected when a follower was stopped.
+- name: Scale with two voters and observe convergence
+  where: VM terminal 1, same shell
+  run: !unsafe |
     h scale deployment/quorum-web --replicas=3
     h rollout status deployment/quorum-web --request-timeout=0 --timeout=180s
     h get deployment quorum-web -o custom-columns=DESIRED:.spec.replicas,READY:.status.readyReplicas
-  expect: No etcd container on lab14-control-plane2; the write normally succeeds because two of three members
-    keep quorum (a single failure can come from the stopped member's API server before the load balancer
-    drops it, so retry once); HTTP returns 200. Scaling to three should commit and converge while quorum
-    survives. Endpoint status from a surviving member identifies the leader.
-- name: Lose quorum and attempt both configuration and scaling writes
+  record: Complete the two-voter row with the scale response, rollout result and desired/Ready replica
+    counts.
+  expect: The scale to three should commit and converge while quorum survives. A successful scale response
+    alone does not prove the replicas are Ready.
+- name: Stop the second member and compare writes with HTTP
   where: VM terminal 1, same shell
   run: !unsafe |
     stop_etcd lab14-control-plane3
+    echo "stop member exit=$?"
     docker exec lab14-control-plane3 crictl ps --name etcd
     h patch configmap quorum-probe --type merge -p '{"data":{"state":"two-down"}}'
     echo "ConfigMap write exit=$?"
@@ -135,9 +170,13 @@ commands:
     echo "scale exit=$?"
     h get deployment quorum-web -o custom-columns=DESIRED:.spec.replicas,READY:.status.readyReplicas
     curl -sS --max-time 3 -o /dev/null -w 'HTTP=%{http_code}\n' "http://$IP:$PORT/"
-  expect: With only one voter, no new writes can commit. Record client errors and any readable state separately.
-    Existing HTTP may continue; a timeout is not a general proof that a submitted operation never committed.
-- name: Restore members, then resolve uncertain operations before changing state
+  record: Record stop exit/runtime list, both write exits/errors, any readable desired/Ready state and
+    the independent HTTP status for the one-voter row. If stop member exit is nonzero or the target still
+    runs, use recovery before continuing.
+  expect: Confirm the second etcd process actually stopped. One of three voters cannot commit new writes;
+    existing HTTP may continue. A client timeout is an unacknowledged outcome that must be checked after
+    recovery.
+- name: Restore the two members and wait for endpoint health
   where: VM terminal 1, same shell
   run: !unsafe |
     start_etcd lab14-control-plane2
@@ -148,6 +187,14 @@ commands:
       sleep 5
     done
     test "$healthy" -eq 1 || echo 'STOP: use fallback; do not claim quorum recovery.'
+    echo "healthy=$healthy"
+  record: Record whether all endpoint health checks succeed and the final healthy flag. Preserve all errors
+    if the health loop expires.
+  expect: Continue only with healthy=1. Restoring the original manifests recovers stopped members with
+    intact data; it does not test backup restoration.
+- name: Read persisted values before restoring configuration
+  where: VM terminal 1, same shell
+  run: !unsafe |
     observed=0
     for i in $(seq 1 18); do
       if h get configmap quorum-probe -o jsonpath='{.data.state}{" resourceVersion="}{.metadata.resourceVersion}{"\n"}' &&
@@ -158,9 +205,12 @@ commands:
     done
     test "$observed" -eq 1 || echo 'STOP: retain the unknown result; do not overwrite it before readback works.'
     ec lab14-control-plane endpoint status --cluster -w table
-  expect: Record persisted values before the next step. Failed requests during quorum loss normally leave
-    one-down and three replicas, but the observed state resolves any client uncertainty.
-- name: Restore the explicit baseline and verify convergence and HTTP independently
+    echo "observed=$observed"
+  record: Fill restored before overwriting with the stored ConfigMap value/version, desired/Ready replicas
+    and leader status. Record observed=1 only when both reads succeed.
+  expect: The stored value normally remains one-down and desired replicas remain three, but use actual
+    readback to resolve uncertain responses. Do not overwrite state unless health and both reads succeeded.
+- name: Restore the explicit baseline and verify all paths
   where: VM terminal 1, same shell
   run: !unsafe |
     if [[ ${healthy:-0} -eq 1 && ${observed:-0} -eq 1 ]]; then
@@ -174,6 +224,8 @@ commands:
     else
       echo 'STOP: complete quorum recovery and readback in the previous step before overwriting state.'
     fi
+  record: Fill the final row with stored value, desired/Ready replicas, all endpoint health results and
+    HTTP response. If the guard stops, complete recovery/readback first.
   expect: All three endpoints are healthy; the recovered value is readable, desired and Ready replicas
     are both two, and HTTP works.
 setup:
@@ -250,7 +302,7 @@ verify:
     h patch configmap quorum-probe --type merge -p '{"data":{"state":"verified"}}' >/dev/null
     test -s "$HOME/labs/lab14/helpers.sh"
 reset: []
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 14 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 14 setup on the host. No other lab is required.
 transfer_solution: No. Four members require three votes and tolerate one failure, just as three members
   tolerate one. Five members require three and tolerate two.
 fallback:

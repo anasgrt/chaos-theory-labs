@@ -45,10 +45,15 @@ not simulate independent physical machines or availability zones.
     for number, lab in labs.items():
         parts.append(f'| [{number}](#lab-{number}) | {lab["task"]["question"]} | {lab["task"]["brief"]["theory_source"]} |\n')
 
-    def commands(items):
+    def commands(items, expected=False):
         for index, command in enumerate(items, 1):
-            parts.append(f'**{index}. {command["name"]}** — {command.get("where", "VM terminal 1")}\n\n')
+            parts.append(f'**Step {index}. {command["name"]}**\n\n')
+            parts.append(f'Run in: **{command.get("where", "VM terminal 1")}**\n\n')
             parts.append('```bash\n' + command['run'].rstrip() + '\n```\n\n')
+            if command.get('record'):
+                parts.append('**Record:** ' + command['record'] + '\n\n')
+            if expected:
+                parts.append('**Expected:** ' + command['expect'] + '\n\n')
 
     for number, lab in labs.items():
         task = lab['task']
@@ -57,32 +62,45 @@ not simulate independent physical machines or availability zones.
         parts.append(f'**Question:** {task["question"]}\n\n**Before you run:** {lab["prerequisites"]}\n\n')
         parts.append('### Theory you need\n\n' + '\n\n'.join(brief['theory']) + '\n\n')
         parts.append('**Source:** ' + brief['theory_source'] + '\n\n')
-        parts.append('**The experiment:** ' + ' '.join(brief['in_this_lab']) + '\n\n')
-        parts.append('### How to read the evidence\n\n| Signal | Meaning |\n| --- | --- |\n')
+        parts.append('### Experiment\n\n')
+        for point in brief['in_this_lab']:
+            parts.append('- ' + point + '\n')
+        parts.append('\n**Before running:** ' + task['predict'] + '\n\n')
+        parts.append('**Measurement key:**\n\n')
         for reading in brief['readings']:
-            parts.append(f'| {reading["signal"]} | {reading["meaning"]} |\n')
-        parts.append('\n**Predict:** ' + task['predict'] + '\n\n')
-        evidence = task['evidence']
-        parts.append('### Record your results\n\n| ' + ' | '.join(evidence['columns']) + ' |\n')
-        parts.append('| ' + ' | '.join('---' for _ in evidence['columns']) + ' |\n')
-        for row in evidence['rows']:
-            parts.append('| ' + row + ' | —' * (len(evidence['columns']) - 1) + ' |\n')
-        parts.append('\n### Procedure\n\n')
+            parts.append(f'- **{reading["signal"]}:** {reading["meaning"]}\n')
+        parts.append('\n### Run the steps\n\nAfter setup, run on the host:\n\n')
+        parts.append(f'```bash\n./lab.sh {number} verify\n./lab.sh ssh\n```\n\n')
+        parts.append('This is VM terminal 1. When a step names VM terminal 2, open another host terminal and run '
+                     '`./lab.sh ssh` there. Keep each shell open when steps share variables or functions. '
+                     'Run the blocks in order, using Bash without `set -e`. Stop if the baseline fails.\n\n')
         commands(lab['commands'])
         parts.append('**Recovery check:** ' + lab['verify_note'] + '\n\n')
         if lab.get('fallback'):
             parts.append('<details>\n<summary>If normal recovery fails</summary>\n\n')
             commands(lab['fallback'])
             parts.append('</details>\n\n')
-        parts.append('**Answer:** ' + task['answer_with'] + '\n\n')
-        parts.append('**Check your understanding:** ' + task['transfer'] + '\n\n')
-        parts.append('<details>\n<summary>Solution — open after writing your answer</summary>\n\n')
-        parts.append(lab['solution'] + '\n\n')
-        for index, command in enumerate(lab['commands'], 1):
-            if command.get('expect'):
-                parts.append(f'**Step {index}:** {command["expect"]}\n\n')
-        parts.append('**Understanding check:** ' + lab['transfer_solution'] + '\n\n</details>\n\n')
-        parts.append(f'After recovery, save results outside the VM, then destroy this lab from the host: `./lab.sh {number} reset`.\n')
+        parts.append('### Write your answer\n\nUse the observations recorded beside each step.\n\n')
+        evidence = task['evidence']
+        parts.append('| ' + ' | '.join(evidence['columns']) + ' |\n')
+        parts.append('| ' + ' | '.join('---' for _ in evidence['columns']) + ' |\n')
+        for row in evidence['rows']:
+            parts.append('| ' + row + ' | —' * (len(evidence['columns']) - 1) + ' |\n')
+        parts.append('\n')
+        for index, prompt in enumerate(task['answer_with'], 1):
+            parts.append(f'{index}. {prompt}\n')
+        parts.append('\n**Apply the same reasoning:** ' + task['transfer'] + '\n\n')
+        parts.append('<details>\n<summary>Worked answers and command reference — open after writing your answer</summary>\n\n')
+        parts.append('Expected patterns assume a working baseline and a confirmed fault; they are not measurements from your VM.\n\n')
+        for index, (prompt, answer) in enumerate(zip(task['answer_with'], lab['solution']), 1):
+            parts.append(f'**{index}. {prompt}**\n\n{answer}\n\n')
+        parts.append('**Apply the same reasoning:** ' + lab['transfer_solution'] + '\n\n')
+        parts.append('#### Command reference\n\nThese repeat the question’s procedure. Compare with your saved evidence; '
+                     'running them again repeats the experiment.\n\n')
+        commands(lab['commands'], expected=True)
+        parts.append('</details>\n\n')
+        parts.append(f'Compare from a host terminal with `./lab.sh {number} solution`. Save results, then remove '
+                     f'only this lab’s resources and files with `./lab.sh {number} reset`.\n')
     parts.append('''
 ## Maintaining the labs
 

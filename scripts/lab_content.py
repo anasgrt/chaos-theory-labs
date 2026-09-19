@@ -47,11 +47,15 @@ def validate(lab, lab_id):
         if not condition:
             raise ValueError(f"Lab {lab_id}: {message}")
 
-    for field in ("title", "solution", "transfer_solution", "verify_note", "prerequisites"):
+    for field in ("title", "transfer_solution", "verify_note", "prerequisites"):
         require(isinstance(lab.get(field), str) and lab[field].strip(), f"missing {field}")
     task = lab.get("task", {})
-    for field in ("question", "predict", "answer_with", "transfer"):
+    for field in ("question", "predict", "transfer"):
         require(isinstance(task.get(field), str) and task[field].strip(), f"missing task.{field}")
+    for label, items in (("task.answer_with", task.get("answer_with")), ("solution", lab.get("solution"))):
+        require(isinstance(items, list) and bool(items), f"{label} must be a nonempty list")
+        require(all(isinstance(item, str) and item.strip() for item in items), f"empty {label} item")
+    require(len(task["answer_with"]) == len(lab["solution"]), "each answer prompt needs one matching solution")
     brief = task.get("brief", {})
     require(bool(brief.get("theory_source")), "missing theory source")
     for field in ("theory", "in_this_lab"):
@@ -68,6 +72,10 @@ def validate(lab, lab_id):
         for step in lab.get(group, []):
             key = "run" if group in ("commands", "fallback") else "command"
             require(bool(step.get("name")) and bool(step.get(key)), f"incomplete {group} step")
+            if group == "commands":
+                for field in ("record", "expect"):
+                    require(isinstance(step.get(field), str) and step[field].strip(),
+                            f"procedure step {step['name']!r} needs {field}")
     require(bool(lab.get("commands")), "missing core procedure")
     require(isinstance(lab.get("files", []), list), "files must be a list")
     for name in lab.get("files", []):

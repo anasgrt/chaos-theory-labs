@@ -174,11 +174,25 @@ class RetryAccountingTests(unittest.TestCase):
 
 
 class CardTests(unittest.TestCase):
+    def test_incomplete_procedures_and_unmatched_answers_are_rejected(self):
+        from lab_content import validate
+        original = load_labs()['01']
+        for missing in ('record', 'expect'):
+            with self.subTest(missing=missing):
+                lab = copy.deepcopy(original)
+                del lab['commands'][0][missing]
+                with self.assertRaisesRegex(ValueError, f'needs {missing}'):
+                    validate(lab, '01')
+        lab = copy.deepcopy(original)
+        lab['solution'].pop()
+        with self.assertRaisesRegex(ValueError, 'matching solution'):
+            validate(lab, '01')
+
     def test_question_keeps_teaching_content_but_not_solution_only_fields(self):
         for number, original in load_labs().items():
             with self.subTest(lab=number):
                 lab = copy.deepcopy(original)
-                lab['solution'] = 'SOLUTION_ONLY_MARKER'
+                lab['solution'] = ['SOLUTION_ONLY_MARKER'] * len(lab['task']['answer_with'])
                 lab['transfer_solution'] = 'TRANSFER_ONLY_MARKER'
                 for index, step in enumerate(lab['commands']):
                     step['expect'] = f'OBSERVATION_ONLY_MARKER_{index}'
@@ -188,21 +202,29 @@ class CardTests(unittest.TestCase):
                     self.assertNotIn(marker, question)
                     self.assertIn(marker, solution)
                 normalized = ' '.join(question.split())
-                for text in (lab['prerequisites'], lab['task']['predict'], lab['task']['answer_with'], lab['task']['transfer'],
+                for text in (lab['prerequisites'], lab['task']['predict'], *lab['task']['answer_with'], lab['task']['transfer'],
                              *lab['task']['brief']['theory'], *lab['task']['brief']['in_this_lab'],
-                             *(reading['meaning'] for reading in lab['task']['brief']['readings'])):
+                             *(reading['meaning'] for reading in lab['task']['brief']['readings']),
+                             *(step['record'] for step in lab['commands'])):
                     self.assertIn(' '.join(text.split()), normalized)
 
     def test_all_questions_teach_before_commands_and_hide_answers(self):
         for number, lab in load_labs().items():
             with self.subTest(lab=number):
                 question = render_card(number, lab, 'question')
-                self.assertLess(question.index('THEORY YOU NEED'), question.index('PROCEDURE'))
-                self.assertLess(question.index('HOW TO READ THE EVIDENCE'), question.index('PREDICT'))
-                self.assertIn('RECORD YOUR RESULTS', question)
+                self.assertLess(question.index('THEORY YOU NEED'), question.index('RUN THE STEPS'))
+                self.assertLess(question.index('RUN THE STEPS'), question.index('WRITE YOUR ANSWER'))
+                self.assertIn(f'./lab.sh {number} verify\n./lab.sh ssh', question)
                 self.assertNotIn(' '.join(lab['transfer_solution'].split()), ' '.join(question.split()))
+                solution = render_card(number, lab, 'solution')
                 for command in lab['commands']:
                     self.assertIn(command['run'].strip(), question)
+                    self.assertIn(command['run'].strip(), solution)
+                for index, command in enumerate(lab['commands'], 1):
+                    for card in (question, solution):
+                        start = card.index(f'STEP {index} OF ')
+                        end = card.index(f'STEP {index + 1} OF ') if index < len(lab['commands']) else card.index('RECOVERY CHECK')
+                        self.assertIn(' '.join(command['record'].split()), ' '.join(card[start:end].split()))
 
     def test_question_does_not_invoke_vm_tools(self):
         with tempfile.TemporaryDirectory() as directory:

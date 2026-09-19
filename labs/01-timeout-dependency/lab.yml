@@ -35,13 +35,17 @@ task:
         tested that fault.
   predict: 'Predict which of the three attempts reaches the handler: REJECT, DROP, and DROP with a 0.5-second
     timeout.'
-  answer_with: For each attempt, state whether the handler ran and what ended the wait. Use those observations
-    to explain why catching errors alone does not bound waiting.
+  answer_with:
+  - Did the baseline and recovered requests succeed? What proves the firewall fault was removed?
+  - For REJECT, DROP and DROP with TIMEOUT=0.5, did the handler run, what ended the wait, and what were
+    the elapsed time and exit status? Cite each rule's packet counter.
+  - Why does try/except need an application timeout to handle a silent dependency promptly?
   evidence:
     columns:
     - Attempt
     - Handler ran?
     - Elapsed / exit
+    - Rule packets
     - What ended the wait?
     rows:
     - Baseline
@@ -51,9 +55,17 @@ task:
     - Recovered
   transfer: If each attempt has a 0.5-second timeout and you allow three attempts, is the whole request
     bounded by 0.5 seconds?
-solution: REJECT should reach the handler quickly. DROP without an application timeout should reach the
-  five-second watchdog instead. With TIMEOUT=0.5, the client should handle the timeout near half a second.
-  The handler needs an error; it does not create a time limit.
+solution:
+- Baseline and recovery should both print PONG and OK True. The final firewall search should find no
+  ce-lab01 rule (grep status 1). Cite your observed output; an unsuccessful recovery leaves the comparison incomplete.
+- REJECT should print DEGRADED ConnectionError promptly and client exit=0 because the error is caught.
+  DROP without an application timeout should reach the five-second watchdog, print client exit=124,
+  and have no handler or elapsed line. DROP with TIMEOUT=0.5 should print DEGRADED TimeoutError near
+  0.5 seconds and client exit=0. Report actual timings and nonzero packet counters for all three cases;
+  zero matched packets do not demonstrate the intended fault.
+- try/except reacts only after the dependency call raises an error. A silent DROP can leave that call
+  waiting beyond the experiment's watchdog. The client's connection/read timeout makes the call raise
+  an error the handler can catch; the external watchdog terminates the process without running its fallback.
 verify_note: The client succeeds again and no ce-lab01 rule remains.
 commands:
 - name: Check the Redis baseline
@@ -61,20 +73,60 @@ commands:
   run: !unsafe |
     cd ~/labs/lab01
     redis-cli -p 6381 ping
-    python3 client.py
-  expect: PONG, then OK True.
-- name: Predict, run, then prove recovery
+    env -u TIMEOUT timeout 5s python3 client.py
+    echo "client exit=$?"
+  expect: PONG, then OK True, an elapsed time and client exit=0. Stop if this baseline fails.
+  record: Fill the Baseline row with OK or error, elapsed time and client exit status. OK means the
+    request succeeded; the fallback handler was not needed.
+- name: Case 1 - REJECT without an application timeout
   where: VM terminal 1
   run: !unsafe |
     cd ~/labs/lab01
     sudo systemd-run --unit=ce-lab01-runner --collect --wait --pipe \
       --uid="$(id -u)" --property=RuntimeMaxSec=20s --working-directory="$PWD" \
-      /bin/bash "$PWD/run.sh"
-    python3 client.py
-    sudo iptables -S OUTPUT | grep ce-lab01; echo "grep exit=$? (1 means no lab rule remains)"
-  expect: REJECT prints DEGRADED ConnectionError within milliseconds. DROP without a timeout prints nothing
-    and is stopped by the external watchdog (exit=124). DROP with TIMEOUT=0.5 prints DEGRADED TimeoutError
-    near 0.5 s. The ce-lab01 rule shows pkts above 0. The final client prints OK True.
+      /bin/bash "$PWD/run.sh" reject
+  expect: DEGRADED ConnectionError, a short elapsed time, client exit=0 and a nonzero REJECT packet
+    counter. The runner removes its rule before returning.
+  record: Fill the REJECT row with any handler message, elapsed time, client exit and matched packets.
+    Use the output to identify what ended the wait.
+- name: Case 2 - DROP without an application timeout
+  where: VM terminal 1
+  run: !unsafe |
+    cd ~/labs/lab01
+    sudo systemd-run --unit=ce-lab01-runner --collect --wait --pipe \
+      --uid="$(id -u)" --property=RuntimeMaxSec=20s --working-directory="$PWD" \
+      /bin/bash "$PWD/run.sh" drop
+  expect: The external watchdog stops the client after five seconds with client exit=124. There should
+    be no DEGRADED or elapsed line; the DROP rule must have matched packets.
+  record: Fill the DROP row with whether a handler or elapsed line appeared, client exit, whole seconds
+    waited and matched packets. Identify what ended the wait from those observations.
+- name: Case 3 - DROP with a 0.5-second application timeout
+  where: VM terminal 1
+  run: !unsafe |
+    cd ~/labs/lab01
+    sudo systemd-run --unit=ce-lab01-runner --collect --wait --pipe \
+      --uid="$(id -u)" --property=RuntimeMaxSec=20s --working-directory="$PWD" \
+      /bin/bash "$PWD/run.sh" drop-timeout
+  expect: DEGRADED TimeoutError near 0.5 seconds, client exit=0 and a nonzero DROP packet counter.
+    The application handles its own timeout before the watchdog fires.
+  record: Fill the DROP + 0.5 s timeout row with the handler message, elapsed time, client exit and
+    matched packets. Compare what ended this wait with Case 2.
+- name: Prove Redis and firewall recovery
+  where: VM terminal 1
+  run: !unsafe |
+    cd ~/labs/lab01
+    redis-cli -p 6381 ping
+    env -u TIMEOUT timeout 5s python3 client.py
+    echo "client exit=$?"
+    if rules=$(sudo iptables -S OUTPUT); then
+      printf '%s\n' "$rules" | grep -- '--comment ce-lab01'
+      echo "grep exit=$? (1 means no lab rule remains)"
+    else
+      echo 'UNKNOWN: firewall rules could not be read; fault removal is not verified.'
+    fi
+  expect: PONG and OK True with client exit=0; the firewall search prints no rule and grep exit=1.
+  record: Fill the Recovered row with the response, elapsed time and exit status. Save the firewall
+    search output and status to establish whether the fault rule remains.
 setup:
 - name: Start the dedicated Redis dependency
   command: !unsafe |
@@ -108,12 +160,18 @@ setup:
         print('DEGRADED', type(exc).__name__)
     print(f'elapsed={time.monotonic()-start:.3f}s')
     PY
-- name: Prepare the bounded comparison script
+- name: Prepare the bounded single-case runner
   command: !unsafe |
     cd ~/labs/lab01
     cat > run.sh <<'SH'
     #!/usr/bin/env bash
     set -u
+    case "${1:-}" in
+      reject) target=(REJECT --reject-with tcp-reset); client=(env -u TIMEOUT) ;;
+      drop) target=(DROP); client=(env -u TIMEOUT) ;;
+      drop-timeout) target=(DROP); client=(env TIMEOUT=0.5) ;;
+      *) echo 'Usage: bash run.sh reject|drop|drop-timeout' >&2; exit 2 ;;
+    esac
     rule=(-p tcp -d 127.0.0.1 --dport 6381 -m comment --comment ce-lab01)
     cleanup() {
       sudo iptables -D OUTPUT "${rule[@]}" -j DROP 2>/dev/null || true
@@ -123,23 +181,21 @@ setup:
     trap 'exit 130' INT TERM
     sudo -v || exit 1
     cleanup
-    echo 'REJECT'
-    sudo iptables -I OUTPUT 1 "${rule[@]}" -j REJECT --reject-with tcp-reset || exit 1
-    timeout 5s python3 client.py; echo "exit=$?"
-    cleanup
-    echo 'DROP, no application timeout'
-    sudo iptables -I OUTPUT 1 "${rule[@]}" -j DROP || exit 1
-    timeout 5s python3 client.py; echo "exit=$?"
-    echo 'DROP, 0.5-second application timeout'
-    TIMEOUT=0.5 timeout 5s python3 client.py; echo "exit=$?"
-    echo 'Rule counters after the DROP runs (pkts must be above 0)'
+    echo "Case: $1 (watchdog: 5 seconds)"
+    sudo iptables -I OUTPUT 1 "${rule[@]}" -j "${target[@]}" || exit 1
+    SECONDS=0
+    "${client[@]}" timeout 5s python3 client.py
+    echo "client exit=$?"
+    echo "whole seconds waited=$SECONDS"
+    echo 'Rule counters for this case (pkts must be above 0)'
     sudo iptables -nvL OUTPUT --line-numbers | grep -E 'num|ce-lab01'
     SH
 verify:
 - name: Verify Redis and firewall recovery
   command: !unsafe |
     redis-cli -p 6381 ping | grep -qx PONG
-    ! sudo iptables -S OUTPUT | grep -q -- '--comment ce-lab01'
+    rules=$(sudo iptables -S OUTPUT) || exit 1
+    ! printf '%s\n' "$rules" | grep -q -- '--comment ce-lab01'
     test -s "$HOME/labs/lab01/client.py"
     test -s "$HOME/labs/lab01/run.sh"
 reset:
@@ -153,7 +209,7 @@ reset:
     while sudo iptables -C OUTPUT "${rule[@]}" -j REJECT --reject-with tcp-reset 2>/dev/null; do
       sudo iptables -D OUTPUT "${rule[@]}" -j REJECT --reject-with tcp-reset
     done
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 01 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 01 setup on the host. No other lab is required.
 transfer_solution: No. Attempt budgets and any backoff accumulate. A whole-request deadline must also
   cover retries and other work.
 fallback:
@@ -162,4 +218,5 @@ fallback:
   run: !unsafe |
     sudo iptables -D OUTPUT -p tcp -d 127.0.0.1 --dport 6381 -m comment --comment ce-lab01 -j DROP
     sudo iptables -D OUTPUT -p tcp -d 127.0.0.1 --dport 6381 -m comment --comment ce-lab01 -j REJECT --reject-with tcp-reset
-    python3 ~/labs/lab01/client.py
+    env -u TIMEOUT timeout 5s python3 ~/labs/lab01/client.py
+    echo "client exit=$?"

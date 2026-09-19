@@ -36,8 +36,10 @@ task:
         process’s state, not proof of which syscall was denied.
   predict: Predict getpid’s result before and after the filter, and whether the program can still print
     the error.
-  answer_with: Explain the positive PID before filtering, the error afterward and why exit 0 means the
-    demonstration detected the intended denial.
+  answer_with:
+  - Compare getpid results before and after installing the filter. Which errno accompanied the denied call?
+  - Why can the program still print, and what does its exit status mean?
+  - What do a fresh direct getpid call and /proc/self/status show about filter scope?
   evidence:
     columns:
     - Phase
@@ -48,26 +50,40 @@ task:
     - After filter
     - Fresh process
   transfer: Would seccomp_release restore getpid inside the filtered process?
-solution: Before the filter, getpid returns the process ID. Afterward, the filter makes it return -1 with
-  errno 13 (EACCES). Printing still works because the filter allows other syscalls. The program’s exit
-  0 reports a successful check of the denial, not a successful getpid call. Exit 1–3 means filter setup
-  failed; exit 4 means the expected denial was not observed.
+solution:
+- Before filtering, a successful getpid returns a positive PID. After filtering, syscall returns -1 and
+  errno=13 (EACCES), matching the rule. Only interpret errno after an error return.
+- The filter denies getpid while allowing other syscalls, including writing output. Exit 0 means the expected
+  denial was detected, not that the denied getpid succeeded. Exits 1-3 mean filter setup failed; exit
+  4 means the expected denial was absent.
+- A fresh process started by the original shell should obtain a positive PID. Its Seccomp state may reflect
+  an inherited environmental policy, but it does not inherit a filter installed only in the exited demonstration
+  child. The filter is not host-wide.
 verify_note: The demonstration has exited; the filter was scoped to that process. Reset removes the compiled
   fixture.
 commands:
-- name: Run the prepared seccomp demonstration
+- name: Run the filter and capture its exit status
   where: VM terminal 1
   run: !unsafe |
     cd ~/labs/lab09
-    ./filter; echo "exit=$?"
+    ./filter
+    filter_exit=$?
+    echo "filter exit=$filter_exit"
   expect: Before filtering, getpid prints a positive PID. After filtering, getpid result=-1 errno=13 and
     exit=0. Exit 1–3 means filter setup failed; 4 means the expected denial did not occur.
-- name: Check an unrelated process after the test exits
-  where: VM terminal 1
+  record: Record the before-filter PID, after-filter result and errno, and filter exit as separate values.
+- name: Start a fresh instance from the original shell
+  where: VM terminal 1, same shell
   run: !unsafe |
-    grep Seccomp /proc/self/status
-  expect: This fresh process has its own Seccomp state. An existing inherited filter can be present; the
-    test did not install a host-wide policy.
+    cd ~/labs/lab09
+    ./filter
+    echo "fresh instance exit=$?"
+    grep '^Seccomp' /proc/self/status
+  expect: The fresh instance should obtain a positive PID before installing its own filter, then observe
+    EACCES and exit 0 again. Seccomp can reflect a pre-existing inherited policy; the first child did
+    not install a host-wide filter.
+  record: Fill the fresh-process row with this new instance before-filter PID, later result/errno and
+    exit. Record the separate Seccomp reading.
 setup:
 - name: Create the Lab 09 workspace
   command: !unsafe |
@@ -106,6 +122,6 @@ reset:
 - name: Remove only the Lab 09 compiled filter
   command: !unsafe |
     rm -f "$HOME/labs/lab09/filter"
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 09 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 09 setup on the host. No other lab is required.
 transfer_solution: No. It frees the library context in userspace. The kernel filter remains installed;
   the demonstration’s later getpid call tests exactly this.

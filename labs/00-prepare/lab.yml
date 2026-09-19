@@ -30,8 +30,10 @@ task:
     - signal: versions / baseline.txt
       meaning: Record the actual versions and baseline checks, not simply “setup passed”.
   predict: If a prerequisite already fails, can a later failure tell you anything about the injected fault?
-  answer_with: Name the checks that passed, the recorded environment version and the saved baseline record.
-    Explain why a failed baseline blocks a meaningful comparison.
+  answer_with:
+  - Which kernel, cgroup, Docker, container-execution and disk checks passed? Give their observed values.
+  - Which source commit, tool versions and image identities did you save, and where is the baseline record?
+  - Why must you fix a failed baseline before injecting a fault?
   evidence:
     columns:
     - Check
@@ -43,34 +45,55 @@ task:
     - Disk capacity
     - Versions / baseline record
   transfer: Why must Lab 01 check Redis again even when hello-world succeeds?
-solution: A usable baseline lets you attribute later changes to the fault instead of a broken setup. Version
-  records make results interpretable; the saved baseline supports comparisons.
+solution:
+- Report the actual checks. The required cgroup results are cgroup2fs and Docker cgroups=2; hello-world
+  must run successfully and the root filesystem must have at least 60 GiB total capacity. A failed check
+  means this environment is not ready for the later experiments.
+- The record is ~/labs/lab00/baseline.txt. Cite its actual tool versions, source commit, local image IDs
+  and registry digests so another run can be compared with this environment.
+- A fault comparison requires a working no-fault baseline. If the same check already fails, a later
+  failure does not establish that the injection caused it.
 verify_note: Prerequisite checks pass and baseline.txt records them.
 commands:
 - name: Check the kernel, cgroup, Docker and disk baseline
   where: VM terminal 1
   run: !unsafe |
-    uname -m
-    stat -fc %T /sys/fs/cgroup
-    docker info --format 'driver={{.CgroupDriver}} cgroups={{.CgroupVersion}}'
-    docker run --rm --name ce-lab00-check hello-world
-    df -h /
+    cd ~/labs/lab00
+    set -o pipefail
+    {
+      uname -srmo
+      stat -fc %T /sys/fs/cgroup
+      docker info --format 'driver={{.CgroupDriver}} cgroups={{.CgroupVersion}}'
+      docker run --rm --name ce-lab00-check hello-world
+      df -h /
+    } 2>&1 | tee checks.txt
   expect: cgroup2fs, Docker cgroups=2, a successful hello-world run, and at least 60 GiB total root capacity.
+  record: Copy each observed value into the check table. Mark any failed command or missing prerequisite
+    as action needed before continuing; checks.txt preserves the terminal output.
 - name: Record the source commit, versions and image digests
   where: VM terminal 1
   run: !unsafe |
-    cat ~/labs/book-commit.txt ~/labs/versions.txt
-    for image in python:3.12-slim ubuntu:24.04 busybox:1.36 nginx:1.27 ghcr.io/shopify/toxiproxy:2.12.0 bloomberg/goldpinger:3.11.3; do
-      printf '%s ' "$image"
-      docker image inspect "$image" --format '{{json .RepoDigests}}'
-    done
-  expect: The commit is 3e3ee64db71f51a5e9f79af8562dd4aa913a0e71. Record the local image ID and the
-    registry digest for each pulled image; the published Goldpinger image tag is 3.11.3, without a v prefix.
+    cd ~/labs/lab00
+    {
+      cat ~/labs/book-commit.txt ~/labs/versions.txt
+      for image in python:3.12-slim ubuntu:24.04 busybox:1.36 nginx:1.27 ghcr.io/shopify/toxiproxy:2.12.0 bloomberg/goldpinger:3.11.3; do
+        printf '%s ' "$image"
+        docker image inspect "$image" --format 'id={{.Id}} digests={{json .RepoDigests}}'
+      done
+    } 2>&1 | tee versions-images.txt
+  expect: The book source commit is 3e3ee64db71f51a5e9f79af8562dd4aa913a0e71. Each listed image has a local
+    ID and a registry digest; an inspection error is a missing prerequisite.
+  record: Save the source commit, tool versions, and each image tag, local ID and registry digest from
+    versions-images.txt. These identify the environment used for the baseline.
 - name: Save the baseline record
   where: VM terminal 1
   run: !unsafe |
-    { cat ~/labs/book-commit.txt ~/labs/versions.txt; stat -fc %T /sys/fs/cgroup; docker info --format 'cgroups={{.CgroupVersion}}'; df -h /; } > ~/labs/lab00/baseline.txt
-    cat ~/labs/lab00/baseline.txt
+    cd ~/labs/lab00
+    { date --iso-8601=seconds; cat checks.txt versions-images.txt; } > baseline.txt
+    cat baseline.txt
+  expect: baseline.txt contains the timestamp, all baseline checks and the recorded environment identities.
+  record: Note ~/labs/lab00/baseline.txt as the evidence location and confirm it includes the hello-world
+    result as well as the versions. Preserve a copy before reset if you need it later.
 setup: []
 verify:
 - name: Confirm this VM baseline
@@ -83,6 +106,6 @@ reset:
   command: !unsafe |
     containers=$(docker ps -aq --filter 'name=^/ce-lab00-check$')
     if [[ -n "$containers" ]]; then docker rm -f $containers; fi
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 00 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 00 setup on the host. No other lab is required.
 transfer_solution: hello-world checks shared container tooling. It does not test the Redis service, its
   listener or the client path used by Lab 01.

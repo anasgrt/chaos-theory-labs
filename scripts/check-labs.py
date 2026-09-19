@@ -48,8 +48,16 @@ def main():
         for paragraph in lab['task']['brief']['theory']:
             if ' '.join(paragraph.split()) not in ' '.join(question.split()):
                 raise ValueError(f'Lab {number}: theory missing from question')
-        if ' '.join(lab['solution'].split()) in ' '.join(question.split()):
-            raise ValueError(f'Lab {number}: solution leaked into question')
+        for answer in lab['solution']:
+            if ' '.join(answer.split()) in ' '.join(question.split()):
+                raise ValueError(f'Lab {number}: solution leaked into question')
+            if ' '.join(answer.split()) not in ' '.join(solution.split()):
+                raise ValueError(f'Lab {number}: worked answer missing from solution')
+        for step in lab['commands']:
+            if step['run'].strip() not in question or step['run'].strip() not in solution:
+                raise ValueError(f'Lab {number}: incomplete command reference')
+            if any(' '.join(step['record'].split()) not in ' '.join(card.split()) for card in (question, solution)):
+                raise ValueError(f'Lab {number}: step lacks its evidence instruction')
         if lab['transfer_solution'] not in ' '.join(solution.split()):
             raise ValueError(f'Lab {number}: understanding answer missing')
         for group in ('commands', 'fallback', 'setup', 'verify', 'reset'):

@@ -18,18 +18,33 @@ task:
     - {signal: 'ExitCode / OOMKilled', meaning: 'Separate a successful handler exit from a forced stop. False OOMKilled plus the controlled stop distinguishes this kill from the memory experiment.'}
     - {signal: 'stop --timeout', meaning: 'The grace budget in seconds, not an application request timeout. The Docker command itself can succeed even when the container was killed.'}
   predict: Predict the worker PID, TERM receipt, cleanup completion and exit status in all three cases.
-  answer_with: Use the process relationship, logs, completion marker and Docker state to separate missing signal delivery from insufficient cleanup time.
+  answer_with:
+  - Compare the wrapper and exec cases with the same five-second stop budget. What worker PID, TERM receipt,
+    cleanup marker, exit code and OOM flag did each produce?
+  - Compare the two exec cases. Which evidence separates successful signal delivery from enough time to finish
+    cleanup?
+  - Explain the cause of each forced exit and show that the test containers were removed after recording their
+    evidence.
   evidence:
     columns: [Case, Worker PID, TERM / cleanup, Exit / OOMKilled]
     rows: [Wrapper / 5 s, Exec / 5 s, Exec / 1 s]
   transfer: Would increasing the wrapper's stop budget to 30 seconds repair its missing signal forwarding?
-solution: The wrapper receives Docker's TERM but intentionally does not forward it, so the child never starts its handler. Exec delivers TERM to the worker and five seconds allows its two-second cleanup to complete. With one second the handler starts but cannot finish before forced termination. These are delivery and timing failures, not evidence of OOM.
+solution:
+- 'The wrapper case should report a worker PID other than 1, no received=15 line and no cleanup marker: the
+  wrapper ignores TERM and does not forward it. The exec/five-second case should report PID 1, received=15,
+  a completion line/file and exit zero. Cite the actual logs and Docker state for each case.'
+- Both exec cases should receive TERM. Five seconds accommodates the two-second cleanup; one second should
+  allow the receipt/start log but prevent the completion marker. Correct signal delivery and sufficient cleanup
+  time are separate requirements.
+- For the wrapper and short-budget cases, exit 137 with OOMKilled=false and the controlled docker stop operation
+  is consistent with a forced shutdown after the grace budget. Exit 137 alone is not an OOM diagnosis. The
+  final container-list command should be empty after evidence collection and removal.
 transfer_solution: No. More time cannot make this wrapper forward a signal it ignores. Repair the process relationship or implement correct forwarding first.
 verify_note: The exec/five-second case completed cleanup, the two forced cases have explicit evidence, and all three test containers are removed after evidence collection.
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 17 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 17 setup on the host. No other lab is required.
 files: [worker.py]
 commands:
-- name: Prepare the non-forwarding wrapper and wait for the worker
+- name: Start the wrapper case and confirm the worker is ready
   where: VM terminal 1
   run: !unsafe |
     docker create --name ce-lab17-wrapper --stop-signal SIGTERM python:3.12-slim sh -c 'trap "" TERM; python -u /worker.py & wait'
@@ -37,16 +52,20 @@ commands:
     docker start ce-lab17-wrapper
     for i in $(seq 1 30); do docker logs ce-lab17-wrapper 2>&1 | grep -q '^ready ' && break; sleep 0.2; done
     docker logs ce-lab17-wrapper
-  expect: The worker reports a PID other than 1. Do not stop it before the ready line appears.
-- name: Stop with five seconds and preserve the evidence
+  record: Record the ready line, worker PID and parent PID for Wrapper / 5 s. Continue only when ready appears.
+  expect: The wrapper is PID 1 and the Python worker is its child, so the worker PID is not 1.
+- name: Stop the wrapper with five seconds and collect the result
   where: VM terminal 1, same shell
   run: !unsafe |
     time docker stop --timeout 5 ce-lab17-wrapper
     docker logs ce-lab17-wrapper
     docker inspect -f '{{json .State}}' ce-lab17-wrapper
     docker cp ce-lab17-wrapper:/cleanup-complete ~/labs/lab17/wrapper-complete.txt
-  expect: No handler receipt or completion marker, a forced exit and OOMKilled=false. The missing-file copy error is expected evidence.
-- name: Change only signal delivery; keep the five-second budget
+  record: 'Complete Wrapper / 5 s: elapsed stop time, presence/absence of received=15 and cleanup-complete,
+    ExitCode, OOMKilled and marker-copy result. Record any copy error.'
+  expect: The child should receive no TERM, create no marker and be forcibly stopped after the grace budget.
+    A missing marker-copy source is expected in this case.
+- name: Start the exec case with the same application
   where: VM terminal 1, same shell
   run: !unsafe |
     docker create --name ce-lab17-exec --stop-signal SIGTERM python:3.12-slim sh -c 'exec python -u /worker.py'
@@ -54,13 +73,21 @@ commands:
     docker start ce-lab17-exec
     for i in $(seq 1 30); do docker logs ce-lab17-exec 2>&1 | grep -q '^ready ' && break; sleep 0.2; done
     docker logs ce-lab17-exec
+  record: Record the ready line and worker PID for Exec / 5 s. Continue only when ready appears; compare the
+    start command with the wrapper case.
+  expect: Exec makes the worker PID 1 so Docker can deliver its stop signal directly.
+- name: Stop exec with five seconds and collect the result
+  where: VM terminal 1, same shell
+  run: !unsafe |
     time docker stop --timeout 5 ce-lab17-exec
     docker logs ce-lab17-exec
     docker inspect -f '{{json .State}}' ce-lab17-exec
     docker cp ce-lab17-exec:/cleanup-complete ~/labs/lab17/exec-complete.txt
     cat ~/labs/lab17/exec-complete.txt
-  expect: PID 1 receives TERM, completes cleanup and exits zero.
-- name: Keep exec, reduce only the shutdown budget, then clean up
+  record: Complete Exec / 5 s with elapsed stop time, TERM/cleanup logs, marker contents, ExitCode and OOMKilled.
+    Compare with the wrapper using the same budget.
+  expect: The worker should receive TERM, finish its two-second cleanup, write completed and exit zero.
+- name: Start another exec case for the shorter budget
   where: VM terminal 1, same shell
   run: !unsafe |
     docker create --name ce-lab17-short --stop-signal SIGTERM python:3.12-slim sh -c 'exec python -u /worker.py'
@@ -68,12 +95,28 @@ commands:
     docker start ce-lab17-short
     for i in $(seq 1 30); do docker logs ce-lab17-short 2>&1 | grep -q '^ready ' && break; sleep 0.2; done
     docker logs ce-lab17-short
+  record: Record the ready line and worker PID for Exec / 1 s. Confirm the application and exec command match
+    the five-second case.
+  expect: The worker is PID 1 again; the next stop changes only the time budget.
+- name: Stop exec with one second and collect the result
+  where: VM terminal 1, same shell
+  run: !unsafe |
     time docker stop --timeout 1 ce-lab17-short
     docker logs ce-lab17-short
     docker inspect -f '{{json .State}}' ce-lab17-short
     docker cp ce-lab17-short:/cleanup-complete ~/labs/lab17/short-complete.txt
+  record: 'Complete Exec / 1 s: elapsed stop time, TERM receipt, presence/absence of cleanup completion, ExitCode,
+    OOMKilled and marker-copy result.'
+  expect: TERM should reach the worker, but the one-second budget is shorter than its cleanup. A missing marker-copy
+    source is expected.
+- name: Remove the three stopped containers after recording evidence
+  where: VM terminal 1, same shell
+  run: !unsafe |
     docker rm ce-lab17-wrapper ce-lab17-exec ce-lab17-short
-  expect: TERM receipt appears but cleanup completion does not. Record evidence before removing the containers.
+    docker ps -a --filter 'name=^/ce-lab17-' --format '{{.Names}}'
+  record: Confirm all three evidence rows are complete before removal. Record whether the final command lists
+    any remaining lab containers.
+  expect: No ce-lab17 containers remain; the successfully copied exec-complete.txt file remains in the VM workspace.
 setup:
 - name: Prepare the shutdown evidence directory
   command: !unsafe |

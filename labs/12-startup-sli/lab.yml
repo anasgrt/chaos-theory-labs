@@ -69,9 +69,13 @@ task:
     - 11.4.3
   predict: Predict success and the distinguishing Pod/endpoint evidence for delayed startup, impossible
     placement and wrong Service selection. Predict which faults restarting the container could repair.
-  answer_with: Complete the seven rows, explain the earliest failed stage in each fault, and calculate
-    the restored sample’s success fraction. Show fresh diagnostics and cleanup; distinguish a completed
-    miss, missing diagnostics and a checker execution error.
+  answer_with:
+  - Complete all seven rows using fresh success/elapsed, Pod conditions and ready endpoints. Which stage
+    failed in each deliberate fault?
+  - How do you distinguish a completed deadline miss, missing diagnostics and a checker execution error?
+  - Calculate the restored three-trial success fraction. What does this sample establish?
+  - Which commands restore the workload and prove cleanup? Would restarting alone repair the three injected
+    settings?
   evidence:
     columns:
     - Trial
@@ -87,71 +91,170 @@ task:
     - Restored trial 2
     - Restored trial 3
   transfer: 'Does imagePullPolicy: Always force every image layer to download on each run?'
-solution: The delayed workload should miss the 30-second budget and be reported as unsuccessful. Restored
-  healthy runs check that the fault was removed. These trials validate those checker paths; they do not
-  establish an SLO for all future startups. The unscheduled trial fails before a container can start;
-  the selector trial can have a Ready process but no usable Service backend. Diagnose using conditions
-  and endpoints captured before cleanup. Report healthy successes divided by three completed trials without
-  mixing in deliberate failures.
+solution:
+- A normal completed trial should meet the 30-second target. The delay trial should show an assigned but
+  unready Pod; the impossible nodeSelector should show no node and Unschedulable; the selector fault can
+  leave a Ready Pod with zero ready endpoints. Each should miss the HTTP deadline. Use the saved timestamped
+  conditions, not success=0 alone, to locate the failed stage.
+- Exit 0 plus a fresh result with success=0 is a completed deadline miss. A diagnostic_error means that
+  resource observation is unavailable even if timing completed. Nonzero checker exit means execution or
+  cleanup failed; do not reuse old metrics as a new result. Compare trial timestamps and ce_last_run_timestamp_seconds
+  to establish freshness.
+- Divide successful restored trials by three completed restored trials; the supplied awk command calculates
+  the fraction and percentage. Three successes give 3/3=1, but report actual results. Exclude deliberate
+  faults and do not count an execution error as a completed miss. This tests repeatability on cached images
+  and does not establish a production SLO.
+- Copying startup-good.yaml to startup.yaml removes the injected configuration, and run.sh creates fresh
+  resources for each restored trial. Final Pod and Service gets must both return NotFound; connection
+  errors are inconclusive. A container restart cannot change placement or Service selectors and would
+  repeat the configured 45-second sleep.
 verify_note: The healthy manifest is restored and no startup-check Pod or Service remains.
 commands:
-- name: Run one healthy check and confirm cleanup
+- name: Prepare the shell and a reusable diagnostic view
   where: VM terminal 1
   run: !unsafe |
     cd ~/labs/lab12
     source ~/labs/lab12/env.sh
-    bash run.sh | tee runs.txt
-    echo "checker exit=${PIPESTATUS[0]} (0 means the checker and cleanup completed)"
-    cat metrics/start.prom
-    k get pod startup-check; k get svc startup-check
-    cp diagnostics/run-1.json evidence-normal.json
-  expect: One result with success=1 and a few seconds elapsed; both final gets report NotFound. A nonzero
-    checker exit or no new result means the check did not complete; do not interpret old metrics as a
-    new result.
-- name: Prove the check detects a deliberately delayed startup
-  where: VM terminal 1
+    show_trial() {
+      jq '{trial,
+           node: .pod.spec.nodeName,
+           conditions: .pod.status.conditions,
+           containers: .pod.status.containerStatuses,
+           selector: .service.spec.selector,
+           ready_endpoints: (if .endpointslices.diagnostic_error then null else
+             [.endpointslices.items[]?.endpoints[]? | select(.conditions.ready == true)] | length end),
+           diagnostic_errors: [to_entries[] | select(.value.diagnostic_error?) | {resource: .key, error: .value}],
+           events: .events.items}' "$@"
+    }
+  record: Use this same terminal for every trial. show_trial prints the timestamp, startup outcome and
+    pre-cleanup evidence needed for every table row.
+  expect: The helper only reads saved JSON; a diagnostic_error must remain missing evidence, not a zero-endpoint
+    result.
+- name: Run one healthy baseline
+  where: VM terminal 1, same shell
   run: !unsafe |
-    cd ~/labs/lab12
+    cp startup-good.yaml startup.yaml
+    bash run.sh | tee runs-normal.txt
+    checker_exit=${PIPESTATUS[0]}
+    echo "checker exit=$checker_exit"
+    if [ "$checker_exit" -eq 0 ] && [ -f diagnostics/run-1.json ]; then
+      cp diagnostics/run-1.json evidence-normal.json
+      show_trial evidence-normal.json
+      cat metrics/start.prom
+    else
+      echo 'STOP: checker did not complete; do not use old metrics or evidence for this trial.'
+    fi
+    k get pod startup-check
+    k get svc startup-check
+  record: Fill Normal with success/elapsed, trial timestamp, node/conditions and ready endpoints. Save
+    checker exit, diagnostic errors and both cleanup results. Compare timestamps to the preceding completed
+    trial.
+  expect: A completed healthy trial should report success=1 within 30 seconds, with an assigned Ready
+    Pod and a ready Service endpoint. Both final gets should report NotFound; an API error is not cleanup
+    evidence.
+- name: Run the 45-second startup-delay fault
+  where: VM terminal 1, same shell
+  run: !unsafe |
     cp startup-delayed.yaml startup.yaml
     grep -n 'command:' startup.yaml
     bash run.sh | tee runs-delayed.txt
-    echo "checker exit=${PIPESTATUS[0]} (0 means the checker and cleanup completed)"
-    cp diagnostics/run-1.json evidence-delayed.json
-    jq '{trial, conditions: .pod.status.conditions, containers: .pod.status.containerStatuses}' evidence-delayed.json
-  expect: The grep shows the sleep 45 command; the run reports success=0 after about 30 s.
-- name: Make placement impossible without changing the application
+    checker_exit=${PIPESTATUS[0]}
+    echo "checker exit=$checker_exit"
+    if [ "$checker_exit" -eq 0 ] && [ -f diagnostics/run-1.json ]; then
+      cp diagnostics/run-1.json evidence-delayed.json
+      show_trial evidence-delayed.json
+      cat metrics/start.prom
+    else
+      echo 'STOP: checker did not complete; do not use old metrics or evidence for this trial.'
+    fi
+    k get pod startup-check
+    k get svc startup-check
+  record: Fill 45 s delay with success/elapsed, trial timestamp, node/conditions and ready endpoints.
+    Save checker exit, diagnostic errors and both cleanup results. Compare timestamps to the preceding
+    completed trial.
+  expect: The configured 45-second sleep should miss the 30-second budget. The Pod should be assigned
+    to a node but not Ready at capture. Both final gets should report NotFound; an API error is not cleanup
+    evidence.
+- name: Run the impossible-placement fault
   where: VM terminal 1, same shell
   run: !unsafe |
     cp startup-unscheduled.yaml startup.yaml
     bash run.sh | tee runs-unscheduled.txt
-    echo "checker exit=${PIPESTATUS[0]}"
-    cp diagnostics/run-1.json evidence-unscheduled.json
-    jq '{trial, pod: .pod.status, spec: .pod.spec.nodeSelector, events: .events}' evidence-unscheduled.json
-  expect: A completed miss should show PodScheduled=False/Unschedulable with no assigned node. This is
-    not evidence of a slow web process.
-- name: Break Service matching while allowing the Pod to become Ready
+    checker_exit=${PIPESTATUS[0]}
+    echo "checker exit=$checker_exit"
+    if [ "$checker_exit" -eq 0 ] && [ -f diagnostics/run-1.json ]; then
+      cp diagnostics/run-1.json evidence-unscheduled.json
+      show_trial evidence-unscheduled.json
+      cat metrics/start.prom
+    else
+      echo 'STOP: checker did not complete; do not use old metrics or evidence for this trial.'
+    fi
+    k get pod startup-check
+    k get svc startup-check
+  record: Fill Unmatched nodeSelector with success/elapsed, trial timestamp, node/conditions and ready
+    endpoints. Save checker exit, diagnostic errors and both cleanup results. Compare timestamps to the
+    preceding completed trial.
+  expect: Expect a completed miss with no nodeName and PodScheduled=False / Unschedulable. No application
+    container can start on a node. Both final gets should report NotFound; an API error is not cleanup
+    evidence.
+- name: Run the wrong-Service-selector fault
   where: VM terminal 1, same shell
   run: !unsafe |
     cp startup-selector.yaml startup.yaml
     bash run.sh | tee runs-selector.txt
-    echo "checker exit=${PIPESTATUS[0]}"
-    cp diagnostics/run-1.json evidence-selector.json
-    jq '{trial, conditions: .pod.status.conditions, selector: .service.spec.selector, slices: .endpointslices}' evidence-selector.json
-  expect: A Ready Pod with no matching endpoints isolates Service selection as the failure stage.
-- name: Restore the healthy manifest, run three trials and calculate the sample SLI
-  where: VM terminal 1
+    checker_exit=${PIPESTATUS[0]}
+    echo "checker exit=$checker_exit"
+    if [ "$checker_exit" -eq 0 ] && [ -f diagnostics/run-1.json ]; then
+      cp diagnostics/run-1.json evidence-selector.json
+      show_trial evidence-selector.json
+      cat metrics/start.prom
+    else
+      echo 'STOP: checker did not complete; do not use old metrics or evidence for this trial.'
+    fi
+    k get pod startup-check
+    k get svc startup-check
+  record: Fill Wrong Service selector with success/elapsed, trial timestamp, node/conditions and ready
+    endpoints. Save checker exit, diagnostic errors and both cleanup results. Compare timestamps to the
+    preceding completed trial.
+  expect: Expect a completed miss with an assigned Ready Pod and no matching ready Service endpoint. Both
+    final gets should report NotFound; an API error is not cleanup evidence.
+- name: Restore the healthy manifest and collect three trials
+  where: VM terminal 1, same shell
   run: !unsafe |
-    cd ~/labs/lab12
     cp startup-good.yaml startup.yaml
-    grep -n 'command:' startup.yaml
     bash run.sh 3 | tee runs-restored.txt
-    echo "checker exit=${PIPESTATUS[0]} (0 means the checker and cleanup completed)"
-    cat metrics/start.prom
-    k get pod startup-check; k get svc startup-check
-
-    mkdir -p evidence-restored
-    cp diagnostics/run-*.json evidence-restored/
-    awk '/^run=/ {n++; if ($2 == "success=1") good++} END {if (n == 3) printf "healthy sample: %d/%d = %.3f\n", good,n,good/n; else print "Incomplete sample; inspect checker exit"}' runs-restored.txt
+    restored_exit=${PIPESTATUS[0]}
+    echo "checker exit=$restored_exit"
+    if [ "$restored_exit" -eq 0 ]; then
+      mkdir -p evidence-restored
+      for n in 1 2 3; do
+        cp "diagnostics/run-$n.json" "evidence-restored/run-$n.json"
+        show_trial "evidence-restored/run-$n.json"
+      done
+      cat metrics/start.prom
+    else
+      echo 'STOP: incomplete restored run; do not calculate a three-trial SLI from old evidence.'
+    fi
+    k get pod startup-check
+    k get svc startup-check
+  record: Fill restored rows 1-3 separately with success/elapsed, timestamp, node/conditions and endpoints.
+    Record checker exit and final cleanup results.
+  expect: Each completed healthy run should meet the 30-second target; record actual misses. start.prom
+    contains only the last trial, so it cannot supply the three-trial fraction.
+- name: Calculate the restored sample success fraction
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    if [ "${restored_exit:-1}" -eq 0 ]; then
+      awk '/^run=/ {n++; if ($2 == "success=1") good++}
+        END {if (n == 3) printf "healthy sample: %d/%d = %.3f (%.1f%%)\n", good,n,good/n,100*good/n;
+             else print "Incomplete sample; inspect checker output"}' runs-restored.txt
+    else
+      echo 'STOP: complete the restored run before calculating the sample SLI.'
+    fi
+  record: Report healthy successes / 3 and its fraction/percentage only when all three trials completed.
+    Exclude the deliberate fault trials.
+  expect: Three successful restored runs give 3/3 = 1.000 (100%); otherwise use the observed count. This
+    small controlled sample is not a long-term SLO.
 setup:
 - name: Restore this lab's startup baseline manifest
   command: !unsafe |
@@ -175,7 +278,7 @@ verify:
     test -z "$remaining_service"
     test "$(k get nodes -l chaos-labs.invalid/placement=missing -o json | jq '.items | length')" -eq 0
 reset: []
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 12 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 12 setup on the host. No other lab is required.
 transfer_solution: No. It checks the registry for the image resolution, but cached layers can still be
   reused. A cold-image experiment must control the node’s cache as well.
 fallback:

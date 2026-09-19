@@ -35,13 +35,17 @@ task:
       meaning: The fault has been removed. The repeated client measurement checks service recovery separately.
   predict: Estimate the added time for one and four sequential exchanges at 25 ms per outgoing reply.
     Will exiting tc remove the delay?
-  answer_with: Subtract each exchange count’s baseline from its delayed mean. Compare with N × 25 ms,
-    cite qdisc traffic evidence, and explain why explicit deletion is needed for recovery.
+  answer_with:
+  - What were the mean and range for one and four exchanges at baseline, with the 1 ms control, with
+    25 ms delay, and after removal?
+  - After subtracting each exchange count's own baseline, how do the 25 ms results compare with N × 25 ms?
+  - Which qdisc configuration and counter changes prove the intended delay was applied to the measured traffic?
+  - Did exiting tc remove the delay? Which command removed it, and what measurements demonstrate recovery?
   evidence:
     columns:
     - Delay
-    - 1 exchange mean (ms)
-    - 4 exchanges mean (ms)
+    - 1 exchange mean / range (ms)
+    - 4 exchanges mean / range (ms)
     - qdisc / traffic evidence
     rows:
     - None
@@ -50,10 +54,17 @@ task:
     - Removed
   transfer: If four exchanges could run independently in parallel, would their delays necessarily add
     to four times the dose?
-solution: 'After baseline subtraction, one exchange should gain roughly 25 ms and four roughly 100 ms.
-  Each reply is a separate dependent wait. Counters confirm the altered queue carried traffic, while recovery
-  checks the attribution. The tc process installs a persistent namespace setting: its exit does not undo
-  it. Timing noise, packet behaviour and scheduling can cause deviations; report your measurements.'
+solution:
+- Report your observed mean, minimum and maximum for both exchange counts in each of the four phases.
+  The 1 ms control should add a small delay, with timing noise; it is not a zero-cost control.
+- For the 25 ms phase, subtract the baseline for one exchange from its delayed mean and do the same
+  independently for four exchanges. Expected additions are roughly 25 ms and 100 ms because each reply
+  is another sequential wait. Report deviations from these estimates rather than replacing measured values.
+- netem delay 1ms and then 25ms should appear only on ce-lab07's eth0. Increasing Sent packet/byte
+  counters between the before and after snapshots establish that measured traffic crossed the queue;
+  configuration alone does not.
+- The qdisc remains after the installing tc command exits. net qdisc del dev eth0 root removes it.
+  Recovery requires both the absence of netem and echo timings moving toward each case's own baseline.
 verify_note: The container has no netem qdisc and both client measurements return toward their own baseline.
 commands:
 - name: Measure the unchanged dependency
@@ -62,36 +73,68 @@ commands:
     cd ~/labs/lab07
     net() { sudo nsenter --target "$(docker inspect -f '{{.State.Pid}}' ce-lab07)" --net -- tc "$@"; }
     net qdisc show dev eth0
-    python3 probe.py 1
-    python3 probe.py 4
+    python3 probe.py 1 | tee baseline-1.txt
+    python3 probe.py 4 | tee baseline-4.txt
   expect: The client receives every echo; eth0 has its default noqueue, with no custom root qdisc. Stop
     if either check fails.
+  record: Fill the None row with both means and ranges plus the qdisc state. Keep this VM shell open
+    so the net function remains defined for later steps.
 - name: Measure a 1 ms control
   where: VM terminal 1
   run: !unsafe |
     net qdisc add dev eth0 root netem delay 1ms
-    python3 probe.py 1
-    python3 probe.py 4
-    net -s qdisc show dev eth0
+    net -s qdisc show dev eth0 | tee control-before.txt
+    python3 probe.py 1 | tee control-1.txt
+    python3 probe.py 4 | tee control-4.txt
+    net -s qdisc show dev eth0 | tee control-after.txt
   expect: netem remains installed after tc exits, with traffic counters. Added time should be small; record
     the range.
+  record: Fill the 1 ms control row with both means and ranges. Compare Sent packets/bytes before and
+    after the probes and record whether the rule is present after its installer exits.
 - name: Change only the dose to 25 ms
   where: VM terminal 1
   run: !unsafe |
     net qdisc change dev eth0 root netem delay 25ms
-    python3 probe.py 1
-    python3 probe.py 4
-    net -s qdisc show dev eth0
+    net -s qdisc show dev eth0 | tee delayed-before.txt
+    python3 probe.py 1 | tee delayed-1.txt
+    python3 probe.py 4 | tee delayed-4.txt
+    net -s qdisc show dev eth0 | tee delayed-after.txt
   expect: Four sequential exchanges should accumulate more delay than one. Compare baseline-subtracted
     times, not raw ratios.
+  record: Fill the 25 ms row with both means and ranges, the configured delay and the before/after Sent
+    counters. The final comparison step calculates the added time for each exchange count.
 - name: Remove the rule and repeat both probes
   where: VM terminal 1
   run: !unsafe |
     net qdisc del dev eth0 root
     net qdisc show dev eth0
-    python3 probe.py 1
-    python3 probe.py 4
+    python3 probe.py 1 | tee recovered-1.txt
+    python3 probe.py 4 | tee recovered-4.txt
   expect: No netem remains and timing returns toward baseline.
+  record: Fill the Removed row with both means and ranges and the final qdisc state. Fault removal and
+    successful echo timing are separate pieces of recovery evidence.
+- name: Calculate added time from each case's own baseline
+  where: VM terminal 1
+  run: !unsafe |
+    cd ~/labs/lab07
+    python3 - <<'PY'
+    import pathlib, re
+    def mean(phase, count):
+        text = pathlib.Path(f'{phase}-{count}.txt').read_text()
+        match = re.search(r'mean_ms=([0-9.]+)', text)
+        if not match:
+            raise SystemExit(f'Missing successful probe: {phase}-{count}.txt')
+        return float(match[1])
+    for count in (1, 4):
+        baseline = mean('baseline', count)
+        for phase, dose in (('control', 1), ('delayed', 25), ('recovered', 0)):
+            added = mean(phase, count) - baseline
+            print(f'{phase}: exchanges={count} added_ms={added:.2f} expected_approximately_ms={count * dose}')
+    PY
+  expect: Added time at the 25 ms dose should be roughly 25 ms for one exchange and 100 ms for four,
+    with packet and scheduling variation. Recovery deltas should approach zero.
+  record: Use the printed differences to answer the sequential-delay question. Report actual deltas
+    and compare them with N × dose, supported by the qdisc counters and recovery measurements.
 setup:
 - name: Prepare and start the echo dependency
   command: !unsafe |
@@ -148,7 +191,7 @@ reset:
   command: !unsafe |
     containers=$(docker ps -aq --filter 'name=^/ce-lab07$')
     if [[ -n "$containers" ]]; then docker rm -f $containers; fi
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 07 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 07 setup on the host. No other lab is required.
 transfer_solution: No. Sequential dependency waits add along a request’s critical path. Independent parallel
   waits can overlap; other overhead still needs measurement.
 fallback:

@@ -9,7 +9,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Preformatted, Spacer, PageBreak, CondPageBreak, KeepTogether, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Preformatted, Spacer, PageBreak, CondPageBreak, Table, TableStyle
 
 from lab_content import ROOT, load_labs
 
@@ -54,11 +54,15 @@ def render(target, font_dir):
         for index, command in enumerate(items, 1):
             # Visual wrapping only; terminal/Markdown retain the exact pasteable command.
             label = [p(section, subhead)] if index == 1 and section else []
-            story.append(KeepTogether(label + [
-                p(f'{index}. {command["name"]}', subhead),
-                p(command.get('where', 'VM terminal 1'), small),
-                Preformatted(clean(command['run'].rstrip()), code_style, maxLineLength=112, splitChars=' ', newLineChars='    '),
-            ]))
+            story.extend(label)
+            text(f'Step {index}. {command["name"]}', subhead)
+            where = p('Run in: ' + command.get('where', 'VM terminal 1'), small)
+            where.keepWithNext = True
+            story.append(where)
+            story.append(Preformatted(clean(command['run'].rstrip()), code_style,
+                                      maxLineLength=112, splitChars=' ', newLineChars='    '))
+            if command.get('record'):
+                text('Record: ' + command['record'], small)
 
     labs = load_labs()
     text('Chaos labs', heading)
@@ -83,21 +87,29 @@ def render(target, font_dir):
         for paragraph in brief['theory']:
             text(paragraph)
         text('Source: ' + brief['theory_source'], small)
-        text('The experiment: ' + ' '.join(brief['in_this_lab']))
-        text('How to read the evidence', subhead)
+        text('Experiment', subhead)
+        for point in brief['in_this_lab']:
+            text(point)
+        text('Before running: ' + task['predict'])
+        text('Measurement key', subhead)
         table(['Signal', 'Meaning'], [[r['signal'], r['meaning']] for r in brief['readings']], [.25, .75])
-        text('Predict', subhead)
-        text(task['predict'])
-        text('Record your results', subhead)
-        evidence = task['evidence']
-        table(evidence['columns'], [[row] + [''] * (len(evidence['columns']) - 1) for row in evidence['rows']])
-        commands(lab['commands'], section='Procedure')
+        text('Run the steps', subhead)
+        text('After setup, run these commands on the host:', small)
+        story.append(Preformatted(f'./lab.sh {number} verify\n./lab.sh ssh', code_style))
+        text('This is VM terminal 1. For VM terminal 2, open another host terminal and run ./lab.sh ssh there. '
+             'Keep each shell open while steps reuse variables or functions. Run the blocks in order using '
+             'Bash without set -e. Stop if the baseline fails.', small)
+        commands(lab['commands'])
         text('Recovery check: ' + lab['verify_note'])
         if lab.get('fallback'):
             commands(lab['fallback'], section='Only if normal recovery fails')
-        text('Answer', subhead)
-        text(task['answer_with'])
-        text('Check your understanding', subhead)
+        text('Write your answer', subhead)
+        text('Use the observations recorded beside each step.', small)
+        evidence = task['evidence']
+        table(evidence['columns'], [[row] + [''] * (len(evidence['columns']) - 1) for row in evidence['rows']])
+        for index, prompt in enumerate(task['answer_with'], 1):
+            text(f'{index}. {prompt}')
+        text('Apply the same reasoning', subhead)
         text(task['transfer'])
         text(f'Save results before removing this lab\'s resources and files: ./lab.sh {number} reset', small)
     story.append(PageBreak())
@@ -105,11 +117,15 @@ def render(target, font_dir):
     text('Compare after recording your own results. The expected patterns below assume a working baseline and a confirmed injection. Differences require analysis; do not replace observations with the expected answer.')
     for number, lab in labs.items():
         text(lab['title'], subhead)
-        text(lab['solution'])
+        for index, (prompt, answer) in enumerate(zip(lab['task']['answer_with'], lab['solution']), 1):
+            text(f'{index}. {prompt}', subhead)
+            text(answer)
+        text('Expected observations by step', subhead)
+        text('Use the matching commands in this lab’s question. These are expected patterns, not recorded results.', small)
         for index, command in enumerate(lab['commands'], 1):
             if command.get('expect'):
-                text(f'Step {index}: {command["expect"]}', small)
-        text('Understanding check: ' + lab['transfer_solution'])
+                text(f'Step {index}. {command["name"]}: {command["expect"]}', small)
+        text('Apply the same reasoning: ' + lab['transfer_solution'])
 
     def footer(canvas, doc):
         canvas.saveState()

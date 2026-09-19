@@ -20,74 +20,154 @@ task:
     - {signal: 'localhost versus Pod IP', meaning: 'Local success proves a local listener; it does not prove that another Pod can reach that listener.'}
     - {signal: 'k20', meaning: 'kubectl fixed to kind-lab20 and ce-lab20. The client remains unchanged while the server is intentionally recreated for the bind comparison.'}
   predict: Predict DNS, Service-IP HTTP, direct-Pod HTTP and readiness for the wrong name, wrong targetPort and loopback-only listener.
-  answer_with: Build a layer-by-layer diagnosis from the same client. Explain why DNS success and local HTTP success are weaker than successful Service HTTP, and show recovery after every fault.
+  answer_with:
+  - Record the healthy DNS, Service-name HTTP, Service-IP HTTP, direct-Pod HTTP, readiness and endpoint port.
+    Which of these paths does each probe test?
+  - For the wrong namespace name, which requests fail and which still work? Prove recovery by using the correct
+    name.
+  - For the wrong targetPort, compare DNS, Service and direct-Pod results with the endpoint port. Show the result
+    after restoring 8080.
+  - For the loopback-only listener, compare localhost, remote Pod-IP and Service HTTP with readiness. Show the
+    full path working after listener recovery.
   evidence:
     columns: [Phase, DNS, Service / Pod HTTP, Ready / endpoint port]
     rows: [Baseline, Wrong namespace name, Wrong targetPort, Port restored, Loopback listener, Listener restored]
   transfer: If DNS works but direct Pod-IP HTTP also fails, is changing only the Service selector a justified repair?
-solution: A wrong namespace breaks naming while the correct IP path remains usable. The targetPort fault leaves the backend healthy but misdirects Service traffic. The loopback bind leaves local HTTP working while remote Pod-IP access and readiness fail. The separate probes locate different stages instead of treating every connection failure as a DNS problem.
+solution:
+- The healthy fixture should resolve the Service name and return HTTP 200 through the name, ClusterIP:80 and
+  PodIP:8080, with a Ready endpoint at 8080. DNS tests naming; direct Pod HTTP bypasses Service routing; Service
+  HTTP includes the Service path. Record actual results for each path.
+- The missing namespace name should fail resolution and name-based HTTP while the correct ClusterIP and correct
+  name still work. Returning to the correct name restores the request without changing the DNS server or the
+  cluster.
+- With targetPort 8099, DNS and direct PodIP:8080 HTTP should still work, while Service traffic goes to an
+  unused endpoint port and fails. A Ready Pod or a nonempty EndpointSlice does not prove that the selected
+  port is correct. Restoring targetPort 8080 should restore Service HTTP.
+- A server bound to 127.0.0.1 should answer inside its own Pod but reject access to its Pod IP from the client.
+  Its HTTP readiness probe uses the Pod IP and should fail, making the endpoint unready. Recreating it with
+  a 0.0.0.0 listener should restore readiness, endpoint eligibility and DNS/Service/direct-Pod HTTP. Local
+  success alone does not prove remote reachability.
 transfer_solution: Not from that evidence. The direct request bypasses the Service selector. Investigate the process listener, destination port and Pod network path first.
 verify_note: DNS and Service HTTP work, targetPort is 8080, and the server listens on 0.0.0.0 with a Ready endpoint.
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 20 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 20 setup on the host. No other lab is required.
 files: [server.yaml, loopback.yaml, network.yaml]
 commands:
-- name: Establish the same-client baseline at every layer
+- name: Load the client helpers and bounded endpoint-port check
   where: VM terminal 1
   run: !unsafe |
     source ~/labs/lab20/helpers.sh
+    wait_endpoint_port() {
+      local port=$1 endpoints i
+      for i in $(seq 1 30); do
+        if endpoints=$(k20 get endpointslices -l kubernetes.io/service-name=web -o json) &&
+           printf '%s' "$endpoints" | jq -e --argjson port "$port" '(.items | length) > 0 and all(.items[]; any(.ports[]; .port == $port))' >/dev/null; then
+          return 0
+        fi
+        sleep 1
+      done
+      echo "Endpoint port did not become $port; stop and inspect the Service and EndpointSlices." >&2
+      return 1
+    }
+  record: Use this VM shell for every step so k20, resolve, probe and wait_endpoint_port remain defined. The
+    port check reads the current EndpointSlice list for up to 30 attempts.
+  expect: Sourcing the helpers targets only Lab 20. The port check succeeds only when a nonempty current slice
+    list uses the requested port.
+- name: Measure the healthy request path from the client Pod
+  where: VM terminal 1, same shell
+  run: !unsafe |
     SVC_IP=$(k20 get svc web -o jsonpath='{.spec.clusterIP}')
     POD_IP=$(k20 get pod web -o jsonpath='{.status.podIP}')
+    printf 'Service IP=%s; Pod IP=%s\n' "$SVC_IP" "$POD_IP"
     resolve web.ce-lab20.svc.cluster.local
     probe http://web.ce-lab20.svc.cluster.local/
     probe "http://$SVC_IP/"
     probe "http://$POD_IP:8080/"
-    k20 get svc web -o json | jq '.spec.ports'
+    k20 get pod web
+    k20 get svc web -o json | jq '{selector:.spec.selector,ports:.spec.ports}'
     k20 get endpointslices -l kubernetes.io/service-name=web -o json | jq '.items[] | {ports,endpoints}'
-- name: Test a wrong namespace name without changing the cluster
+  record: 'Fill Baseline: resolved address, each HTTP result, Service/Pod IPs, Pod Ready status, Service port/targetPort
+    and endpoint port/readiness. All helpers use the same client Pod.'
+  expect: The correct name resolves, all three HTTP paths should succeed, and the ready endpoint should use
+    port 8080.
+- name: Request the wrong namespace name, then retry the correct path
   where: VM terminal 1, same shell
   run: !unsafe |
     resolve web.ce-lab20-missing.svc.cluster.local
+    echo "wrong-name DNS exit=$?"
     probe http://web.ce-lab20-missing.svc.cluster.local/
+    echo "wrong-name HTTP exit=$?"
     probe "http://$SVC_IP/"
+    resolve web.ce-lab20.svc.cluster.local
     probe http://web.ce-lab20.svc.cluster.local/
-  expect: The incorrect name fails while the correct name and Service IP still work. No DNS server restart is needed.
-- name: Change only targetPort and compare Service and direct traffic
+  record: 'Fill Wrong namespace name: DNS/HTTP errors and exits, correct Service-IP result and correct-name
+    recovery result. No cluster setting changed.'
+  expect: The incorrect name should fail while the correct IP and name work, isolating the naming error.
+- name: Change targetPort to 8099 and compare Service with direct HTTP
   where: VM terminal 1, same shell
   run: !unsafe |
     k20 patch svc web --type=json -p '[{"op":"replace","path":"/spec/ports/0/targetPort","value":8099}]'
-    sleep 3
+    wait_endpoint_port 8099
     resolve web.ce-lab20.svc.cluster.local
     k20 get pod web
+    k20 get svc web -o json | jq '.spec.ports'
     k20 get endpointslices -l kubernetes.io/service-name=web -o json | jq '.items[] | {ports,endpoints}'
+    probe http://web.ce-lab20.svc.cluster.local/
     probe "http://$SVC_IP/"
     probe "http://$POD_IP:8080/"
+  record: 'Fill Wrong targetPort: DNS, Service-name/IP and direct-Pod HTTP results, Pod readiness and endpoint
+    port. Wait for the endpoint port change before interpreting traffic.'
+  expect: DNS and direct Pod HTTP should work, but Service traffic should fail because it forwards to unused
+    port 8099.
+- name: Restore targetPort to 8080 before the next fault
+  where: VM terminal 1, same shell
+  run: !unsafe |
     k20 patch svc web --type=json -p '[{"op":"replace","path":"/spec/ports/0/targetPort","value":8080}]'
-    sleep 3
+    wait_endpoint_port 8080
+    for i in $(seq 1 10); do probe http://web.ce-lab20.svc.cluster.local/ && break; sleep 1; done
     probe http://web.ce-lab20.svc.cluster.local/
-  expect: DNS and direct Pod HTTP work, but the wrong endpoint port breaks the Service request. Restoring 8080 repairs it.
-- name: Bind the server only to localhost and locate the failed boundary
+    probe "http://$SVC_IP/"
+    probe "http://$POD_IP:8080/"
+    k20 get endpointslices -l kubernetes.io/service-name=web -o json | jq '.items[] | {ports,endpoints}'
+  record: 'Fill Port restored: final Service-name/IP and direct-Pod HTTP results plus endpoint port/readiness.
+    Continue only after the final Service request succeeds.'
+  expect: Restoring 8080 should repair the Service path; allow a short bounded interval for the routing update.
+- name: Replace only the server bind address and compare local with remote
   where: VM terminal 1, same shell
   run: !unsafe |
     k20 delete pod web --wait=true --timeout=30s
     k20 apply -f ~/labs/lab20/loopback.yaml
-    k20 wait pod/web --for=jsonpath='{.status.phase}'=Running --timeout=60s
-    sleep 3
+    k20 wait pod/web --for=jsonpath='{.status.phase}'=Running --timeout=60s --request-timeout=0
     POD_IP=$(k20 get pod web -o jsonpath='{.status.podIP}')
+    for i in $(seq 1 10); do k20 exec web -- python -c 'import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:8080/",timeout=3).status)' && break; sleep 1; done
     k20 exec web -- python -c 'import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:8080/",timeout=3).status)'
+    resolve web.ce-lab20.svc.cluster.local
     probe "http://$POD_IP:8080/"
-    k20 get pod web -o json | jq '{command:.spec.containers[0].command,conditions:.status.conditions}'
+    k20 get pod web -o json | jq '{ip:.status.podIP,command:.spec.containers[0].command,conditions:.status.conditions}'
     k20 get endpointslices -l kubernetes.io/service-name=web -o json | jq '.items[] | {ports,endpoints}'
     probe http://web.ce-lab20.svc.cluster.local/
-  expect: Local HTTP can succeed while remote Pod HTTP fails and readiness remains false. This is not a successful service baseline.
-- name: Restore the listener and prove the full path works
+  record: 'Fill Loopback listener: Pod IP, bind address, localhost result, DNS result, remote Pod/Service results,
+    Pod Ready condition and endpoint readiness.'
+  expect: Local HTTP should succeed while remote Pod HTTP fails and readiness is false. DNS can continue working
+    even though the Service has no ready backend.
+- name: Restore the listener and check every path again
   where: VM terminal 1, same shell
   run: !unsafe |
     k20 delete pod web --wait=true --timeout=30s
     k20 apply -f ~/labs/lab20/server.yaml
-    k20 wait pod/web --for=condition=Ready --timeout=60s
+    k20 wait pod/web --for=condition=Ready --timeout=60s --request-timeout=0
+    POD_IP=$(k20 get pod web -o jsonpath='{.status.podIP}')
     for i in $(seq 1 10); do probe http://web.ce-lab20.svc.cluster.local/ && break; sleep 1; done
-    k20 get endpointslices -l kubernetes.io/service-name=web -o json | jq '.items[] | {ports,endpoints}'
+    resolve web.ce-lab20.svc.cluster.local
     probe http://web.ce-lab20.svc.cluster.local/
+    probe "http://$SVC_IP/"
+    probe "http://$POD_IP:8080/"
+    k20 get pod web -o json | jq '{ip:.status.podIP,command:.spec.containers[0].command,conditions:.status.conditions}'
+    k20 get svc web -o json | jq '.spec.ports'
+    k20 get endpointslices -l kubernetes.io/service-name=web -o json | jq '.items[] | {ports,endpoints}'
+  record: 'Fill Listener restored: bind address, Pod IP, DNS/three HTTP results, Ready condition, targetPort
+    and endpoint readiness. Compare with the initial baseline.'
+  expect: The 0.0.0.0 listener should restore HTTP from other Pods, a Ready endpoint at 8080 and successful
+    Service requests.
 setup:
 - name: Prepare the isolated networking fixture and client helpers
   command: !unsafe |
@@ -101,12 +181,12 @@ setup:
     k20 get nodes >/dev/null
     k20 create namespace ce-lab20 --dry-run=client -o yaml | k20 apply -f -
     k20 apply -f ~/labs/lab20/network.yaml -f ~/labs/lab20/server.yaml
-    k20 wait pods --all --for=condition=Ready --timeout=90s
+    k20 wait pods --all --for=condition=Ready --timeout=90s --request-timeout=0
 verify:
 - name: Verify DNS and end-to-end Service HTTP
   command: !unsafe |
     source ~/labs/lab20/helpers.sh
-    k20 wait pods --all --for=condition=Ready --timeout=30s
+    k20 wait pods --all --for=condition=Ready --timeout=30s --request-timeout=0
     resolve web.ce-lab20.svc.cluster.local
     probe http://web.ce-lab20.svc.cluster.local/
 reset: []

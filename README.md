@@ -2,8 +2,10 @@
 
 Twenty-two focused labs connect the mechanisms in [chaos-theory.md](docs/chaos-theory.md)
 to observable results. Read [chaos-labs.md](docs/chaos-labs.md), use the [print edition](docs/chaos-labs.pdf), or print a question in
-the terminal. Each question includes the relevant theory, measurement definitions,
-a prediction, a results table, a procedure and recovery checks. Solutions are separate.
+the terminal. After the theory, follow numbered steps with complete command blocks
+and a short instruction on what to record beside each block. Then answer the
+numbered questions. The separate solution answers them in the same order and
+includes the commands with their expected observations.
 
 The container and Kubernetes troubleshooting labs use controlled comparisons:
 
@@ -165,6 +167,8 @@ guide, then validate again. Local checks do not replace live Ubuntu, Docker and
 Kubernetes experiments; acceptance steps are in [docs/lab-design.md](docs/lab-design.md).
 Current results and the unresolved VirtualBox Kubernetes acceptance failure are
 recorded in [the isolation review](docs/reviews/isolation-review.md).
+The [procedure review](docs/reviews/procedure-review.md) records the command,
+measurement and answer-completeness checks for all 22 labs.
 
 To regenerate the print edition, install ReportLab and DejaVu Sans/Mono fonts,
 then run `python3 scripts/render-labs-pdf.py` to update `docs/chaos-labs.pdf`. Use

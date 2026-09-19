@@ -34,8 +34,15 @@ task:
       meaning: Finds empty fields only. A reviewer must still judge whether the plan is measurable and
         executable.
   predict: State what you expect to measure under one fault and why the service should behave that way.
-  answer_with: 'Write a card another person can follow: measurable baseline, one fault, expected result,
-    stop condition, rollback and recovery evidence. Keep it a plan; do not invent observations.'
+  answer_with:
+  - Name one service and environment. Specify the measurement, units, load, sampling window and exact baseline
+    measurement command.
+  - Specify one fault, its exact target and maximum duration, the injection and confirmation commands, and your
+    predicted measurement threshold.
+  - Specify an observable stop threshold, the rollback and fallback commands, and the command and criterion that
+    prove recovery.
+  - Identify what the plan cannot establish. Review every field for completeness without claiming unmeasured
+    results.
   evidence:
     columns:
     - Design element
@@ -47,18 +54,42 @@ task:
     - Prediction / threshold
     - Stop / rollback / recovery
   transfer: Can a completed card or a passing no-fault control establish resilience to the proposed disruption?
-solution: A complete experiment connects one controlled fault to one measurable outcome. It also states
-  how to stop and restore the service. If the outcome cannot be measured or the fault cannot be removed,
-  improve the design before considering a run.
+solution:
+- The completed card should identify one service/environment and an executable measurement with units, load
+  and duration. The baseline command and fault-phase measurement must use the same operation and window so
+  their results can be compared. A statement such as "service is healthy" is insufficient.
+- The card should name one fault and bounded target/duration, provide the exact injection command, and provide
+  a separate command that confirms the target count and dose. The predicted threshold must use the chosen measurement
+  and have a stated mechanism; it remains a prediction until tested.
+- The stop threshold states when to abort. Rollback states exactly how to remove the fault; the fallback covers
+  loss of the normal removal path. Recovery requires an executable check against an explicit service criterion,
+  not merely a successful cleanup command.
+- The blank-field check detects omissions only. A reviewer must also confirm command context, values, target
+  scope and measurable criteria. This lab produces a plan; neither a completed card nor an unrun hypothesis
+  establishes resilience.
 verify_note: The card answers each field clearly; this is a design review, not a live test.
 commands:
-- name: Fill the short experiment card
+- name: Read the card and choose one service and one fault
   where: VM terminal 1
   run: !unsafe |
     cd ~/labs/lab16
+    cat experiment-card.md
+  record: Choose the service/environment and one fault. Map the card fields to the four answer prompts before
+    editing.
+  expect: Setup creates the card only if it is absent, so an existing plan is preserved. This lab does not
+    execute the proposed fault.
+- name: Write the complete plan, including executable commands
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    cd ~/labs/lab16
     ${EDITOR:-nano} experiment-card.md
-- name: Find unanswered fields
-  where: VM terminal 1
+  record: Write an answer after each field's colon. Include the exact baseline, injection, fault-confirmation, rollback, fallback and
+    recovery commands; label where each runs and define all variables. Add load, duration, units and pass/stop
+    thresholds. In nano, save with Ctrl+O, Enter, then exit with Ctrl+X.
+  expect: The saved card should let another operator understand each operation without guessing missing commands
+    or values. Leave observations explicitly unmeasured.
+- name: Check missing fields and review the saved plan
+  where: VM terminal 1, same shell
   run: !unsafe |
     cd ~/labs/lab16
     grep -nE ':[[:space:]]*$' experiment-card.md
@@ -68,7 +99,13 @@ commands:
       1) echo 'No blank fields found; review the answers for clarity.' ;;
       *) echo 'Could not read the card; fix the file error before continuing.' >&2 ;;
     esac
-  expect: 'No blank fields remain. Read the answers too: this check does not validate their meaning.'
+
+    printf '\nSaved plan for review:\n'
+    cat experiment-card.md
+  record: Record the blank-field check result. Review the displayed card against all four answer prompts, edit
+    again if needed, and retain the completed plan as your evidence.
+  expect: No blank fields remain. The check does not validate meaning or execute commands, so confirm the measurement,
+    fault boundaries and recovery steps by reading the card.
 setup:
 - name: Create the resilience experiment card
   command: !unsafe |
@@ -94,6 +131,6 @@ verify:
   command: !unsafe |
     test -s "$HOME/labs/lab16/experiment-card.md"
 reset: []
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 16 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 16 setup on the host. No other lab is required.
 transfer_solution: No. The card is a plan, and the control establishes the measurement path and baseline.
   Only an observed fault trial and analysis can support the specific resilience claim.

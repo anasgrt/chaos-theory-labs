@@ -39,8 +39,11 @@ task:
       meaning: Tests continued service after the triggering request; this is independent of whether the
         earlier response completed.
   predict: Predict the triggering response, process state and next request after close returns EIO.
-  answer_with: Connect the injected close error to the server log and exit status. Explain the first and
-    next HTTP results separately.
+  answer_with:
+  - What did the normal trace show, and did its fsync error stop the server?
+  - For the injected request, connect the close return value, server log and process exit status.
+  - Compare HTTP status and response bytes for the triggering request, next request and restarted server.
+    Why can they differ?
   evidence:
     columns:
     - Phase
@@ -53,65 +56,94 @@ task:
     - Next request
     - Restarted
   transfer: Does this test show that every real close error leaves a file descriptor open?
-solution: This server treats a close error as fatal and should exit with status 1. The triggering request
-  may already have received its response, but a dead process cannot serve later requests. The fault exposes
-  an application error-handling decision, not a Kubernetes or network failure.
+solution:
+- A normal request should show writes followed by fsync and close. This fixture ignores the socket fsync
+  EINVAL error and continues serving; an error line alone does not identify an outage cause.
+- The injected close should show -1 EIO and INJECTED. The matching "error closing socket" log and exit
+  status 1 identify the application decision to exit. If the marker or exit was not observed, report the
+  missing evidence instead of assuming the error path ran.
+- The triggering request may receive HTTP 200 and body bytes before close fails, because writing precedes
+  closing. After the server exits, the next request should show 000 and no body. Restart should restore
+  HTTP 200. Use the recorded result for each request; a completed triggering response does not prove continued
+  availability.
 verify_note: The server responds after restart, then the test process is stopped.
 commands:
-- name: Start the compiled book server and record its exact PID
+- name: Start the server and save its PID
   where: VM terminal 1
   run: !unsafe |
     cd ~/labs/lab08
     ./legacy_server > ~/labs/lab08/server.log 2>&1 & server=$!
     echo "$server" > server.pid
     sleep 1
-    curl -fsS --max-time 3 http://127.0.0.1:8080/ | head -3
+    curl -sS --max-time 3 -o /dev/null -w 'HTTP=%{http_code} bytes=%{size_download}\n' http://127.0.0.1:8080/
     echo "server PID=$server"
-  expect: 'HTML lines from the server. Keep this terminal: wait "$server" only works in it.'
-- name: Observe writes, closes and fsyncs without changing behaviour (Ctrl-C to detach)
+  expect: HTTP should return 200 and body bytes. If it does not, inspect server.log before continuing.
+  record: Save the server PID and starting HTTP status/bytes. Keep terminal 1 open; it owns the child
+    used by wait.
+- name: Attach the normal tracer and leave it running
   where: VM terminal 2
   run: !unsafe |
     PID=$(cat ~/labs/lab08/server.pid)
     sudo strace -p "$PID" -e trace=write,close,fsync -o ~/labs/lab08/trace.txt
-- name: Request one page while the tracer is attached
-  where: VM terminal 1
+  record: Confirm attachment, leave strace running and continue in terminal 1.
+  expect: The tracer waits for server syscalls; it does not inject faults.
+- name: Send one normal traced request
+  where: VM terminal 1, same shell
   run: !unsafe |
     curl -sS --max-time 3 -o /dev/null -w '%{http_code} %{size_download}\n' http://127.0.0.1:8080/
-- name: After Ctrl-C in terminal 2, inspect the trace
+    kill -0 "$server" && echo 'server still running'
+  record: Fill the normal-request HTTP and process columns. Then press Ctrl-C in terminal 2 to detach
+    strace.
+  expect: The request should succeed and the server should remain running.
+- name: Read the normal trace after detaching
   where: VM terminal 2
   run: !unsafe |
+    cat ~/labs/lab08/trace.txt
     awk -F'(' '{print $1}' ~/labs/lab08/trace.txt | sort | uniq -c
     grep -E '= -1' ~/labs/lab08/trace.txt | head
   expect: Many write calls, one fsync and one close per request. fsync on a socket returns -1 EINVAL,
     which is not an outage cause.
-- name: Inject EIO into close (leave attached)
+  record: Record the write/fsync/close sequence, counts and error returns.
+- name: Attach the close-error injector and leave it running
   where: VM terminal 2
   run: !unsafe |
     PID=$(cat ~/labs/lab08/server.pid)
-    sudo strace -p "$PID" -e trace=close -e inject=close:error=EIO
-- name: Request one page and read the application outcome
-  where: VM terminal 1
+    sudo strace -p "$PID" -e trace=close -e inject=close:error=EIO -o ~/labs/lab08/injected-trace.txt
+  record: Confirm attachment before sending the next request in terminal 1.
+  expect: The next close is replaced by an EIO return; trace output is saved in injected-trace.txt.
+- name: Trigger the fault and collect the process result
+  where: VM terminal 1, same shell
   run: !unsafe |
     curl -sS --max-time 3 -o /dev/null -w '%{http_code} %{size_download}\n' http://127.0.0.1:8080/
     sleep 1
     if kill -0 "$server" 2>/dev/null; then echo 'server still running'; else wait "$server"; echo "server exit=$?"; fi
     tail -3 ~/labs/lab08/server.log
-    curl -sS --max-time 3 -o /dev/null -w 'next request: %{http_code}\n' http://127.0.0.1:8080/
-  expect: strace shows close(...) = -1 EIO (Input/output error) (INJECTED); the server exits with status
-    1 after "error closing socket". The next request should fail to connect; record its result separately
-    from the first response.
-- name: Restore HTTP service, then stop the test server
-  where: VM terminal 1
+    cat ~/labs/lab08/injected-trace.txt
+  expect: The injected close should show EIO and INJECTED. The server should log "error closing socket"
+    and exit 1; the response may already have reached the client.
+  record: Fill the injected-request row with HTTP/bytes, the close trace line and whether it includes INJECTED, the server log error
+    and actual exit status.
+- name: Test the next request independently
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    curl -sS --max-time 3 -o /dev/null -w 'next: HTTP=%{http_code} bytes=%{size_download}\n' http://127.0.0.1:8080/
+    echo "curl exit=$?"
+  record: Fill the next-request row with HTTP status, bytes and curl exit.
+  expect: After the server exits, expect connection failure, HTTP 000, no body and a nonzero curl exit.
+- name: Restart, verify HTTP recovery and stop the server
+  where: VM terminal 1, same shell
   run: !unsafe |
     cd ~/labs/lab08
     if kill -0 "$server" 2>/dev/null; then kill "$server"; wait "$server"; fi
-    ./legacy_server > ~/labs/lab08/server.log 2>&1 & server=$!
+    ./legacy_server > ~/labs/lab08/server-restarted.log 2>&1 & server=$!
     echo "$server" > server.pid
     sleep 1
     curl -sS --max-time 3 -o /dev/null -w '%{http_code} %{size_download}\n' http://127.0.0.1:8080/
     kill "$server"; wait "$server"
     rm -f ~/labs/lab08/server.pid
   expect: HTTP responds after restart; the test server is then stopped.
+  record: Fill the restarted row with HTTP status/bytes. Preserve the first server log and both traces
+    for your answers.
 setup:
 - name: Compile the book’s syscall fixture
   command: !unsafe |
@@ -133,7 +165,7 @@ reset:
         kill "$pid" 2>/dev/null || true
       fi
     fi
-    rm -f "$pid_file" "$HOME/labs/lab08/legacy_server" "$HOME/labs/lab08/trace.txt" "$HOME/labs/lab08/server.log"
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 08 setup, then ./lab.sh ssh. No other lab is required.
+    rm -f "$pid_file" "$HOME/labs/lab08/legacy_server" "$HOME/labs/lab08/trace.txt" "$HOME/labs/lab08/server.log" "$HOME/labs/lab08/injected-trace.txt" "$HOME/labs/lab08/server-restarted.log"
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 08 setup on the host. No other lab is required.
 transfer_solution: No. strace can skip the real call and substitute an error. Real close errors have syscall-specific
   semantics. The supported conclusion is about this application’s reaction to the injected return value.

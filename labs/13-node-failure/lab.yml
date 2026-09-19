@@ -59,9 +59,13 @@ task:
     - 12.3.2
   predict: Predict which operation changes scheduling eligibility, which stops reporting, and whether
     either immediately kills existing containers. Predict whether uncordon moves the replacement back.
-  answer_with: Compare UID and node across cordon, deletion and uncordon. Then build a separate kubelet-failure
-    timeline using Lease, taint, Pod UID and original runtime ID. Explain detection, eviction, replacement
-    and cleanup separately; report unobserved transitions without inventing times.
+  answer_with:
+  - Compare Pod UID/node and runtime identity before cordon, after cordon, after deletion and after uncordon.
+  - Build the kubelet-failure timeline from stop-command completion, Lease, first unavailable/taint observations and
+    replacement UID. Calculate the two observed intervals.
+  - Did the original container keep running while replacement occurred? What proves the difference between
+    API state and actual execution?
+  - What evidence confirms recovery, and what remains unknown if no replacement was observed?
   evidence:
     columns:
     - Event
@@ -79,12 +83,21 @@ task:
     - Kubelet restored
   transfer: Why would deleting the old Pod object forcibly be insufficient to prove there is only one
     running copy?
-solution: Missing kubelet reports trigger detection and eviction, not an immediate process kill. Replacement
-  includes several waits, while the old runtime may keep serving its container. Restoring kubelet allows
-  that node to reconcile and clean up. Cordon only changes eligibility for new scheduling; deleting the
-  managed Pod causes replacement elsewhere. Uncordon does not rebalance it. Missing Lease renewals after
-  stopping kubelet precede node-unavailable handling, so toleration duration is only one part of the replacement
-  delay.
+solution:
+- Cordon should set unschedulable=true while the same Pod UID and container remain and kubelet stays active.
+  Deleting that Pod should produce a new UID on another eligible node. Uncordon permits future placement
+  but should not move that replacement automatically.
+- After kubelet stops, Lease renewTime should become stale, followed by node-unavailable handling, NoExecute
+  taint and possible replacement. Report the measured stop-to-first-unavailable and first-taint-to-first-replacement
+  sample differences. They include sampling uncertainty and separate stages; the 20-second toleration
+  starts at tainting, not at the stop command. Mark absent events not observed.
+- If crictl still lists OLD_CID while the API shows a different Pod UID elsewhere, the old process and
+  replacement coexist. Kubelet reporting and desired API state do not themselves stop a runtime container.
+  A runtime query error is unknown, not evidence that the old process stopped.
+- After restoring kubelet, all four nodes should become Ready, workers should be uncordoned and node-web
+  should have one Ready Pod. If replacement occurred, OLD_CID should disappear as the old node reconciles.
+  If no replacement appeared within the sampling bound, report that limit and still verify kubelet recovery;
+  do not invent an eviction or replacement time.
 verify_note: Kubelet is running on every worker, four nodes are Ready and uncordoned, and one node-web
   Pod is Ready. If replacement occurred, confirm the recorded old container is gone.
 commands:
@@ -95,27 +108,45 @@ commands:
     k rollout status deployment/node-web --request-timeout=0 --timeout=180s
     POD=$(k get pods -l app=node-web -o jsonpath='{.items[0].metadata.name}')
     NODE=$(k get pod "$POD" -o jsonpath='{.spec.nodeName}')
+    date --iso-8601=seconds
     echo "original pod=$POD node=$NODE"
     k get pod "$POD" -o jsonpath='{.metadata.uid}{"\n"}{.spec.tolerations}{"\n"}'
     docker exec "$NODE" crictl ps --name web
+  record: Fill baseline with timestamp, Pod name/UID, node, the runtime container ID and both 20-second
+    tolerations.
   expect: One Ready node-web Pod on a worker; the two NoExecute tolerations explicitly say 20 seconds.
     Save its container ID.
-- name: Cordon the host and prove the existing Pod stays in place
+- name: Cordon the host and inspect the existing Pod
   where: VM terminal 1, same shell
   run: !unsafe |
     ORIGINAL_NODE=$NODE
+    date --iso-8601=seconds
     k cordon "$ORIGINAL_NODE"
     k get node "$ORIGINAL_NODE" -o jsonpath='{.spec.unschedulable}{"\n"}'
     k get pod "$POD" -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,NODE:.spec.nodeName'
     docker exec "$ORIGINAL_NODE" systemctl is-active kubelet
     docker exec "$ORIGINAL_NODE" crictl ps --name web
+  record: Fill cordoned with timestamp, unschedulable, Pod UID/node, kubelet state and original runtime
+    ID.
   expect: The same UID and container remain while the node is cordoned; kubelet still runs.
-- name: Delete while cordoned; locate the replacement, then uncordon
+- name: Delete the Pod while its node is cordoned
   where: VM terminal 1, same shell
   run: !unsafe |
+    date --iso-8601=seconds
     k delete pod "$POD" --wait=true --timeout=60s
-    k rollout status deployment/node-web --timeout=180s
+    k rollout status deployment/node-web --request-timeout=0 --timeout=180s
     k get pods -l app=node-web -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,NODE:.spec.nodeName'
+    NEW_POD=$(k get pods -l app=node-web -o jsonpath='{.items[0].metadata.name}')
+    NEW_NODE=$(k get pod "$NEW_POD" -o jsonpath='{.spec.nodeName}')
+    NEW_CID=$(docker exec "$NEW_NODE" crictl ps --name web -q)
+    echo "after deletion: pod=$NEW_POD node=$NEW_NODE container=$NEW_CID"
+  record: Fill deleted while cordoned with Pod UID/node, runtime container ID and rollout result. Compare
+    the identities to baseline.
+  expect: The Deployment should replace the deleted Pod on another eligible node.
+- name: Uncordon and save a fresh baseline for the kubelet trial
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    date --iso-8601=seconds
     k uncordon "$ORIGINAL_NODE"
     sleep 5
     k get pods -l app=node-web -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,NODE:.spec.nodeName'
@@ -123,31 +154,62 @@ commands:
     NODE=$(k get pod "$POD" -o jsonpath='{.spec.nodeName}')
     OLD_CID=$(docker exec "$NODE" crictl ps --name web -q)
     echo "kubelet trial: pod=$POD node=$NODE container=$OLD_CID"
-    k get pod "$POD" -o jsonpath='{.metadata.uid}{"\n"}'
+    OLD_UID=$(k get pod "$POD" -o jsonpath='{.metadata.uid}')
+    echo "kubelet trial UID=$OLD_UID"
     kubectl --kubeconfig="$HOME/labs/lab13/kubeconfig" -n kube-node-lease get lease "$NODE" -o jsonpath='{.spec.renewTime}{"\n"}'
-  expect: Replacement runs on another eligible node; uncordon does not migrate it. Record the new original
-    identity for the separate kubelet experiment.
-- name: Stop kubelet and collect 18 timestamped samples, roughly ten seconds apart
-  where: VM terminal 1
+  record: Fill uncordoned with timestamp, Pod UID/node and runtime container ID; compare to the post-deletion
+    values. Save POD, NODE, OLD_UID, OLD_CID and Lease renewTime for the kubelet trial.
+  expect: Uncordon should not move the current Pod back. Treat its UID/container as the original identities
+    for the separate kubelet failure.
+- name: Stop kubelet and save command-completion time
+  where: VM terminal 1, same shell
   run: !unsafe |
-    date --iso-8601=seconds
     docker exec "$NODE" systemctl stop kubelet
+    STOP_EPOCH=$(date +%s)
+    printf '%s\n' "$STOP_EPOCH" > ~/labs/lab13/stopped-at.txt
+    date --iso-8601=seconds
+    docker exec "$NODE" systemctl is-active kubelet
+    docker exec "$NODE" crictl ps --name web
+  record: Fill kubelet stopped with stop-command completion time, kubelet state and whether OLD_CID still
+    runs. Continue immediately to sampling.
+  expect: kubelet should report inactive (a nonzero is-active exit is expected). The existing application
+    container can remain running.
+- name: Sample heartbeats, node state and replacement 18 times
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    : > ~/labs/lab13/samples.tsv
     for i in $(seq 1 18); do
-      date --iso-8601=seconds
-      k get node "$NODE"
-      k get node "$NODE" -o jsonpath='{.spec.taints}{"\n"}'
-      k get pods -l app=node-web -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,NODE:.spec.nodeName,DELETING:.metadata.deletionTimestamp'
-      kubectl --kubeconfig="$HOME/labs/lab13/kubeconfig" -n kube-node-lease --request-timeout=5s get lease "$NODE" -o jsonpath='{.spec.renewTime}{"\n"}'
-      echo "original runtime ID=$OLD_CID"
-      docker exec "$NODE" crictl ps --name web
+      timestamp=$(date +%s)
+      node_json=$(k get node "$NODE" -o json) &&
+      pods_json=$(k get pods -l app=node-web -o json) &&
+      lease=$(kubectl --kubeconfig="$HOME/labs/lab13/kubeconfig" --context=kind-lab13 -n kube-node-lease --request-timeout=5s get lease "$NODE" -o jsonpath='{.spec.renewTime}') || {
+        echo "sample $i: API observation failed; no state inferred"
+        sleep 10
+        continue
+      }
+      ready=$(printf '%s' "$node_json" | jq -r '[.status.conditions[]? | select(.type == "Ready") | .status][0] // "-"')
+      tainted=$(printf '%s' "$node_json" | jq '[.spec.taints[]? | select(.effect == "NoExecute" and (.key == "node.kubernetes.io/not-ready" or .key == "node.kubernetes.io/unreachable"))] | length > 0')
+      replacement=$(printf '%s' "$pods_json" | jq -r --arg uid "$OLD_UID" '[.items[] | select(.metadata.uid != $uid and .metadata.deletionTimestamp == null) | .metadata.uid] | if length == 0 then "-" else join(",") end')
+      original_running=unknown
+      if runtime_ids=$(docker exec "$NODE" crictl ps --name web -q); then
+        original_running=no
+        if printf '%s\n' "$runtime_ids" | grep -Fxq "$OLD_CID"; then original_running=yes; fi
+      fi
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$timestamp" "$ready" "$tainted" "$replacement" "$lease" "$original_running" >> ~/labs/lab13/samples.tsv
+      date --date="@$timestamp" --iso-8601=seconds
+      printf 'Ready=%s NoExecute=%s replacement=%s Lease=%s original-running=%s\n' "$ready" "$tainted" "$replacement" "$lease" "$original_running"
+      printf '%s' "$pods_json" | jq '.items[] | {name: .metadata.name, uid: .metadata.uid, node: .spec.nodeName, deleting: .metadata.deletionTimestamp}'
       sleep 10
     done | tee ~/labs/lab13/timeline.txt
-  expect: The original container can remain running as the node becomes unavailable and a replacement
-    starts elsewhere. Detection and replacement are separate events. If none appears within the bound,
-    report that and recover.
-- name: Restore kubelet and inspect convergence
-  where: VM terminal 1
+  record: Fill Lease/taint and replacement rows from timestamped observations. samples.tsv stores epoch,
+    Ready, NoExecute, replacement UID, Lease and original-running. Missing observations stay unknown.
+  expect: The Lease should stop advancing before unavailable handling and eviction. A replacement may
+    appear while OLD_CID still runs; if it does not appear within this bound, record not observed and
+    restore kubelet.
+- name: Restore kubelet and check convergence
+  where: VM terminal 1, same shell
   run: !unsafe |
+    date --iso-8601=seconds
     docker exec "$NODE" systemctl start kubelet
     k wait --for=condition=Ready "node/$NODE" --request-timeout=0 --timeout=180s
     k rollout status deployment/node-web --request-timeout=0 --timeout=180s
@@ -156,8 +218,30 @@ commands:
     docker exec "$NODE" crictl ps --name web
     k get nodes -o custom-columns=NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable
     echo "original runtime ID=$OLD_CID"
+  record: Fill restored with timestamp, node readiness, Pod UID/node, unschedulable flags and whether
+    OLD_CID remains. Recheck runtime state if cleanup is still converging.
   expect: Four Ready nodes. If a replacement was created, the old container should disappear as kubelet
     reconciles. Recheck after a short wait if it is still terminating.
+- name: Calculate the two observed intervals
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    STOP_EPOCH=$(cat ~/labs/lab13/stopped-at.txt)
+    awk -F '\t' -v stopped="$STOP_EPOCH" '
+      $2 != "True" && $2 != "-" && !unavailable {unavailable=$1}
+      $3 == "true" && !tainted {tainted=$1}
+      $4 != "-" && !replacement {replacement=$1}
+      END {
+        if (unavailable) printf "stop-command completion to first unavailable sample: %d s\n", unavailable-stopped;
+        else print "node unavailable: not observed";
+        if (tainted && replacement && replacement >= tainted) printf "first taint sample to first replacement sample: %d s\n", replacement-tainted;
+        else if (tainted && replacement) print "taint-to-replacement interval: inconclusive observation order";
+        else print "taint-to-replacement interval: not observed";
+      }' ~/labs/lab13/samples.tsv
+  record: Report stop-command-completion-to-unavailable and taint-to-replacement sample intervals. Reads
+    are separate observations with roughly ten-second sampling plus API delay; preserve not observed or
+    inconclusive results.
+  expect: These are differences between observation times, not exact transition latencies. A 20-second
+    toleration is only one component of recovery.
 setup:
 - name: Create the guide's node-web workload preferring lab13-worker
   command: !unsafe |
@@ -198,7 +282,7 @@ verify:
     node=$(k get pods -l app=node-web -o jsonpath='{.items[0].spec.nodeName}')
     docker exec "$node" systemctl is-active --quiet kubelet
 reset: []
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 13 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 13 setup on the host. No other lab is required.
 transfer_solution: Removing an API object does not fence or stop an unreachable machine. The old process
   can continue; preventing concurrent writers requires an appropriate fencing or application coordination
   mechanism.

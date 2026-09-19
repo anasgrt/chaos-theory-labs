@@ -37,6 +37,21 @@ procedure, including normal recovery. `fallback` contains only exceptional
 cleanup. `transfer` asks one reasoning question about a changed condition; its
 answer lives in `transfer_solution`, shown only by the solution.
 
+Each procedure step has a clear name, its terminal, a complete `run` block and a
+neutral `record` instruction. Put the observation beside the command that
+produces it. Split different faults and normal recovery into separate steps;
+include variable initialization, helper definitions, measurements and recovery
+commands before asking the learner to use their results. A helper invocation
+must identify its case and expose the evidence needed to answer the question.
+
+`task.answer_with` is a numbered list of direct questions. `solution` is a list
+with one answer in the same position for every question. The terminal solution
+also repeats the exact procedure with each step's expected observations, so it
+can be read without reconstructing commands from another screen. The question
+keeps expected outcomes out of `record` and shows its results checklist after
+the procedure. Setup/verify/SSH and final solution/reset commands are rendered
+consistently by the shared templates; do not repeat them in individual labs.
+
 `solution` and each command's `expect` explain conditional outcomes. Never present
 expected timings or counts as collected measurements. `verify` checks readiness
 to begin; `verify_note` describes the experiment's recovery evidence. Some labs

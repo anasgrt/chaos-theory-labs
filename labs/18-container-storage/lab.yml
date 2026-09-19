@@ -18,48 +18,97 @@ task:
     - {signal: 'ephemeral.txt / persisted.txt', meaning: 'Compare paths after replacing the container, not merely restarting the original one.'}
     - {signal: 'write exit / error', meaning: 'Read the failing command result directly. A successful later ls must not hide the earlier write failure.'}
   predict: Predict which file survives replacement and whether UID 10001 can write before chown, after chown and with a read-only mount.
-  answer_with: Explain each result using the storage lifetime, numeric ownership and mount mode. Show a successful write after the narrow repair and show that read-only still blocks it.
+  answer_with:
+  - Which file survives container replacement? Use the original and replacement observations to distinguish a
+    named volume from the container writable layer.
+  - Why does UID 10001 initially fail to write, and which exact ownership change repairs it? Cite numeric ownership,
+    mode and write status.
+  - Why does the same user fail through the read-only mount? Compare the error and RW field, then prove writable
+    recovery and data persistence.
   evidence:
     columns: [Phase, Files visible, Owner / mount RW, Write result]
     rows: [Original container, Replacement container, UID mismatch, Owner corrected, Read-only mount, Writable recovery]
   transfer: Would chmod 777 repair a read-only mount, and would it be an appropriate first response to an ownership mismatch?
-solution: The named-volume file survives container replacement while the writable-layer file does not. UID 10001 initially lacks directory write permission. Assigning the intended owner repairs that case; the same user then fails when the volume is mounted read-only. Repair the layer that the evidence identifies rather than making all files world-writable.
+solution:
+- The original container creates /ephemeral.txt in its writable layer and /data/persisted.txt in the named
+  volume. After that container is removed, the replacement should read persisted.txt but find no ephemeral.txt.
+  The named volume has a separate lifetime; this observation does not establish a backup.
+- Initially /data is owned by UID 0 with mode 0755, so UID 10001 lacks directory write permission. chown 10001:10001
+  /data assigns only the lab directory to the intended identity. The repeated write should then return zero
+  without changing its mode or granting world write access.
+- With ownership unchanged, a read-only mount should fail with Read-only file system and RW=false. Restoring
+  a writable mount should produce RW=true, a successful write and readable recovered/volume contents. This
+  separates mount enforcement from Unix ownership and from data loss. Record those results before deleting
+  the dedicated test volume.
 transfer_solution: No. Mount read-only enforcement is independent of Unix mode bits. For an ownership mismatch, inspect the required identity and grant only the needed access.
 verify_note: A write succeeds again after restoring a writable mount, and the dedicated test volume is removed only after evidence has been recorded.
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 18 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 18 setup on the host. No other lab is required.
 commands:
-- name: Put one file in each storage layer
+- name: Create one file in each storage layer
   where: VM terminal 1
   run: !unsafe |
-    docker run --name ce-lab18-original --mount type=volume,src=ce-lab18-data,dst=/data python:3.12-slim sh -c 'echo layer > /ephemeral.txt; echo volume > /data/persisted.txt'
+    docker run --name ce-lab18-original --mount type=volume,src=ce-lab18-data,dst=/data python:3.12-slim sh -c 'echo layer > /ephemeral.txt; echo volume > /data/persisted.txt; cat /ephemeral.txt /data/persisted.txt; ls -ldn /data'
     docker cp ce-lab18-original:/ephemeral.txt ~/labs/lab18/original-layer.txt
     docker inspect -f '{{json .Mounts}}' ce-lab18-original
+  record: 'Fill Original container: both file contents, /data owner and mode, volume name and mount RW. Keep
+    the copied original-layer.txt as evidence from this container.'
+  expect: Both files exist in the original container; only /data is backed by ce-lab18-data.
+- name: Replace the container and check which file remains
+  where: VM terminal 1, same shell
+  run: !unsafe |
     docker rm ce-lab18-original
-    docker run --rm --name ce-lab18-check --mount type=volume,src=ce-lab18-data,dst=/data python:3.12-slim sh -c 'cat /data/persisted.txt; test ! -e /ephemeral.txt && echo writable-layer-file-absent'
-  expect: The volume file survives replacement. The file outside the volume exists in the original container but not its replacement.
-- name: Diagnose a numeric ownership mismatch
+    docker run --rm --name ce-lab18-check --mount type=volume,src=ce-lab18-data,dst=/data python:3.12-slim sh -c 'cat /data/persisted.txt; test ! -e /ephemeral.txt && echo writable-layer-file-absent; ls -ldn /data'
+  record: 'Fill Replacement container: persisted.txt contents, the ephemeral.txt check result and /data ownership.
+    Compare both file paths with the original container.'
+  expect: The volume file survives replacement while the removed container's writable-layer file does not.
+- name: Attempt the write as UID 10001 and diagnose the failure
   where: VM terminal 1, same shell
   run: !unsafe |
     docker run --rm --name ce-lab18-check --user 10001:10001 --mount type=volume,src=ce-lab18-data,dst=/data python:3.12-slim sh -c 'id; ls -ldn /data; echo attempt > /data/user.txt'
     echo "write exit=$?"
-  expect: The directory is owned by 0 and the non-owner write fails with Permission denied.
-- name: Repair only ownership and repeat the same write
+  record: 'Fill UID mismatch: process UID/GID, directory owner/mode, exact error and write exit. Compare the
+    mount options with the previous case.'
+  expect: UID 10001 should get Permission denied because UID 0 owns the directory and mode 0755 permits only
+    the owner to create files.
+- name: Change only the directory owner and repeat the write
   where: VM terminal 1, same shell
   run: !unsafe |
     docker run --rm --name ce-lab18-check --mount type=volume,src=ce-lab18-data,dst=/data python:3.12-slim chown 10001:10001 /data
     docker run --rm --name ce-lab18-check --user 10001:10001 --mount type=volume,src=ce-lab18-data,dst=/data python:3.12-slim sh -c 'id; ls -ldn /data; echo attempt > /data/user.txt'
     echo "write exit=$?"
-  expect: The owner is now 10001 and the write succeeds without chmod 777.
-- name: Change only mount writability, inspect, then recover
+  record: 'Fill Owner corrected: directory owner/mode and repeated write exit. Compare the identity, ownership,
+    mode and mount options with the failed case.'
+  expect: The write should succeed as the new owner; no chmod 777 is needed.
+- name: Change only the mount to read-only and inspect the failure
   where: VM terminal 1, same shell
   run: !unsafe |
     docker run --name ce-lab18-readonly --user 10001:10001 --mount type=volume,src=ce-lab18-data,dst=/data,readonly python:3.12-slim sh -c 'id; ls -ldn /data; echo attempt > /data/user.txt'
     echo "write exit=$?"
     docker inspect -f '{{json .Mounts}}' ce-lab18-readonly
-    docker rm ce-lab18-readonly
-    docker run --rm --name ce-lab18-check --user 10001:10001 --mount type=volume,src=ce-lab18-data,dst=/data python:3.12-slim sh -c 'echo recovered > /data/user.txt; cat /data/user.txt /data/persisted.txt'
+  record: 'Fill Read-only mount: identity, directory owner/mode, exact error, write exit and Mounts.RW. Keep
+    the stopped container until those values are recorded.'
+  expect: Correct ownership cannot override RW=false; the write should fail with Read-only file system.
+- name: Restore a writable mount and confirm both data and writes
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    docker run --name ce-lab18-recovered --user 10001:10001 --mount type=volume,src=ce-lab18-data,dst=/data python:3.12-slim sh -c 'ls -ldn /data; echo recovered > /data/user.txt && cat /data/user.txt /data/persisted.txt'
+    echo "write/read exit=$?"
+    docker inspect -f '{{json .Mounts}}' ce-lab18-recovered
+  record: 'Fill Writable recovery: owner/mode, RW, command exit and both file contents. Compare the original
+    volume data with its current contents.'
+  expect: The write should succeed with RW=true, and the output should contain recovered plus the original
+    volume content.
+- name: Remove the exercise containers and volume after recording results
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    docker rm ce-lab18-readonly ce-lab18-recovered
     docker volume rm ce-lab18-data
-  expect: Correct ownership still cannot write through RW=false. Restoring a writable mount restores the write and existing data remains readable.
+    docker ps -a --filter 'name=^/ce-lab18-' --format '{{.Names}}'
+    docker volume ls --format '{{.Name}}' | grep -x ce-lab18-data
+  record: Confirm all six evidence rows are filled before removal. Record any remaining lab containers or exact
+    ce-lab18-data volume; no grep match returns status 1.
+  expect: The cleanup removes only the dedicated exercise storage. original-layer.txt remains outside the volume
+    as saved evidence.
 setup:
 - name: Create only the exercise volume and initialize its owner
   command: !unsafe |

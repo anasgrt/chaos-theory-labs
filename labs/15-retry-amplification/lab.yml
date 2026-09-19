@@ -39,8 +39,13 @@ task:
         alongside cost.
   predict: For 20 requests, calculate the maximum backend arrivals with zero versus one client retry,
     given two proxy attempts. Predict success counts during a persistent 503 fault.
-  answer_with: Compare client attempts, backend arrivals / 20 and successful original requests / 20. Explain
-    which attempt limits multiply and why restoring HTTP success stops retries early.
+  answer_with:
+  - For each of the six case/phase rows, record original requests, client attempts, backend arrivals, amplification
+    and successful requests.
+  - Calculate the maximum backend arrivals during persistent HTTP 503 for zero and one client retry. Compare
+    these bounds with your measurements.
+  - Explain why the extra attempts may add no successful requests, why recovery reduces attempts, and what the
+    cleanup checks show.
   evidence:
     columns:
     - Case / phase
@@ -55,38 +60,51 @@ task:
     - 'One client retry: 503 fault'
     - 'One client retry: recovered'
   transfer: If both layers permit three retries, what is the maximum amplification?
-solution: Healthy phases should make 20 client attempts and 20 backend arrivals, with 20 successes. During
-  persistent 503, no client retry allows 20 client attempts and up to 40 backend arrivals; one client
-  retry allows 40 and up to 80. Both can still yield zero user successes. These are predicted counts for
-  this controlled failure, not universal amplification factors. Recovery demonstrates that retries stop
-  on success. This experiment establishes multiplication of work, not a self-sustaining overload.
+solution:
+- Use the six printed phase summaries as your measurements. Each phase submits 20 originals; amplification
+  is backend_arrivals / 20 and success fraction is successes / 20. Check both runner exits are zero before
+  comparing cases.
+- With zero client retries, 20 originals x 1 client attempt x 2 proxy attempts allows 40 backend arrivals (2x).
+  One client retry allows 20 x 2 x 2 = 80 (4x). Persistent 503 should reach those bounds in this fixture; explain
+  any lower observed count from the logs rather than replacing it with the prediction.
+- Both fault cases can finish with zero successes because every backend attempt returns 503. Healthy and recovered
+  phases should need 20 client attempts and 20 backend arrivals for 20 successes because the first success
+  ends retrying. No fail marker or listeners on 8090, 9001 and 9002 confirms the runner removed its fault and
+  processes. This establishes work multiplication, not a self-sustaining overload.
 verify_note: Each runner removes the fail marker and stops its own upstreams and proxy. Both recovered
   phases should return 20/20 successes.
 commands:
-- name: Measure baseline, persistent failure and recovery without a client retry
+- name: Run the three phases with zero client retries
   where: VM terminal 1
   run: !unsafe |
     cd ~/labs/lab15
     sudo systemd-run --unit=ce-lab15 --collect --wait --pipe --uid="$(id -u)" --property=RuntimeMaxSec=60s --working-directory="$PWD" /bin/bash "$PWD/run-case.sh" 0 | tee no-client-retry.txt
     echo "runner exit=${PIPESTATUS[0]} (0 means completed; nonzero means failure or the 60-second limit)"
-  expect: Three phase summaries, each with 20 original requests. Check the baseline before using the fault
-    result.
-- name: Repeat the same three phases with one client retry
-  where: VM terminal 1
+  record: Copy the three phase summaries from no-client-retry.txt into the no-client-retry rows. Record the
+    runner exit; stop if it is nonzero.
+  expect: The runner measures healthy, persistent-503 and recovered phases in order, with 20 originals each.
+    It removes the fault on exit.
+- name: Change only the client retry count from zero to one
+  where: VM terminal 1, same shell
   run: !unsafe |
     cd ~/labs/lab15
     sudo systemd-run --unit=ce-lab15 --collect --wait --pipe --uid="$(id -u)" --property=RuntimeMaxSec=60s --working-directory="$PWD" /bin/bash "$PWD/run-case.sh" 1 | tee one-client-retry.txt
     echo "runner exit=${PIPESTATUS[0]}"
-  expect: The fault can produce twice as many backend arrivals, still without a successful original request.
-    Healthy and recovered phases should stop after their first successful attempt.
-- name: Check cleanup and compare the summaries
-  where: VM terminal 1
+  record: Copy the three phase summaries from one-client-retry.txt into the one-client-retry rows. Record the
+    runner exit and compare fault-phase counts with step 1.
+  expect: A client retry can double backend work while both upstreams keep failing. Successful phases end retrying
+    after the first success.
+- name: Compare the six summaries and confirm cleanup
+  where: VM terminal 1, same shell
   run: !unsafe |
     cd ~/labs/lab15
+    grep '^phase=' no-client-retry.txt one-client-retry.txt
     test ! -e fail && echo 'fault marker removed'
     ss -ltn '( sport = :8090 or sport = :9001 or sport = :9002 )'
-    cat no-client-retry.txt one-client-retry.txt
-  expect: No listeners remain on the three lab ports. Logs and summaries remain available for your answer.
+  record: Calculate backend arrivals / 20 for both fault phases. Record success fractions, whether the fail
+    marker is absent, and whether ss shows any listening sockets below its header.
+  expect: The saved summaries retain both cases. The fault marker is absent and no listeners remain on the
+    three lab ports.
 setup:
 - name: Check the isolated retry fixture
   command: !unsafe |
@@ -99,7 +117,7 @@ verify:
     test -s "$HOME/labs/lab15/run-case.sh"
     test -z "$(ss -H -ltn '( sport = :8090 or sport = :9001 or sport = :9002 )')"
 reset: []
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 15 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 15 setup on the host. No other lab is required.
 transfer_solution: Three retries means four attempts at each layer, so at most 4 × 4 = 16 backend arrivals
   per original request, provided every attempt reaches the backend and keeps failing.
 files:

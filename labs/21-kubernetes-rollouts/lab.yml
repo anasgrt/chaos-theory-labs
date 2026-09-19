@@ -21,73 +21,121 @@ task:
     - {signal: 'readiness port / restartCount', meaning: 'A bad readiness destination can block rollout without crashing or restarting the process.'}
     - {signal: 'k21 / responses', meaning: 'kubectl targets kind-lab21 and ce-lab21. responses prints each Pod name and its HTTP body; a missing or failed query returns nonzero.'}
   predict: Predict Pod UIDs and response values after only the ConfigMap changes, after restart, during the bad probe rollout and after undo.
-  answer_with: Explain configuration freshness and rollout progress separately. Record the stable revision before the fault, diagnose the new Pod, show old replicas remain available, and prove what undo did and did not restore.
+  answer_with:
+  - Compare the ConfigMap, Pod UIDs and per-Pod HTTP responses before and after changing only the ConfigMap.
+    Did the running processes consume the new value?
+  - After rollout restart, record the UIDs, responses and stable template revision. What operation made configuration
+    take effect?
+  - For the bad readiness port, explain the new Pod state, old-replica availability, replica counts and Progressing
+    condition. Does direct application HTTP still work?
+  - After undo, what did the template restore and what configuration stayed changed? Show the separate actions
+    and evidence that return every consumer to version-one.
   evidence:
     columns: [Phase, ConfigMap / responses, UIDs / Ready replicas, Revision / conditions]
     rows: [Version one, ConfigMap version two only, Restarted consumers, Wrong readiness port, Undo to stable revision, Version one restored]
   transfer: Would undo to the original Pod-template revision necessarily restore the original environment value from the ConfigMap?
-solution: Existing processes keep their injected environment until recreated. Restarting the rollout makes new containers read version-two. The bad readiness port prevents the surge Pod from becoming available; the two old replicas remain, and the Deployment eventually reports a stalled rollout. Undo repairs the template but leaves the ConfigMap at version-two. Explicit configuration restoration plus a consumer rollout returns version-one.
+solution:
+- Changing only the ConfigMap to version-two should leave the existing Pod UIDs and their version-one HTTP
+  responses unchanged. The message entered each process through its startup environment; updating the separate
+  ConfigMap does not refresh that environment or change the Pod template.
+- rollout restart changes the Pod template and replaces consumers. The new UIDs should return version-two after
+  completion. Save the resulting revision before the fault so undo selects the known-good readiness template;
+  the revision identifies a template, not a ConfigMap snapshot.
+- With readiness port 9999, the surge Pod should run but remain unready while its process can still answer
+  on 8080. maxUnavailable=0 keeps the two old replicas available; maxSurge=1 limits added replicas. The stalled
+  update should eventually report ProgressDeadlineExceeded. Record actual counts, conditions and restart counts;
+  a readiness failure does not itself imply a crash or automatic rollback.
+- Undo to the saved revision should restore readiness port 8080 and complete the rollout, while the ConfigMap
+  and consumer responses remain version-two. Explicitly changing the ConfigMap back to version-one and restarting
+  consumers should produce two Ready consumers returning version-one. Verify the ConfigMap, probe port, replica
+  counts and every response separately.
 transfer_solution: No. That revision still refers to the same ConfigMap key. Newly created containers read its current value; the ConfigMap must be restored separately or configurations versioned under distinct names.
 verify_note: The ConfigMap says version-one, exactly two Pods are Ready, both HTTP responses say version-one, and the readiness port is 8080.
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 21 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 21 setup on the host. No other lab is required.
 files: [app.yaml]
 commands:
-- name: Record configuration, identities and actual responses
+- name: Record the original configuration and every consumer
   where: VM terminal 1
   run: !unsafe |
     source ~/labs/lab21/helpers.sh
     k21 get configmap app-config -o jsonpath='{.data.message}{"\n"}'
     k21 get pods -l app=config-web -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,READY:.status.conditions[?(@.type=="Ready")].status'
+    k21 get deployment config-web -o json | jq '{revision:.metadata.annotations["deployment.kubernetes.io/revision"],desired:.spec.replicas,ready:.status.readyReplicas,conditions:.status.conditions}'
     responses
+  record: 'Fill Version one: ConfigMap value, each Pod name/UID/Ready status and HTTP body, desired/ready counts,
+    revision and conditions.'
+  expect: The baseline should have two Ready consumers returning version-one. responses queries each current
+    Pod directly on port 8080.
 - name: Change only the ConfigMap and query the same processes
   where: VM terminal 1, same shell
   run: !unsafe |
     k21 patch configmap app-config --type=merge -p '{"data":{"message":"version-two"}}'
     k21 get configmap app-config -o jsonpath='{.data.message}{"\n"}'
-    k21 get pods -l app=config-web -o custom-columns='NAME:.metadata.name,UID:.metadata.uid'
+    k21 get pods -l app=config-web -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,READY:.status.conditions[?(@.type=="Ready")].status'
+    k21 get deployment config-web -o json | jq '{revision:.metadata.annotations["deployment.kubernetes.io/revision"],ready:.status.readyReplicas,conditions:.status.conditions}'
     responses
-  expect: The object changes to version-two while the existing UIDs still return version-one.
-- name: Roll out new consumers and save the good template revision
+  record: 'Fill ConfigMap version two only: ConfigMap value, Pod UIDs, each HTTP response, Ready count and
+    revision. Compare every value with step 1.'
+  expect: The ConfigMap should say version-two while unchanged consumers still return version-one; this edit
+    alone does not start a rollout.
+- name: Restart consumers and save the good revision for undo
   where: VM terminal 1, same shell
   run: !unsafe |
     k21 rollout restart deployment/config-web
     k21 rollout status deployment/config-web --request-timeout=0 --timeout=120s
+    k21 get pods -l app=config-web -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,READY:.status.conditions[?(@.type=="Ready")].status'
+    k21 get configmap app-config -o jsonpath='{.data.message}{"\n"}'
     responses
     stable_revision=$(k21 get deployment config-web -o json | jq -r '.metadata.annotations["deployment.kubernetes.io/revision"]')
-    echo "stable revision=$stable_revision"
+    printf '%s\n' "$stable_revision" | tee ~/labs/lab21/stable-revision.txt
     k21 rollout history deployment/config-web
-  expect: New Pods consume version-two. Wait for old terminating Pods to disappear before treating the response set as the final two consumers.
-- name: Break only the new template's readiness port and diagnose the stall
+    k21 get deployment config-web -o json | jq '{desired:.spec.replicas,ready:.status.readyReplicas,probePort:.spec.template.spec.containers[0].readinessProbe.httpGet.port,conditions:.status.conditions}'
+  record: 'Fill Restarted consumers: UIDs, each HTTP response, ConfigMap value, Ready count, conditions and
+    the saved stable revision. Keep stable-revision.txt for step 5.'
+  expect: New consumers should read version-two. The good probe remains 8080 and the completed rollout should
+    have two Ready current consumers; responses excludes terminating Pods.
+- name: Break the new readiness port and collect stalled-rollout evidence
   where: VM terminal 1, same shell
   run: !unsafe |
     k21 patch deployment config-web --type=json -p '[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/port","value":9999}]'
     k21 wait deployment/config-web --for=jsonpath='{.status.conditions[?(@.type=="Progressing")].reason}'=ProgressDeadlineExceeded --timeout=90s --request-timeout=0
-    k21 rollout status deployment/config-web --timeout=5s
-    k21 get deployment config-web -o json | jq '{desired:.spec.replicas,status:.status}'
+    k21 rollout status deployment/config-web --timeout=5s --request-timeout=0
+    echo "rollout status exit=$?"
+    k21 get deployment config-web -o json | jq '{revision:.metadata.annotations["deployment.kubernetes.io/revision"],desired:.spec.replicas,status:.status}'
     k21 get rs -l app=config-web
     k21 get pods -l app=config-web -o json | jq '.items[] | {name:.metadata.name,uid:.metadata.uid,probe:.spec.containers[0].readinessProbe,conditions:.status.conditions,restarts:.status.containerStatuses[0].restartCount}'
     responses
-  expect: The new Pod stays unready at port 9999, while old available Pods remain. Even the misprobed process can answer direct HTTP on 8080. The rollout reports failure rather than automatically rolling back.
-- name: Undo the bad template and inspect the separate configuration
+  record: 'Fill Wrong readiness port: rollout result/exit, revision, desired/updated/ready/available counts,
+    Available and Progressing conditions, each Pod UID/probe/Ready/restarts and direct HTTP body.'
+  expect: The new Pod should be unready at port 9999 while two old replicas remain available. Its process can
+    still answer direct HTTP on 8080. ProgressDeadlineExceeded reports the stall without undoing it.
+- name: Undo to the saved template and inspect configuration separately
   where: VM terminal 1, same shell
   run: !unsafe |
+    stable_revision=$(cat ~/labs/lab21/stable-revision.txt)
     k21 rollout undo deployment/config-web --to-revision="$stable_revision"
     k21 rollout status deployment/config-web --request-timeout=0 --timeout=120s
     k21 get configmap app-config -o jsonpath='{.data.message}{"\n"}'
+    k21 get pods -l app=config-web -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,READY:.status.conditions[?(@.type=="Ready")].status'
     responses
-    k21 get deployment config-web -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.port}{"\n"}'
-  expect: The good readiness port is restored, but the separate ConfigMap still says version-two.
-- name: Restore configuration explicitly and verify every consumer
+    k21 get deployment config-web -o json | jq '{revision:.metadata.annotations["deployment.kubernetes.io/revision"],probePort:.spec.template.spec.containers[0].readinessProbe.httpGet.port,desired:.spec.replicas,ready:.status.readyReplicas,conditions:.status.conditions}'
+  record: 'Fill Undo to stable revision: resulting revision, probe port, ConfigMap value, Pod UIDs/responses,
+    Ready count and rollout conditions. Compare the template and ConfigMap separately.'
+  expect: The good readiness port should return to 8080, while the ConfigMap and running responses remain version-two.
+- name: Restore version-one and verify configuration plus all consumers
   where: VM terminal 1, same shell
   run: !unsafe |
     k21 patch configmap app-config --type=merge -p '{"data":{"message":"version-one"}}'
     k21 rollout restart deployment/config-web
     k21 rollout status deployment/config-web --request-timeout=0 --timeout=120s
-    sleep 3
-    k21 get pods -l app=config-web
+    k21 get configmap app-config -o jsonpath='{.data.message}{"\n"}'
+    k21 get pods -l app=config-web -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,READY:.status.conditions[?(@.type=="Ready")].status'
     responses
-    k21 get deployment config-web -o json | jq '{desired:.spec.replicas,ready:.status.readyReplicas,conditions:.status.conditions}'
-  expect: Two Ready consumers return version-one and the new rollout completes.
+    k21 get deployment config-web -o json | jq '{revision:.metadata.annotations["deployment.kubernetes.io/revision"],probePort:.spec.template.spec.containers[0].readinessProbe.httpGet.port,desired:.spec.replicas,ready:.status.readyReplicas,conditions:.status.conditions}'
+  record: 'Fill Version one restored: ConfigMap value, UIDs, both response bodies, probe port, desired/Ready
+    count, revision and conditions. Compare every current consumer with the intended configuration.'
+  expect: The ConfigMap should say version-one, readiness should use 8080, and two Ready current consumers
+    should return version-one after a successful rollout.
 setup:
 - name: Prepare the isolated configuration exercise
   command: !unsafe |
@@ -113,7 +161,7 @@ verify:
 - name: Verify configuration and both running consumers
   command: !unsafe |
     source ~/labs/lab21/helpers.sh
-    k21 rollout status deployment/config-web --timeout=30s
+    k21 rollout status deployment/config-web --timeout=30s --request-timeout=0
     test "$(k21 get configmap app-config -o jsonpath='{.data.message}')" = version-one
     k21 get deployment config-web -o json | jq -e '.spec.template.spec.containers[0].readinessProbe.httpGet.port == 8080 and .status.readyReplicas == 2' >/dev/null
     output=$(responses)

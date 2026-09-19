@@ -2,25 +2,29 @@
 {{ selected_lab.title }}
 {{ '=' * (selected_lab.title | length) }}
 
-EXPLANATION
-{{ wrap(selected_lab.solution) }}
+WORKED ANSWERS
+These answer the numbered questions on your question card. The observations
+below are expected patterns, not measurements collected from your VM.
+{% for prompt in selected_lab.task.answer_with %}
 
-COMPARE WITH YOUR EVIDENCE
-Expected patterns assume a working baseline and a confirmed injection.
-Use your own observations if they differ; explain the difference.
-{% for step in selected_lab.commands %}
-{% if step.expect is defined %}
+{{ wrap(loop.index ~ '. ' ~ prompt) }}
 
-[{{ loop.index }}] {{ step.name }}
-{{ wrap(step.expect) }}
-{% endif %}
+{{ wrap(selected_lab.solution[loop.index0]) }}
 {% endfor %}
 
-CHECK YOUR UNDERSTANDING
+APPLY THE SAME REASONING
+{{ wrap(selected_lab.task.transfer) }}
+
 {{ wrap(selected_lab.transfer_solution) }}
 
-RECOVERY CHECK
-{{ wrap(selected_lab.verify_note) }}
+{% set show_expected = true %}
+{% include 'commands.txt.j2' %}
 
-Read the procedure: ./lab.sh {{ lab_id }} question
-Reset the fixture:  ./lab.sh {{ lab_id }} reset
+HOST TERMINAL
+Read the question again:
+
+./lab.sh {{ lab_id }} question
+
+Save your results before resetting this fixture:
+
+./lab.sh {{ lab_id }} reset

@@ -34,12 +34,16 @@ task:
     - signal: HTTP response
       meaning: A successful response tests the proxy path, not the health of both backends.
   predict: Predict A’s state after one kill and after six rapid kill attempts, with Restart=always unchanged.
-  answer_with: Compare A’s state after one crash and after the burst. Quote the start-limit evidence and
-    explain why Restart=always did not guarantee another start.
+  answer_with:
+  - How did A's PID, state and restart count change after one crash?
+  - What happened to A during the rapid crash burst? Cite the unit result and the matching start-limit
+    journal message.
+  - What did the proxy return in each phase, and why does that not establish A's health?
+  - Which recovery commands restored A, and what proves both backends and the proxy recovered?
   evidence:
     columns:
     - Phase
-    - A state / result
+    - A PID / state / result / restarts
     - HTTP result
     - Journal evidence
     rows:
@@ -48,46 +52,69 @@ task:
     - Crash burst
     - Recovered
   transfer: What would disabling the start limit prove, and what defect would remain?
-solution: Restart=always requests a restart, but the start-rate limit can refuse it. One crash can remain
-  within the allowance; repeated starts can exhaust it and leave A failed. The journal, not a successful
-  response through B, establishes what happened to A. If the limit was not reached, report that observation
-  rather than claiming it was.
+solution:
+- After one SIGKILL, A should become active again with a different MainPID and a higher NRestarts value.
+  These observations establish replacement of the process; use your measured values.
+- The burst should exhaust the four-start allowance within 20 seconds, leaving A failed with a start-limit
+  result and a matching journal message. Restart=always requests another start but cannot override the
+  rate limiter. If the limit was not reached, report the observed state and timing instead.
+- The proxy may keep returning HTTP 200 because B remains available. Cite each actual HTTP result.
+  A shared response body does not identify which backend answered, so inspect A independently.
+- reset-failed clears the failed state and start counter; start requests a new process. Both backends
+  should report active and the proxy should return lab03 OK. Record any failure to recover.
 verify_note: Both backends are active and the proxy responds successfully.
 commands:
 - name: Check baseline and clear the previous start counter
   where: VM terminal 1
   run: !unsafe |
     sudo systemctl reset-failed ce-lab03-a
+    sudo systemctl start ce-lab03-a ce-lab03-b
     systemctl is-active ce-lab03-a ce-lab03-b
-    curl -fsS --max-time 3 http://127.0.0.1:8003/
+    systemctl show ce-lab03-a -p MainPID -p ActiveState -p Result -p NRestarts -p Restart -p StartLimitBurst -p StartLimitIntervalUSec
+    curl -fsS --max-time 3 -w "proxy HTTP=%{http_code}\n" http://127.0.0.1:8003/
+  expect: Both backends are active, A has a nonzero PID, Restart=always is set, and the proxy returns
+    lab03 OK with HTTP 200. Stop if this baseline fails.
+  record: Fill the Baseline row with A's PID, state, result, restart count and proxy HTTP status. Note
+    the four-start, 20-second limit before comparing crash outcomes.
 - name: Kill A once and inspect its recovery
   where: VM terminal 1
   run: !unsafe |
     sudo systemctl kill --kill-whom=main --signal=KILL ce-lab03-a
     sleep 1
-    curl -fsS --max-time 3 http://127.0.0.1:8003/
-    systemctl show ce-lab03-a -p ActiveState -p NRestarts
+    curl -fsS --max-time 3 -w "proxy HTTP=%{http_code}\n" http://127.0.0.1:8003/
+    systemctl show ce-lab03-a -p MainPID -p ActiveState -p Result -p NRestarts
   expect: A should return to active. A successful proxy response alone cannot prove that A restarted.
+  record: Fill the One crash row and compare MainPID and NRestarts with baseline. Record the HTTP result
+    separately from A's recovery evidence.
 - name: Repeat crashes rapidly and inspect the refused restart
   where: VM terminal 1
   run: !unsafe |
+    sudo systemctl reset-failed ce-lab03-a
+    burst_since=$(date --iso-8601=seconds)
     for i in $(seq 1 6); do
+      echo "crash attempt=$i"
       sudo systemctl kill --kill-whom=main --signal=KILL ce-lab03-a || true
       sleep 1
     done
-    systemctl show ce-lab03-a -p ActiveState -p Result -p NRestarts
-    sudo journalctl -u ce-lab03-a -n 15 --no-pager
+    systemctl show ce-lab03-a -p MainPID -p ActiveState -p Result -p NRestarts
+    sudo journalctl -u ce-lab03-a --since "$burst_since" --no-pager
     curl -sS --max-time 3 -o /dev/null -w "proxy HTTP=%{http_code}\n" http://127.0.0.1:8003/
   expect: Look for "Start request repeated too quickly" and a failed unit. Result and restart counts can
     vary with timing and systemd version; check the journal.
+  record: Fill the Crash burst row with A's final state, result, restart count, relevant journal lines
+    and proxy HTTP status. Note whether a start-limit message appeared and which kill attempts succeeded.
 - name: Recover and prove the proxy works again
   where: VM terminal 1
   run: !unsafe |
     sudo systemctl reset-failed ce-lab03-a ce-lab03-b
     sudo systemctl start ce-lab03-a ce-lab03-b
     systemctl is-active ce-lab03-a ce-lab03-b
+    systemctl show ce-lab03-a -p MainPID -p ActiveState -p Result -p NRestarts
     # The backends need a moment to bind, and NGINX retries a failed backend after fail_timeout=1s.
-    for i in $(seq 1 10); do curl -fsS --max-time 3 http://127.0.0.1:8003/ && break; sleep 0.5; done
+    for i in $(seq 1 10); do curl -fsS --max-time 3 -w "proxy HTTP=%{http_code}\n" http://127.0.0.1:8003/ && break; sleep 0.5; done
+  expect: Both backends are active and the proxy returns lab03 OK with HTTP 200 after the listeners recover.
+  record: Fill the Recovered row with A's final state, result and PID, B's state, and the proxy
+    response. Name reset-failed and start when explaining how the failed service recovered.
 setup:
 - name: Create the restart-limit fixture
   command: !unsafe |
@@ -141,6 +168,6 @@ verify:
     systemctl is-active --quiet ce-lab03-b
     curl -fsS --max-time 3 http://127.0.0.1:8003/ | grep -qx 'lab03 OK'
 reset: []
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 03 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 03 setup on the host. No other lab is required.
 transfer_solution: It would test whether the rate limit caused the supervisor to give up. The application
   would still crash, and rapid restarts would still consume resources and need monitoring.

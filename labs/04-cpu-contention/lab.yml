@@ -37,12 +37,17 @@ task:
         be repeated.
   predict: Rank the job time with no competitor, an unrestricted competitor and a competitor capped at
     20%. Explain your prediction.
-  answer_with: Compare the measured job times and quota counters. Explain how throttling the competitor
-    changes waiting for CPU; mark a run inconclusive if the competitor stopped too early.
+  answer_with:
+  - What were the mean and range of iteration times at baseline, with the unrestricted neighbour, with
+    the 20% neighbour and after recovery?
+  - Was the neighbour active throughout each loaded measurement? Which measurements, if any, are inconclusive?
+  - What quota/period ratio did cpu.max show, and how much did the throttling counters increase during
+    the capped measurement?
+  - How do the timings, throttling evidence and recovered baseline explain the effect of capping the competitor?
   evidence:
     columns:
     - Phase
-    - Mean job time (s)
+    - Mean / range (s)
     - Neighbour active?
     - Throttle evidence
     rows:
@@ -51,10 +56,17 @@ task:
     - 20% neighbour
     - Recovered
   transfer: Would pinning the neighbour to a different otherwise idle CPU test the same contention?
-solution: An unrestricted neighbour competes for CPU time. Capping it should leave more time for work.py,
-  though the measured gain depends on scheduling. cpu.max shows the configured cap; cpu.stat shows throttling.
-  Recovery toward baseline strengthens the contention explanation. A run that outlasts the neighbour mixes
-  contention with recovery and cannot support the comparison.
+solution:
+- Use the printed mean and range for all four phases. The unrestricted neighbour should increase
+  iteration time; the capped neighbour should reduce that increase. There is no fixed required speedup,
+  and small differences within baseline variation do not establish a clear effect.
+- Both loaded measurements require an active neighbour before and after work.py. If the neighbour ended
+  early, that phase mixes contention and recovery and is inconclusive.
+- cpu.max should have quota/period = 0.2. Subtract the before counters from the after counters; rising
+  nr_throttled and throttled_usec show the competitor used its budget and was throttled.
+- The two jobs share one CPU. Restricting the competitor's CPU time should leave more scheduling time
+  for the measured job. Quota enforcement plus shorter measured times and recovery toward baseline
+  support that explanation; PSI and vmstat are supporting VM-wide signals.
 verify_note: ce-lab04 is stopped and the final job timing is recorded.
 commands:
 - name: Choose an allowed CPU
@@ -63,26 +75,35 @@ commands:
     cd ~/labs/lab04
     CPU=$(python3 -c 'import os; print(min(os.sched_getaffinity(0)))')
     echo "Both workloads will use CPU $CPU"
+    systemctl is-active ce-lab04.service; echo "unit status=$? (nonzero means not active)"
   expect: One CPU permitted by this shell’s affinity; use the same shell and CPU for every phase.
+  record: Note the selected CPU and confirm no ce-lab04 neighbour is active before baseline. Keep this
+    VM shell open so CPU stays defined for all later commands.
 - name: Record the baseline three times
   where: VM terminal 1
   run: !unsafe |
     cd ~/labs/lab04
     for run in 1 2 3; do taskset -c "$CPU" python3 work.py | tee "baseline-$run.txt"; done
-    sort -k2 -n baseline-*.txt | awk 'NR==1 {min=$2} {max=$2} END {print "iteration range:", min, "-", max, "s"}'
+    awk 'NR==1 {min=max=$2} {sum+=$2; if ($2<min) min=$2; if ($2>max) max=$2} END {printf "baseline mean=%.4fs range=%.4f-%.4fs\n", sum/NR, min, max}' baseline-1.txt baseline-2.txt baseline-3.txt
+  expect: Three runs produce 18 finite iteration timings with no deliberate competitor.
+  record: Fill the Baseline row with the combined mean and range. Keep all three baseline files to
+    distinguish a change under contention from ordinary variation.
 - name: Add one bounded CPU neighbour on the same CPU
   where: VM terminal 1
   run: !unsafe |
     cd ~/labs/lab04
     sudo systemd-run --unit=ce-lab04 --collect -p RuntimeMaxSec=45s \
       taskset -c "$CPU" stress-ng --cpu 1 --timeout 40s
+    systemctl is-active ce-lab04
     taskset -c "$CPU" python3 work.py | tee loaded.txt
-    systemctl is-active --quiet ce-lab04 || echo 'Inconclusive: the neighbour ended before the measurement finished.'
+    systemctl is-active ce-lab04 || echo 'Inconclusive: the neighbour ended before the measurement finished.'
     cat /proc/pressure/cpu
     vmstat 1 5
     sudo systemctl stop ce-lab04
   expect: Compare iteration time with baseline. PSI and vmstat provide supporting waiting measurements;
     neither alone proves which task caused the slowdown.
+  record: Save loaded.txt and the neighbour's before/after active states. Record CPU PSI and vmstat r
+    as supporting observations; mark the phase inconclusive if the neighbour was not active throughout.
 - name: Cap the neighbour at 20 percent and read throttling counters
   where: VM terminal 1
   run: !unsafe |
@@ -93,17 +114,27 @@ commands:
     done
     sudo systemd-run --unit=ce-lab04 --collect -p CPUQuota=20% -p RuntimeMaxSec=45s \
       taskset -c "$CPU" stress-ng --cpu 1 --timeout 40s
-    taskset -c "$CPU" python3 work.py | tee quota.txt
     path=$(systemctl show ce-lab04 -p ControlGroup --value)
-    if systemctl is-active --quiet ce-lab04 && [ -n "$path" ]; then
-      sudo cat "/sys/fs/cgroup$path/cpu.max" "/sys/fs/cgroup$path/cpu.stat"
+    if [ -n "$path" ] && systemctl is-active --quiet ce-lab04; then
+      echo 'Neighbour active before measurement'
+      sudo cat "/sys/fs/cgroup$path/cpu.max"
+      sudo cat "/sys/fs/cgroup$path/cpu.stat" | tee quota-before.txt
+      taskset -c "$CPU" python3 work.py | tee quota.txt
+      if systemctl is-active --quiet ce-lab04; then
+        echo 'Neighbour still active after measurement'
+        sudo cat "/sys/fs/cgroup$path/cpu.stat" | tee quota-after.txt
+        awk 'NR==FNR {before[$1]=$2; next} $1 ~ /^(nr_throttled|throttled_usec)$/ {print $1 " increase=" $2-before[$1]}' quota-before.txt quota-after.txt
+      else
+        echo 'Inconclusive: the neighbour ended before the measurement finished.'
+      fi
     else
-      echo 'Inconclusive: the neighbour ended before the measurement finished.'
+      echo 'STOP: no active neighbour cgroup; this phase was not measured.'
     fi
     sudo systemctl stop ce-lab04
   expect: cpu.max should show a quota/period ratio of 0.2, and cpu.stat should show throttling. If the
-    neighbour ends before measurement finishes, shorten work.py's iteration count and repeat every phase
-    with that same workload.
+    neighbour ends before measurement finishes, this phase is inconclusive.
+  record: Save quota.txt, the cpu.max values, both cpu.stat snapshots and their printed counter increases.
+    Record whether the neighbour stayed active; the configuration alone is not evidence of enforcement.
 - name: Recover and repeat the baseline
   where: VM terminal 1
   run: !unsafe |
@@ -113,10 +144,16 @@ commands:
       systemctl list-units --all --plain --no-legend ce-lab04.service | grep -q . || break
       sleep 1
     done
+    systemctl is-active ce-lab04; echo "unit status=$? (nonzero means not active)"
     taskset -c "$CPU" python3 work.py | tee recovered.txt
-    for f in baseline-1.txt baseline-2.txt baseline-3.txt loaded.txt quota.txt recovered.txt; do
-      awk -v f="$f" '{s+=$2} END {printf "%-15s mean=%.4fs\n", f, s/NR}' "$f"
+    awk 'NR==1 {min=max=$2} {sum+=$2; if ($2<min) min=$2; if ($2>max) max=$2} END {printf "baseline mean=%.4fs range=%.4f-%.4fs\n", sum/NR, min, max}' baseline-1.txt baseline-2.txt baseline-3.txt
+    for f in loaded.txt quota.txt recovered.txt; do
+      awk -v f="$f" 'NR==1 {min=max=$2} {sum+=$2; if ($2<min) min=$2; if ($2>max) max=$2} END {printf "%s mean=%.4fs range=%.4f-%.4fs\n", f, sum/NR, min, max}' "$f"
     done
+  expect: The neighbour is no longer active. Recovered timings should move toward the baseline range;
+    report measured variation rather than assuming exact equality.
+  record: Fill the remaining mean/range cells using the printed summary and record the recovered neighbour
+    state. Use this comparison and the counter differences to answer the quota question.
 setup:
 - name: Create the finite CPU workload
   command: !unsafe |
@@ -135,6 +172,6 @@ verify:
     test -r /proc/pressure/cpu
     ! systemctl is-active --quiet ce-lab04.service
 reset: []
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 04 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 04 setup on the host. No other lab is required.
 transfer_solution: No. It changes placement and removes the intended competition for a single CPU. Keep
   placement fixed when evaluating the quota.

@@ -33,8 +33,11 @@ task:
         not.
   predict: Will a deliberate SIGKILL and a memory-limit kill have different exit statuses? Which evidence
     can distinguish them?
-  answer_with: Compare the known SIGKILL with the allocator result. Cite the matching log that identifies
-    the allocator’s cause; status 137 alone is not enough.
+  answer_with:
+  - What exit status did the deliberate SIGKILL produce, and how do you know its cause?
+  - What terminated the memory-limited allocator? Cite its PID, experiment time, unit result and matching
+    kernel or systemd-oomd evidence.
+  - Why can neither exit status 137 nor the systemd-run exit status diagnose an OOM kill by itself?
   evidence:
     columns:
     - Case
@@ -44,34 +47,74 @@ task:
     - Known SIGKILL
     - Memory-limited allocator
   transfer: Does free memory elsewhere in the VM rule out a cgroup OOM kill?
-solution: The allocator should trigger a cgroup OOM kill before its runtime bound. Status 137 is consistent
-  with SIGKILL, but only the matching memory-kill evidence explains why. If the logs show a runtime timeout
-  or a userspace kill, report that cause instead.
+solution:
+- Bash should report 137 for the deliberate SIGKILL. The command explicitly sends signal 9 to its own
+  PID, so its cause is known without inferring it from the status.
+- The allocator should exceed its 128 MiB cgroup limit before the 20-second runtime bound. A unit
+  result of oom-kill together with a matching kernel memory-cgroup kill identifies a kernel OOM kill.
+  Match the allocator PID and the saved time window. If the evidence shows timeout or a matching
+  systemd-oomd action instead, report that cause; missing evidence leaves the diagnosis unproven.
+- 137 is consistent with SIGKILL but does not explain who sent it or why; a program can also exit 137
+  explicitly. systemd-run reports the unit outcome and need not return the child's Bash exit status.
+  The unit and matching cause evidence supply the diagnosis.
 verify_note: The allocator is stopped and its termination evidence has been recorded.
 commands:
+- name: Confirm memory controls and begin an evidence record
+  where: VM terminal 1
+  run: !unsafe |
+    cd ~/labs/lab02
+    grep -w memory /sys/fs/cgroup/cgroup.controllers
+    systemctl is-active ce-lab02.service; echo "unit status=$? (nonzero means not active)"
+  expect: The memory controller is available and no previous ce-lab02 allocator is active. Stop if either
+    prerequisite is missing.
+  record: Record the controller listing and named unit state before the comparison. Stop if the memory
+    controller is missing or a previous allocator is active.
 - name: Record a deliberate SIGKILL
   where: VM terminal 1
   run: !unsafe |
     python3 -c 'import os,signal; os.kill(os.getpid(),signal.SIGKILL)'
     echo "deliberate KILL exit=$?"
   expect: Bash normally reports 137. Here you know the cause because the program deliberately sent SIGKILL.
-- name: Cause a cgroup-bounded OOM and collect unit plus kernel evidence
+  record: Fill the Known SIGKILL row with the immediately printed exit status and the explicit self-sent
+    signal as the cause. Keep these observations for comparison with the allocator.
+- name: Run the allocator within its memory and time limits
   where: VM terminal 1
   run: !unsafe |
-    since=$(date --iso-8601=seconds)
+    cd ~/labs/lab02
+    date --iso-8601=seconds > started-at.txt
     sudo systemd-run --unit=ce-lab02 --wait --collect \
       -p MemoryMax=128M -p MemorySwapMax=0 -p RuntimeMaxSec=20s \
-      /usr/bin/python3 -c 'a=[]
+      /usr/bin/python3 -c 'import os
+    print("allocator PID=" + str(os.getpid()), flush=True)
+    a=[]
     while True: a.append(b"x"*1000000)'
-    sudo journalctl -u ce-lab02 --since "$since" --no-pager
-    sudo journalctl -k --since "$since" --no-pager | grep -iE 'oom|killed process'
-    sudo journalctl -u systemd-oomd --since "$since" --no-pager
-  expect: The unit fails before the 20 s bound, with oom-kill in the unit log and a matching kernel line.
-    An oomd entry means userspace acted instead.
+    echo "systemd-run exit=$? (unit outcome, not the child's Bash status)"
+    date --iso-8601=seconds > ended-at.txt
+  expect: The unit should fail before its 20-second runtime bound. Its nonzero command status alone
+    does not identify the cause; the next step collects the evidence.
+  record: Save the printed systemd-run status and the start/end timestamps. The allocator PID is written
+    to the unit journal, which you will read next.
+- name: Match the allocator termination to unit, kernel and userspace logs
+  where: VM terminal 1
+  run: !unsafe |
+    cd ~/labs/lab02
+    since=$(cat started-at.txt)
+    cat started-at.txt ended-at.txt
+    sudo journalctl -u ce-lab02 --since "$since" --no-pager | tee unit.log
+    sudo journalctl -k --since "$since" --no-pager | grep -iE 'oom|killed process' | tee kernel.log
+    sudo journalctl -u systemd-oomd --since "$since" --no-pager | tee oomd.log
+  expect: A kernel OOM diagnosis requires the unit's oom-kill result and matching allocator PID in the
+    kernel log. A matching oomd action or runtime timeout gives a different diagnosis.
+  record: Fill the allocator row with its PID, termination result and exact matching log lines. If no
+    matching cause evidence is available, record the gap instead of labeling the result OOM.
 - name: Stop the allocator if it remains active
   where: VM terminal 1
   run: !unsafe |
     sudo systemctl stop ce-lab02.service 2>/dev/null || true
+    systemctl is-active ce-lab02.service; echo "unit status=$? (nonzero means not active)"
+  expect: ce-lab02 is inactive or already collected; no allocator remains active.
+  record: Note the final unit state alongside your saved logs. Stopping a leftover allocator restores
+    the initial condition but does not replace the termination diagnosis.
 setup:
 - name: Create the Lab 02 workspace
   command: !unsafe |
@@ -82,6 +125,6 @@ verify:
     grep -qw memory /sys/fs/cgroup/cgroup.controllers
     ! systemctl is-active --quiet ce-lab02.service
 reset: []
-prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 02 setup, then ./lab.sh ssh. No other lab is required.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 02 setup on the host. No other lab is required.
 transfer_solution: No. The allocator is constrained by its cgroup boundary. VM-wide availability and the
   cgroup’s remaining allowance are different quantities.

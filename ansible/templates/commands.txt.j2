@@ -1,21 +1,43 @@
-PROCEDURE
-Run setup and verify on the host first. Commands below run in the named
-terminals. Keep the same shell when blocks reuse variables. Use Bash without
-set -e: some failures are the observations. Stop if the baseline fails.
+{% if show_expected | default(false) %}
+COMMAND REFERENCE
+These are the same steps as the question. Compare with your recorded results;
+running them again repeats the experiment. Expected results require a working
+baseline and a confirmed fault. Explain differences using your own evidence.
+{% else %}
+RUN THE STEPS
+After setup, run these commands in a host terminal:
+
+./lab.sh {{ lab_id }} verify
+./lab.sh ssh
+
+This SSH session is VM terminal 1. If a step needs VM terminal 2, open another
+host terminal and run ./lab.sh ssh there. Keep each VM shell open while its
+variables or functions are in use. Run the blocks in order, using Bash without
+set -e; some failures are observations. Stop if the baseline does not work.
+{% endif %}
 {% for step in selected_lab.commands %}
 
-[{{ loop.index }}] {{ step.name }} — {{ step.where | default('VM terminal 1') }}
+{{ '-' * 78 }}
+{{ ('STEP ' ~ loop.index ~ ' OF ' ~ (selected_lab.commands | length) ~ ': ' ~ step.name) | wordwrap(width=78, break_long_words=false, break_on_hyphens=false) }}
+Where: {{ step.where | default('VM terminal 1') }}
 
 {{ step.run | trim }}
+
+{{ ('Record: ' ~ step.record) | wordwrap(width=78, break_long_words=false, break_on_hyphens=false) }}
+{% if show_expected | default(false) %}
+
+{{ ('Expected: ' ~ step.expect) | wordwrap(width=78, break_long_words=false, break_on_hyphens=false) }}
+{% endif %}
 {% endfor %}
 
+{{ '-' * 78 }}
 RECOVERY CHECK
 {{ selected_lab.verify_note | wordwrap(width=78, break_long_words=false, break_on_hyphens=false) }}
 {% if selected_lab.fallback | default([]) %}
 
-IF NORMAL RECOVERY FAILS
+ONLY IF THE RECOVERY STEP FAILS
 {% for step in selected_lab.fallback %}
-{{ step.name }} — {{ step.where | default('VM terminal 2') }}
+{{ step.name }} ({{ step.where | default('VM terminal 2') }})
 
 {{ step.run | trim }}
 {% endfor %}
