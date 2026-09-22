@@ -1,0 +1,216 @@
+title: Lab 35 — Namespace budgets and admission failures
+kubernetes: true
+task:
+  question: Why can an idle namespace reject a Pod, and why does lowering its quota leave existing Pods
+    running?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§12.10.1, 12.10.2 (maintained supplement; primary references
+      linked there).'
+    theory_sections:
+    - 12.10.1
+    - 12.10.2
+    theory:
+    - ResourceQuota controls aggregate admission within a namespace. This fixture permits 200m of total
+      CPU requests, 256 MiB of memory requests and ten non-terminal Pods. 100m is one tenth of one CPU.
+      Two admitted 100m requests consume the CPU-request allowance even while their applications sleep;
+      quota accounting is not a live utilization measurement.
+    - LimitRange acts on individual container or Pod resource settings. Here it supplies default requests
+      of 100m CPU and 16 MiB memory, default limits of 200m and 64 MiB, and a per-container maximum of
+      200m and 64 MiB. The same resource-less manifest is rejected before defaults exist and admitted
+      after they supply the fields required by quota.
+    - Defaults and validation are different effects. The oversized fixture explicitly requests only 100m
+      CPU and 16 MiB memory, so it would fit the remaining aggregate quota, but asks for a 128 MiB memory
+      limit. The LimitRange maximum rejects it before any container runs. It never allocates that memory;
+      this is an admission comparison, not a node-exhaustion experiment.
+    - An admission rejection means the proposed Pod object was not created. This differs from an admitted
+      Pending Pod waiting for scheduling and from a running container reaching a memory limit. A quota
+      rejection can return Forbidden even when RBAC allows create pods; read the named policy and resource
+      in the error, rather than diagnosing every 403 as an RBAC denial.
+    - Quota status reports hard allowances and used accounting and can lag a change. The supplied wait
+      reads both before the next comparison. Lowering the quota below current usage does not evict or
+      resize existing Pods. It prevents additional charged admissions; freeing enough allowance or raising
+      it allows a later create request to succeed.
+    - Quotas and per-container bounds reduce the resource footprint that a namespace can request, but
+      do not reserve physical node capacity or provide complete tenant isolation. A permitted request
+      can still fail placement, and memory/CPU limits are enforced by different runtime mechanisms. RBAC
+      must also keep tenants from raising or deleting their own budgets.
+    main_lesson: Namespace budgets govern admission, not current CPU usage. LimitRange supplies defaults
+      and checks each container; ResourceQuota checks their aggregate requests and object counts. A rejected
+      Pod does not exist, while lowering a quota does not evict existing Pods. Read the policy error and
+      observed accounting, then repair the specific constraint; combine budgets with runtime limits and
+      permission boundaries for meaningful resource isolation.
+    in_this_lab:
+    - Use ce-lab35 with sleeping Pods, a 200m CPU-request quota and explicit per-container defaults. The
+      oversized manifest tests a memory-limit rule without consuming extra memory.
+    - wait_budget waits for the exact CPU hard/used values for up to 60 observations two seconds apart,
+      then prints native quota details. Stop on its error instead of treating stale accounting as the
+      next phase.
+    readings:
+    - signal: quota hard / used
+      meaning: These are admitted resource quantities, not utilization; wait for the controller to publish
+        the intended accounting.
+    - signal: Forbidden message / can-i
+      meaning: The response identifies an admission constraint; an allowed RBAC review does not bypass
+        quota or LimitRange.
+    - signal: Pod resources / UID / Ready
+      meaning: Read injected defaults from the admitted Pod and compare existing identities after a quota
+        decrease.
+    - signal: NotFound after create failure
+      meaning: A rejected creation produced no Pod; there is no application log or scheduler placement
+        to troubleshoot.
+  predict: Predict whether each failure happens before Pod creation, during scheduling, or at runtime,
+    and what lowering a quota changes for existing Pods.
+  answer_with:
+  - Why did the unchanged resource-less manifest fail before LimitRange and succeed after it?
+  - Why did the 128 MiB limit fail even though its requests fit the remaining quota?
+  - Why was the third 100m Pod refused while RBAC allowed creation?
+  - Did reducing quota evict existing Pods, and which actions allowed a new create to succeed?
+  evidence:
+    columns:
+    - Phase
+    - Observed state
+    - Evidence / explanation
+    rows:
+    - Explicit baseline
+    - Missing requests
+    - Container limit rejected
+    - Defaults admitted
+    - Aggregate quota rejected
+    - Quota lowered
+    - Capacity freed
+    - Baseline restored
+  transfer: Does a namespace quota of two CPUs guarantee that a two-CPU Pod can be scheduled?
+solution:
+- Before LimitRange, tenant-b has no CPU/memory requests, which this quota requires. After defaults are
+  installed, the admitted Pod should show 100m CPU and 16 MiB memory requests plus the configured limits.
+  Inspect its actual spec rather than assuming the source manifest was rewritten.
+- The oversized Pod requests 100m/16 MiB, which fits beside tenant-a, but its explicit 128 MiB limit exceeds
+  the per-container 64 MiB maximum. The refusal should name that rule, and no oversized Pod should exist.
+  A runtime OOM is not involved.
+- Two admitted 100m requests total 200m. A third needs 300m in total, exceeding the namespace allowance,
+  despite the applications sleeping. The error should name budget and requests.cpu. An affirmative can-i
+  answers the authorization question only.
+- 'The two running Pods should retain their UIDs and Ready state after hard is reduced to 100m while used
+  remains 200m. Restoring hard to 200m and deleting one 100m consumer frees a slot for tenant-c. The earlier
+  rejected request is not queued: the learner must submit it again.'
+transfer_solution: No. Quota is permission to admit aggregate requests, not a reservation on any node.
+  The scheduler still needs an eligible node with sufficient allocatable capacity after existing requests
+  and other placement constraints.
+verify_note: The 200m quota has 100m used, only tenant-a remains Ready, and the temporary LimitRange is
+  removed.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 35 setup on the host.
+  No other lab is required.
+files:
+- exercise.sh
+- quota.yaml
+- defaults.yaml
+- baseline.yaml
+- defaulted.yaml
+- extra.yaml
+- oversized.yaml
+commands:
+- name: Read the working baseline and authorization
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    source ~/labs/lab35/helpers.sh
+    k get pod tenant-a -o wide
+    k get pod tenant-a -o yaml
+    wait_budget 200m 100m
+    k auth can-i create pods
+  record: 'Explicit baseline row: UID, Ready, declared requests/limits, quota hard/used and create authorization.'
+  expect: One explicit 100m request should be running within the 200m allowance.
+- name: Submit a Pod without the required requests
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k create -f ~/labs/lab35/defaulted.yaml
+    echo "create exit=$?"
+    k get pod tenant-b
+    wait_budget 200m 100m
+  record: 'Missing requests row: rejection text, exit status, missing Pod and unchanged accounting.'
+  expect: Quota should reject missing requests before creating a Pod. NotFound from get is expected.
+- name: Add defaults and test an explicit per-container violation
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k apply -f ~/labs/lab35/defaults.yaml
+    k describe limitrange container-budget
+    k create -f ~/labs/lab35/oversized.yaml
+    echo "create exit=$?"
+    k get pod oversized
+  record: 'Container limit rejected row: maximum memory limit, requested limit, rejection and absent Pod.'
+  expect: The explicit 128 MiB memory limit should exceed the 64 MiB maximum; its requests alone would
+    fit quota.
+- name: Submit the same resource-less manifest again
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k create -f ~/labs/lab35/defaulted.yaml
+    k wait pod/tenant-b --for=condition=Ready --timeout=60s --request-timeout=0
+    k get pod tenant-b -o yaml
+    wait_budget 200m 200m
+  record: 'Defaults admitted row: injected requests/limits, Pod UID, Ready and total used requests.'
+  expect: Defaulted resources should allow tenant-b to run and fill the CPU-request allowance.
+- name: Exceed the aggregate request budget
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k create -f ~/labs/lab35/extra.yaml
+    echo "create exit=$?"
+    k get pod tenant-c
+    wait_budget 200m 200m
+  record: 'Aggregate quota rejected row: named quota, requested/used/hard CPU values, exit and missing
+    Pod.'
+  expect: The third 100m request should exceed 200m total; no tenant-c Pod should be created.
+- name: Lower the budget below already admitted usage
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k patch resourcequota budget --type=merge -p '{"spec":{"hard":{"requests.cpu":"100m"}}}'
+    wait_budget 100m 200m
+    k get pods -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,READY:.status.containerStatuses[0].ready'
+  record: 'Quota lowered row: hard below used, and both existing Pod UIDs and readiness.'
+  expect: Existing Pods should remain running; quota reduction changes admission rather than evicting
+    them.
+- name: Free allowance and retry the rejected request
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k apply -f ~/labs/lab35/quota.yaml
+    wait_budget 200m 200m
+    k delete pod tenant-a --wait=true --timeout=30s
+    wait_budget 200m 100m
+    k create -f ~/labs/lab35/extra.yaml
+    k wait pod/tenant-c --for=condition=Ready --timeout=60s --request-timeout=0
+    wait_budget 200m 200m
+  record: 'Capacity freed row: accounting before and after deletion, and the successful new tenant-c creation.'
+  expect: After one consumer is removed, the repeated request should fit. The previous rejection did not
+    queue a Pod.
+- name: Restore the original explicit baseline
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k delete pod tenant-b tenant-c --wait=true --timeout=30s
+    wait_budget 200m 0
+    k delete limitrange container-budget
+    k apply -f ~/labs/lab35/baseline.yaml
+    k wait pod/tenant-a --for=condition=Ready --timeout=60s --request-timeout=0
+    wait_budget 200m 100m
+    k get pods
+  record: 'Baseline restored row: only tenant-a, Ready, 200m hard and 100m used; no temporary defaults.'
+  expect: The original explicit Pod and quota should be restored without any stress load.
+setup:
+- name: Prepare namespace accounting and one explicit workload
+  command: !unsafe |
+    cat > ~/labs/lab35/helpers.sh <<'SH'
+    k() { kubectl --kubeconfig="$HOME/labs/lab35/kubeconfig" --context=kind-lab35 --namespace=ce-lab35 --request-timeout=10s "$@"; }
+    source "$HOME/labs/lab35/exercise.sh"
+    SH
+    source ~/labs/lab35/helpers.sh
+    k create namespace ce-lab35 --dry-run=client -o yaml | k apply -f -
+    k apply -f ~/labs/lab35/quota.yaml
+    wait_budget 200m 0
+    k apply -f ~/labs/lab35/baseline.yaml
+    k wait pod/tenant-a --for=condition=Ready --timeout=90s --request-timeout=0
+    wait_budget 200m 100m
+verify:
+- name: Check the explicit baseline and available budget
+  command: !unsafe |
+    source ~/labs/lab35/helpers.sh
+    k wait pod/tenant-a --for=condition=Ready --timeout=30s --request-timeout=0
+    wait_budget 200m 100m
+    k get limitranges -o json | jq -e '.items | length == 0' >/dev/null
+reset: []

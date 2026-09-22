@@ -1,0 +1,31 @@
+{% macro wrap(text) %}{{ text | wordwrap(width=78, break_long_words=false, break_on_hyphens=false) }}{% endmacro %}
+{{ selected_lab.title }}
+{{ '=' * (selected_lab.title | length) }}
+
+WHAT THIS LAB ASKS
+{{ wrap(selected_lab.task.question) }}
+{% for point in selected_lab.task.brief.in_this_lab %}
+
+{% if selected_lab.task.brief.in_this_lab | length > 1 %}
+{{ ('- ' ~ point) | wordwrap(width=76, break_long_words=false, break_on_hyphens=false) | indent(2) }}
+{% else %}
+{{ wrap(point) }}
+{% endif %}
+{% endfor %}
+
+QUESTIONS TO ANSWER
+{% for prompt in selected_lab.task.answer_with %}
+{{ (loop.index ~ '. ' ~ prompt) | wordwrap(width=75, break_long_words=false, break_on_hyphens=false) | indent(3) }}
+{% endfor %}
+
+THEORY YOU NEED
+{% for paragraph in selected_lab.task.brief.theory %}
+{% if not loop.first %}
+
+{% endif %}
+{{ wrap(paragraph) }}
+{% endfor %}
+
+MAIN LESSON TO LEARN IN THIS LAB
+{{ wrap(selected_lab.task.brief.main_lesson) }}
+{% include 'commands.txt.j2' %}

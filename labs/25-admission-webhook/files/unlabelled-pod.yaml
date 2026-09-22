@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unlabelled
+  labels:
+    app: policy-demo
+spec:
+  terminationGracePeriodSeconds: 2
+  containers:
+  - name: web
+    image: python:3.12-slim
+    command:
+    - python
+    - -u
+    - -m
+    - http.server
+    - '8080'
+    resources:
+      requests:
+        cpu: 20m
+        memory: 16Mi
+      limits:
+        memory: 128Mi

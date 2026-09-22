@@ -1,0 +1,91 @@
+---
+- name: Exercise the real reset tasks against isolated resources
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lab_root: "{{ reset_fixture }}/labs"
+    lab_workspace: "{{ lab_root }}/lab{{ lab_id }}"
+    lab_cluster: "lab{{ lab_id }}"
+    lab_action: reset
+  environment:
+    PATH: "{{ reset_fixture }}/bin:{{ lookup('env', 'PATH') }}"
+    RESET_FIXTURE: "{{ reset_fixture }}"
+    HOME: "{{ reset_fixture }}"
+  tasks:
+    - name: Find the real lab definitions
+      ansible.builtin.find:
+        paths: "{{ playbook_dir }}/../../labs"
+        patterns: lab.yml
+        recurse: true
+        depth: 2
+      register: reset_definitions
+
+    - name: Test each Kubernetes reset, including repeated and never-created clusters
+      ansible.builtin.include_tasks: reset-case.yml
+      loop: ['14', '14', '13', '10', '12', '19', '20', '21', '23', '24', '25', '27', '28', '29', '30', '31', '32', '33', '34', '35', '36']
+      loop_control:
+        loop_var: lab_id
+
+    - name: Test container and volume cleanup
+      ansible.builtin.include_tasks: reset-case.yml
+      vars:
+        lab_id: '18'
+
+    - name: Keep the written design on repeated setup
+      ansible.builtin.include_tasks: ../../ansible/tasks/reset.yml
+      vars:
+        lab_id: '16'
+        lab_action: setup
+        selected_lab: {preserve_on_setup: true}
+
+    - name: Check the design was preserved
+      ansible.builtin.command: "test -f {{ lab_root }}/lab16/marker"
+      changed_when: false
+
+    - name: Remove the design on explicit reset
+      ansible.builtin.include_tasks: reset-case.yml
+      vars:
+        lab_id: '16'
+
+    - name: Retain evidence when cluster deletion fails
+      vars:
+        lab_id: '11'
+        selected_lab: {kubernetes: true}
+      environment:
+        FAIL_DELETE: '1'
+      block:
+        - ansible.builtin.include_tasks: ../../ansible/tasks/reset.yml
+        - ansible.builtin.fail:
+            msg: Cluster deletion failure was hidden.
+      rescue:
+        - ansible.builtin.assert:
+            that: ansible_failed_task.name == "Delete only this lab's kind cluster, including a broken control plane"
+
+    - name: Reject a unit owned by another lab before any mutation
+      vars:
+        lab_id: '02'
+        selected_lab: {units: ['ce-lab03-a.service']}
+      block:
+        - ansible.builtin.include_tasks: ../../ansible/tasks/reset.yml
+        - ansible.builtin.fail:
+            msg: Foreign unit was accepted.
+      rescue:
+        - ansible.builtin.assert:
+            that: ansible_failed_task.name == 'Validate the workspace and owned service names'
+
+    - name: Check other labs and shared infrastructure survived
+      ansible.builtin.stat:
+        path: "{{ reset_fixture }}/{{ item }}"
+      loop:
+        - labs/lab11/marker
+        - clusters/lab11
+        - labs/lab17/marker
+        - containers/ce-lab17-exec
+        - volumes/other-data
+        - labs/book/marker
+        - labs/.provisioned
+      register: survivors
+
+    - ansible.builtin.assert:
+        that: survivors.results | map(attribute='stat.exists') | min

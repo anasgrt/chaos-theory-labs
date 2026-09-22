@@ -1,25 +1,28 @@
-{% set lab_id = lab_definition | basename | regex_replace('-.*$', '') %}
+{% macro wrap(text) %}{{ text | wordwrap(width=78, break_long_words=false, break_on_hyphens=false) }}{% endmacro %}
 {{ selected_lab.title }}
 {{ '=' * (selected_lab.title | length) }}
 
-Solution: {{ selected_lab.solution }}
-Verify:   {{ selected_lab.verify_note }}
+MAIN LESSON TO LEARN IN THIS LAB
+{{ wrap(selected_lab.task.brief.main_lesson) }}
 
-Practical commands
-------------------
-Source: ~/labs/chaos-labs.md, Lab {{ lab_id | int }} core experiment, adapted to the fixture created by setup.
-Run each block in the VM (vagrant ssh) unless its label names another place.
-"same shell" means the block reuses variables or functions from the previous block.
-{% for step in selected_lab.commands | default([]) %}
+WORKED ANSWERS
+Expected patterns for the numbered questions, not measurements from your VM.
+The steps and commands that produce them follow the answers.
+{% for prompt in selected_lab.task.answer_with %}
 
-[{{ loop.index }}] {{ step.name }}
-    where: {{ step.where | default('VM terminal 1') }}
+{{ wrap(loop.index ~ '. ' ~ prompt) }}
 
-{{ step.run | trim }}
-{% if step.expect is defined %}
-
-Expect: {{ step.expect }}
-{% endif %}
+{{ wrap(selected_lab.solution[loop.index0]) }}
 {% endfor %}
 
-Fixture cleanup (Mac host, project folder): ./ansible/run-lab.sh {{ lab_id }} reset
+APPLY THE SAME REASONING
+{{ wrap(selected_lab.task.transfer) }}
+
+{{ wrap(selected_lab.transfer_solution) }}
+
+{% set show_expected = true %}
+{% include 'commands.txt.j2' %}
+
+HOST TERMINAL
+./lab.sh {{ lab_id }} question   read the question again
+./lab.sh {{ lab_id }} reset      remove only this lab's resources and files

@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: env-consumer
+  labels: {app: env-consumer}
+spec:
+  containers:
+  - name: app
+    image: python:3.12-slim
+    command: [sleep, "86400"]
+    env:
+    - name: APP_PASSWORD
+      valueFrom:
+        secretKeyRef: {name: app-credentials, key: password}
+    volumeMounts:
+    - {name: scripts, mountPath: /scripts, readOnly: true}
+  volumes:
+  - name: scripts
+    configMap: {name: secret-scripts}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: file-consumer
+  labels: {app: file-consumer}
+spec:
+  serviceAccountName: no-secret-access
+  containers:
+  - name: app
+    image: python:3.12-slim
+    command: [sleep, "86400"]
+    volumeMounts:
+    - {name: credential, mountPath: /etc/app-credentials, readOnly: true}
+    - {name: scripts, mountPath: /scripts, readOnly: true}
+  volumes:
+  - name: credential
+    secret: {secretName: app-credentials}
+  - name: scripts
+    configMap: {name: secret-scripts}

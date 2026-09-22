@@ -1,0 +1,235 @@
+title: Lab 31 — Default deny, and what a policy does not stop
+kubernetes: true
+task:
+  question: Which traffic does a NetworkPolicy stop, and what does the caller see when it does?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§12.8.1–12.8.2.'
+    theory_sections:
+    - 12.8.1
+    - 12.8.2
+    theory:
+    - 'A NetworkPolicy is namespaced and applies to the Pods its podSelector matches. An empty selector
+      matches every Pod in the namespace. Naming a policy type without rules for it is what creates a
+      default deny: policyTypes Ingress with no ingress block grants no incoming connections. Other
+      matching policies can still allow traffic; traffic from a Pod''s own node and replies to allowed
+      connections are also exempt.'
+    - Policies are additive allow-lists. A second policy that permits one source does not weaken the first;
+      what is permitted is the union of every matching policy. There is no deny rule to write and no ordering
+      to reason about. A Pod-to-Pod connection must be allowed by both the source's egress policies and
+      the destination's ingress policies when those directions are isolated.
+    - Read the selectors twice. A podSelector inside an ingress from entry selects sources in the policy's
+      own namespace, so crossing a namespace boundary needs a namespaceSelector. An entry that lists both
+      selects their intersection, and separate list entries are alternatives.
+    - The API server stores these objects whether or not anything enforces them. Enforcement belongs to
+      the network plugin, so a cluster whose plugin ignores NetworkPolicy accepts every policy and changes
+      no traffic. The first evidence is therefore a measured block, not a created object.
+    - This lab's network plugin drops denied traffic. A refusal returns at once; a drop leaves the caller
+      waiting until its own timeout expires. The probe in this lab carries a five-second budget and prints
+      the elapsed milliseconds, so an allowed request and a denied one are told apart by shape as well
+      as by result.
+    - 'Egress rules cover name resolution as well as the connection that follows. The resolver is a Pod
+      in another namespace, so a default-deny egress policy stops DNS first, and the lookup fails slowly:
+      every search-list candidate is tried and dropped in turn.'
+    - Allowing UDP and TCP port 53 to the kube-dns Pods in kube-system restores resolution without allowing
+      anything else. The lookup then answers in milliseconds again while the connection to that address
+      stays denied, which separates a name that cannot be resolved from a destination that cannot be reached.
+    - Each case in this lab changes exactly one object. The workloads, the image and the probe never change,
+      which is what makes the selector rather than the workload the explanation for a difference.
+    main_lesson: >-
+      For Pod-to-Pod traffic, both source egress and destination ingress must allow the connection;
+      matching policies add allowed paths within each direction. Default deny supplies no allowed
+      paths. A supporting network plugin must enforce these rules. Measure DNS and HTTP separately:
+      allowing name resolution does not grant access to the resolved address, and a policy object
+      alone proves no traffic isolation.
+    in_this_lab:
+    - Use namespace ce-lab31 with one server behind a Service and two identical clients that differ only
+      in a label, then add a default deny, an allow rule, an egress deny and a DNS allow, one at a time.
+    - wait_network_recovery retries the labelled client’s HTTP request after removing the policies and
+      reports an error if HTTP 200 is not observed. The individual probes still show each client’s final
+      result.
+    readings:
+    - signal: ok status=200
+      meaning: The request completed. Its elapsed_ms shows the normal cost of this path inside the cluster.
+    - signal: failed URLError
+      meaning: No response arrived. Compare elapsed_ms with the five-second budget to tell a drop from
+        a refusal.
+    - signal: elapsed_ms near 5000
+      meaning: The caller waited out its own timeout, which is what a dropped packet looks like from the
+        client side.
+    - signal: dns ... resolved / failed gaierror
+      meaning: Whether the name resolved, and how long it took. A failure after tens of seconds means
+        the queries were dropped rather than answered.
+    - signal: kubectl get networkpolicy
+      meaning: The objects that exist. Accepted objects are not evidence of enforcement; the measurements
+        are.
+  predict: Predict both clients' results after a default deny, after an allow rule for one label, and
+    what a default-deny egress does to name resolution.
+  answer_with:
+  - What did each client see after the default-deny ingress policy, and how long did it take?
+  - Why did one client succeed and the identical one fail after the allow rule?
+  - What did the default-deny egress break first, and why that?
+  - What changed once egress to kube-dns was allowed?
+  evidence:
+    columns:
+    - Policy in place
+    - Labelled client
+    - Unlabelled client
+    - DNS
+    rows:
+    - No policy
+    - Default deny ingress
+    - Allow labelled client
+    - Default deny egress
+    - Egress to kube-dns allowed
+    - Policies removed
+  transfer: A namespace has a default-deny ingress policy. Does that protect it from a Pod in another
+    namespace?
+solution:
+- 'With the default deny in place both clients should fail with no response, each waiting out the probe''s
+  own five-second budget, so elapsed_ms lands near 5000 rather than returning at once. That shape is the
+  evidence that the traffic was dropped: a refusal would have returned in milliseconds. Cite your measured
+  values for both clients.'
+- The allow rule selects sources by label, not by workload. The client carrying role=allowed matches the
+  ingress from entry and should return HTTP 200 in a few milliseconds, while the unlabelled client, which
+  runs the same image and the same probe in the same namespace, keeps timing out. Policies are additive, so
+  the earlier default deny still covers everything the allow rule does not name.
+- The egress policy selects the labelled client and permits nothing, so name resolution fails before any
+  connection is attempted. The resolver is a Pod in kube-system, and its queries are dropped rather than
+  refused, so the lookup fails slowly after every search-list candidate has been tried. The request by IP
+  fails as well, because egress covers that connection too.
+- 'Allowing UDP and TCP 53 to the kube-dns Pods restores resolution only. The lookup should answer in
+  milliseconds instead of tens of seconds, while the HTTP request to the server still fails: nothing in that
+  rule permits the connection. Report both measurements; the change in the failure''s speed is the evidence
+  that the queries now reach CoreDNS.'
+transfer_solution: Yes, for traffic arriving at those Pods. An ingress policy applies to the destination
+  Pods, so it denies sources in every namespace until a rule names them, and crossing a boundary requires a
+  namespaceSelector. It says nothing about what those Pods may reach, which is what an egress policy covers.
+verify_note: No NetworkPolicy remains in the namespace, both clients reach the server by name, and the
+  server is Ready.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 31 setup on the host. No
+  other lab is required.
+files:
+- netprobe.py
+- workloads.yaml
+- deny-ingress.yaml
+- allow-client.yaml
+- deny-egress.yaml
+- allow-dns-egress.yaml
+- exercise.sh
+commands:
+- name: Measure both clients with no policy in place
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab31/exercise.sh
+    source ~/labs/lab31/helpers.sh
+    k get networkpolicy
+    k get pods -o custom-columns='NAME:.metadata.name,ROLE:.metadata.labels.role,IP:.status.podIP'
+    probe client http server
+    probe client-unlabelled http server
+    probe client dns server
+  record: 'No policy row: both clients'' results and elapsed_ms, the DNS result, and which Pod carries
+    the role label.'
+  expect: Both clients should return HTTP 200 in a few milliseconds and the name should resolve, because
+    nothing restricts this namespace yet.
+- name: Apply a default deny for all ingress
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k apply -f ~/labs/lab31/deny-ingress.yaml
+    k get networkpolicy default-deny-ingress -o jsonpath='{.spec}{"\n"}'
+    sleep 5
+    probe client http server
+    probe client-unlabelled http server
+  record: 'Default deny ingress row: the policy spec, and both clients'' results with elapsed_ms.'
+  expect: An empty podSelector with Ingress and no rules should stop both clients, and each should wait
+    out its own five-second budget rather than being refused.
+- name: Allow only the labelled client
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k apply -f ~/labs/lab31/allow-client.yaml
+    k get networkpolicy -o custom-columns='NAME:.metadata.name,SELECTOR:.spec.podSelector'
+    sleep 5
+    probe client http server
+    probe client-unlabelled http server
+  record: 'Allow labelled client row: both policies, and both clients'' results with elapsed_ms.'
+  expect: The client carrying role=allowed should return HTTP 200 quickly while the identical unlabelled
+    client keeps timing out; the deny policy is still in force for everything the allow rule does not
+    name.
+- name: Deny all egress from the allowed client
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k apply -f ~/labs/lab31/deny-egress.yaml
+    sleep 5
+    probe client dns server
+    SERVER_IP=$(k get pod server -o jsonpath='{.status.podIP}')
+    probe client http "$SERVER_IP:8080"
+    probe client-unlabelled dns server
+  record: 'Default deny egress row: the DNS result and elapsed_ms from the selected client, the request
+    by IP, and the unselected client.'
+  expect: Resolution from the selected client should fail slowly because every search-list candidate is
+    dropped in turn, and the request by IP should fail as well. The unlabelled client, which this policy
+    does not select, should still resolve in milliseconds.
+- name: Allow egress to the cluster resolver only
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k apply -f ~/labs/lab31/allow-dns-egress.yaml
+    k get networkpolicy default-deny-egress -o jsonpath='{.spec.egress}{"\n"}'
+    sleep 5
+    probe client dns server
+    probe client http server
+  record: 'Egress to kube-dns allowed row: the egress rule, the DNS result with elapsed_ms, and the HTTP
+    result.'
+  expect: Resolution should answer in milliseconds instead of tens of seconds, while the HTTP request
+    still fails because nothing in that rule permits the connection.
+- name: Remove every policy and confirm recovery
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k delete -f ~/labs/lab31/deny-ingress.yaml -f ~/labs/lab31/allow-client.yaml -f ~/labs/lab31/allow-dns-egress.yaml --ignore-not-found
+    k get networkpolicy
+    wait_network_recovery
+    probe client http server
+    probe client-unlabelled http server
+    probe client dns server
+  record: 'Policies removed row: the remaining policies, both clients'' results and the DNS result.'
+  expect: With no policy left, both clients should return HTTP 200 in a few milliseconds and the name
+    should resolve again, matching the first row.
+setup:
+- name: Prepare the segmentation fixture and probe helpers
+  command: !unsafe |
+    mkdir -p ~/labs/lab31
+    cat > ~/labs/lab31/helpers.sh <<'SH'
+    k() { kubectl --kubeconfig="$HOME/labs/lab31/kubeconfig" --context=kind-lab31 --namespace=ce-lab31 --request-timeout=10s "$@"; }
+    probe() {
+      local pod=$1 action=$2 target=$3
+      if [ "$action" = http ]; then
+        k exec "$pod" -- python -u /scripts/netprobe.py http "http://$target/"
+      else
+        k exec "$pod" -- python -u /scripts/netprobe.py dns "$target"
+      fi
+    }
+    SH
+    source ~/labs/lab31/helpers.sh
+    for i in $(seq 1 90); do k get --raw /readyz >/dev/null 2>&1 && break; sleep 2; done
+    k get nodes >/dev/null
+    k create namespace ce-lab31 --dry-run=client -o yaml | k apply -f -
+    k create configmap network-scripts --from-file=netprobe.py="$HOME/labs/lab31/netprobe.py" --dry-run=client -o yaml | k apply -f -
+    k delete networkpolicy --all --ignore-not-found --wait=true --timeout=60s
+    k delete pod server client client-unlabelled --ignore-not-found --wait=true --timeout=60s
+    k apply -f ~/labs/lab31/workloads.yaml
+    k wait pods --all --for=condition=Ready --timeout=120s --request-timeout=0
+verify:
+- name: Verify both clients reach the server with no policy in place
+  command: !unsafe |
+    source ~/labs/lab31/helpers.sh
+    k wait pods --all --for=condition=Ready --timeout=60s --request-timeout=0
+    test -z "$(k get networkpolicy -o name)"
+    output=$(probe client http server; probe client-unlabelled http server)
+    printf '%s\n' "$output"
+    test "$(printf '%s\n' "$output" | grep -c 'ok status=200')" = 2
+reset: []
+fallback:
+- name: Remove every policy in the namespace without the helpers
+  where: VM terminal 2
+  run: !unsafe |
+    kubectl --kubeconfig="$HOME/labs/lab31/kubeconfig" --context=kind-lab31 --namespace=ce-lab31 \
+      delete networkpolicy --all --ignore-not-found
+    kubectl --kubeconfig="$HOME/labs/lab31/kubeconfig" --context=kind-lab31 --namespace=ce-lab31 get pods

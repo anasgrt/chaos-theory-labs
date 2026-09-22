@@ -1,0 +1,119 @@
+title: Lab 26 — Container privilege boundaries and hardening
+task:
+  question: How much authority does this container actually have, and which flag granted it?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§5.15.1–5.15.2.'
+    theory_sections: [5.15.1, 5.15.2]
+    theory:
+    - A container is a process with several independent boundaries around it. Docker's default gives it root inside the container but only a bounded capability set, an active seccomp filter, its own PID namespace and a small /dev. None of that is visible from the image; it comes from how the container was started.
+    - Read the boundary from the process, not from the command line. /proc/self/status reports CapEff as a hexadecimal bitmask of effective capabilities, NoNewPrivs as 0 or 1, and Seccomp as 0 for no filter or 2 for an active one. /proc lists exactly the processes this container can see, and /dev lists the devices it was given.
+    - 'Each flag widens one boundary. --pid=host removes the PID namespace, so the container sees the VM''s processes, while its capabilities stay exactly as they were. --privileged is not one setting: it grants the full capability set, disables the seccomp filter and exposes host devices at the same time, which is why it is rarely the minimum change.'
+    - The hardening controls are equally distinct. --user changes the identity only; --cap-drop ALL empties the capability sets, so privileged operations fail with EPERM even for UID 0; --security-opt no-new-privileges sets NoNewPrivs=1, so a set-user-ID binary cannot raise privileges later; --read-only makes the image layer immutable, which is why this case adds --tmpfs /tmp for paths that must stay writable.
+    - Compare what was requested with what took effect. docker inspect shows the configuration; /proc/self/status shows the result. A container whose CapEff is still full has not been hardened, whatever its command line says. Reducing authority also does not repair an application that genuinely needs a capability, so check each removal against what the workload does.
+    main_lesson: >-
+      Container authority comes from independent runtime controls, not the image or the word root
+      alone. Host PID visibility does not grant extra capabilities, while privileged mode widens
+      several boundaries together. Compare requested settings with effective identity, capabilities,
+      seccomp, process visibility and mounts; remove only the authority the workload does not need,
+      and verify that its required operations still work.
+    in_this_lab:
+    - Run the same python:3.12-slim image as a default container, with --pid=host, with --privileged and hardened, recording identity, capabilities, visibility, devices and write access for each.
+    readings:
+    - {signal: 'uid / gid', meaning: 'The numeric identity the process runs as inside the container. Root here is still root against the kernel unless capabilities are removed.'}
+    - {signal: 'CapEff / CapBnd', meaning: 'Effective and bounding capability bitmasks from /proc/self/status. Zero means no capability; the default set and the full set are different nonzero values.'}
+    - {signal: 'NoNewPrivs / Seccomp', meaning: 'NoNewPrivs=1 blocks later privilege gain through set-user-ID binaries. Seccomp=2 means a syscall filter is active and 0 means none is.'}
+    - {signal: 'visible_pids / pid1_cmdline', meaning: 'How many processes this container sees, and what its PID 1 is. Seeing the VM''s init means the PID namespace boundary is gone.'}
+    - {signal: 'write_root / capability_check', meaning: 'A write to / shows whether the root filesystem is read-only; the chown probe shows whether CAP_CHOWN is available. Both print the refusal.'}
+  predict: Predict uid, CapEff, NoNewPrivs, Seccomp, visible processes and the two probes for the default, host-PID, privileged and hardened containers.
+  answer_with:
+  - Which boundaries is the default container already relying on?
+  - With --pid=host, what changed and what stayed the same?
+  - Which three boundaries did --privileged change at once?
+  - Which flag produced each difference in the hardened container?
+  evidence:
+    columns: [Case, uid / CapEff, NoNewPrivs / Seccomp, Visibility / devices / probes]
+    rows: [Default, Host PID namespace, Privileged, Hardened]
+  transfer: A team fixes a permission error with --privileged. Which evidence finds the minimum change?
+solution:
+- The default container should run as uid 0 with a bounded nonzero CapEff, Seccomp=2, NoNewPrivs=0, a single
+  visible PID, a short /dev with no block devices, a writable root layer and an allowed chown. It is already
+  relying on a capability set, a syscall filter and a private PID namespace, none of which the image chose.
+- Adding --pid=host should leave uid, CapEff, Seccomp and the device list identical while the visible process
+  count rises to the VM's processes and pid1_cmdline becomes the VM's init rather than the report program.
+  Visibility and capability are separate boundaries, so this flag grants observation of every process on the
+  machine without adding a single capability.
+- The privileged container should show CapEff as the full mask rather than the default subset, Seccomp=0 instead
+  of 2, and a much longer /dev including block devices. One flag therefore removed the capability limit, the
+  syscall filter and the device restriction together, which is why it is almost never the smallest change
+  that fixes a specific failure.
+- The hardened container should show uid 10001 from --user, CapEff all zeros from --cap-drop ALL with the
+  chown probe refused with EPERM, NoNewPrivs=1 from no-new-privileges, and a failed write to / from --read-only
+  while /tmp stays writable because of --tmpfs. docker inspect should report the same ReadonlyRootfs, CapDrop
+  and User values, which is the check that a requested control actually took effect.
+transfer_solution: They widened capabilities, the seccomp filter and device access at once. Instead, reproduce the failure, read the refused operation and the errno, compare CapEff before and after, then grant only the single capability that operation requires and verify it in /proc/self/status.
+verify_note: All four experiment containers were removed after their evidence was recorded, and the report program remains in the lab workspace.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 26 setup on the host. No other lab is required.
+files: [report.py]
+commands:
+- name: Run the default container and record its boundaries
+  where: VM terminal 1
+  run: !unsafe |
+    docker run --name ce-lab26-default -v ~/labs/lab26/report.py:/report.py:ro python:3.12-slim python -u /report.py
+    docker inspect -f 'User={{.Config.User}} Privileged={{.HostConfig.Privileged}} PidMode={{.HostConfig.PidMode}} ReadonlyRootfs={{.HostConfig.ReadonlyRootfs}} CapDrop={{.HostConfig.CapDrop}}' ce-lab26-default
+  record: 'Default row: uid and gid, CapEff, CapBnd, NoNewPrivs, Seccomp, visible_pids, pid1_cmdline,
+    dev_entries, both probes and the inspected configuration.'
+  expect: The default container should already be limited by a capability set, a seccomp filter and its
+    own PID namespace, without the image asking for any of it.
+- name: Remove only the PID namespace boundary
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    docker run --name ce-lab26-hostpid --pid=host -v ~/labs/lab26/report.py:/report.py:ro python:3.12-slim python -u /report.py
+    docker inspect -f 'PidMode={{.HostConfig.PidMode}} Privileged={{.HostConfig.Privileged}}' ce-lab26-hostpid
+  record: 'Host PID namespace row: visible_pids, pid1_cmdline, CapEff, Seccomp and the device count. Mark
+    every value identical to the default.'
+  expect: Only visibility should change. Capabilities, the seccomp filter and the device list should match
+    the default case exactly.
+- name: Run the same image privileged
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    docker run --name ce-lab26-privileged --privileged -v ~/labs/lab26/report.py:/report.py:ro python:3.12-slim python -u /report.py
+    docker inspect -f 'Privileged={{.HostConfig.Privileged}} SecurityOpt={{.HostConfig.SecurityOpt}}' ce-lab26-privileged
+  record: 'Privileged row: CapEff, CapBnd, Seccomp, dev_entries, the block devices found and both probes.'
+  expect: This single flag should change the capability mask, the seccomp filter and the device list at
+    the same time.
+- name: Run the hardened container and check the controls took effect
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    docker run --name ce-lab26-hardened --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp -v ~/labs/lab26/report.py:/report.py:ro python:3.12-slim python -u /report.py
+    docker inspect -f 'User={{.Config.User}} CapDrop={{.HostConfig.CapDrop}} ReadonlyRootfs={{.HostConfig.ReadonlyRootfs}} SecurityOpt={{.HostConfig.SecurityOpt}} Tmpfs={{.HostConfig.Tmpfs}}' ce-lab26-hardened
+  record: 'Hardened row: uid and gid, CapEff, NoNewPrivs, Seccomp, write_root, write_tmp, capability_check
+    and the inspected settings.'
+  expect: Identity, capabilities, privilege gain and root-filesystem writes should each change, and the
+    inspected configuration should agree with the measured result.
+- name: Collect the four results and remove the containers
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    for name in default hostpid privileged hardened; do
+      printf '== %s\n' "$name"
+      docker logs "ce-lab26-$name"
+    done
+    docker rm -f ce-lab26-default ce-lab26-hostpid ce-lab26-privileged ce-lab26-hardened
+    docker ps -a --filter 'name=^/ce-lab26-' --format '{{.Names}}'
+  record: The four cases side by side, and whether any ce-lab26 container remains.
+  expect: The four rows should differ only where a flag changed a boundary, and no ce-lab26 container
+    should remain afterwards.
+setup:
+- name: Prepare the container privilege workspace
+  command: !unsafe |
+    mkdir -p ~/labs/lab26
+    docker image inspect python:3.12-slim >/dev/null
+    docker ps -aq --filter 'name=^/ce-lab26-' | xargs -r docker rm -f
+verify:
+- name: Check the privilege fixture
+  command: !unsafe |
+    test -s ~/labs/lab26/report.py
+    test -z "$(docker ps -aq --filter 'name=^/ce-lab26-')"
+reset:
+- name: Remove only this lab's privilege test containers
+  command: !unsafe |
+    docker ps -aq --filter 'name=^/ce-lab26-' | xargs -r docker rm -f

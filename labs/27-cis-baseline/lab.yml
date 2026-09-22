@@ -1,0 +1,227 @@
+title: Lab 27 — Reading a cluster against the CIS benchmark
+kubernetes: true
+task:
+  question: Which benchmark controls does an untouched cluster fail, and what does remediating one actually
+    cost?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§12.6.1–12.6.2.'
+    theory_sections:
+    - 12.6.1
+    - 12.6.2
+    theory:
+    - The CIS Kubernetes Benchmark is a numbered list of configuration checks, each with an expected value
+      and a remediation. Nothing in the cluster enforces it. A scan reports the difference between what
+      is configured and what the benchmark expects, and every finding still has to be judged against what
+      the cluster is for.
+    - The settings it checks live in different places, so one scan reads several interfaces. Group 1.1
+      is file permissions on the control-plane node. Group 1.2 is API server flags. Group 4.2 is the kubelet's
+      own configuration. Group 5 is ordinary RBAC objects.
+    - This lab checks six controls with a small script. 1.1.1 and 1.1.13 stat two files inside the node
+      container. 1.2.1 and 1.2.21 read the flags the API server was started with. 4.2.1 reads the kubelet's
+      running configuration through its configz endpoint. 5.1.1 lists every subject bound to cluster-admin.
+    - A flag in a file is a request; the flag the process was started with is the configuration. The scan
+      reads the API server's command from its mirror Pod rather than from the manifest on disk, so a manifest
+      edit the kubelet has not applied yet cannot be mistaken for a remediated control.
+    - 'A kubeadm-built cluster passes some controls and fails others before anyone touches it: --anonymous-auth
+      and --profiling are simply not set, and both defaults are permissive. Freshly installed and benchmarked
+      are different states, which is the first measurement this lab takes.'
+    - Remediating a control-plane flag changes the static Pod manifest on the node. The kubelet notices
+      and restarts that component, so the API server can be briefly unavailable. Wait for /readyz and
+      the changed mirror-Pod command before scanning again. Time until these checks pass includes detection
+      and startup; it is not a measurement of the outage duration.
+    - Each change here is reverted, so the cluster ends where it started. That also keeps the comparison
+      honest, because the only thing that moved a control was the change made immediately before it.
+    main_lesson: >-
+      A benchmark finding is a comparison with a configuration rule, not enforcement or proof of
+      overall security. Inspect the relevant effective setting, change one control, and rescan;
+      editing a static Pod manifest can restart the API server before the new setting takes effect.
+      Confirm both the intended configuration and recovery, and limit conclusions to the six
+      controls actually checked here.
+    in_this_lab:
+    - Scan the lab27 cluster, then change one file mode, one API server flag and one RBAC binding, re-scanning
+      after each change and after restoring it.
+    - Setup supplies two API server manifests that differ only by --profiling=false. install_apiserver
+      copies the chosen file into the lab node and atomically installs it. wait_profiling checks readiness
+      plus the applied mirror-Pod argument; it reports convergence time, not measured downtime.
+    readings:
+    - signal: PASS / FAIL
+      meaning: One line per control with its number, expected value and observed value. The observed value
+        is what makes a finding actionable.
+    - signal: unset (defaults to true)
+      meaning: The flag is absent, so the permissive default applies. An absent setting is a finding,
+        not a missing measurement.
+    - signal: scan failed
+      meaning: The scan could not read something, usually because the API server is restarting. That is
+        an error, not a failed control; wait and repeat it.
+    - signal: readyz
+      meaning: The API server's readiness endpoint. Use it to tell a restarting control plane from a broken
+        one before drawing conclusions.
+    - signal: k / cis_scan
+      meaning: kubectl fixed to kind-lab27, and the scan helper that runs the six checks against this
+        cluster.
+  predict: Predict which of the six controls an untouched cluster fails, and what each of the three changes
+    does to the scan.
+  answer_with:
+  - Which controls failed on an untouched cluster, and what observed value makes each a finding?
+  - Which control moved when admin.conf changed mode, and what restored it?
+  - Why does changing a static Pod manifest restart the API server, and what confirms the new setting
+    was applied?
+  - What did control 5.1.1 report, and did the final scan match the baseline?
+  evidence:
+    columns:
+    - Scan
+    - Control that moved
+    - Observed value
+    - Pass and fail totals
+    rows:
+    - Baseline
+    - admin.conf mode 644
+    - admin.conf restored
+    - profiling flag applied
+    - profiling flag reverted
+    - cluster-admin bound to a ServiceAccount
+    - binding removed
+  transfer: A manifest on disk contains --profiling=false. What would you check before accepting the pass?
+solution:
+- The baseline should pass the two file-permission controls, the kubelet control and the RBAC control,
+  and fail 1.2.1 and 1.2.21 with the observed value reported as unset. kubeadm does not set those two
+  flags, so the permissive defaults apply. A cluster nobody has touched is therefore not a benchmarked
+  cluster, and the observed value is what tells you which remediation to apply.
+- Changing admin.conf to mode 644 should move only 1.1.13, with the observed value reading 644 root:root
+  while 1.1.1 still passes. Restoring 600 should return it to PASS on the next scan. The check reads the
+  file each time, so the control follows the file rather than an earlier result.
+- The kubelet detects the changed static Pod manifest and restarts the API server. The wait checks both
+  /readyz and the profiling argument in the mirror Pod. Its elapsed time is the time until those checks
+  passed, not the duration of an API outage; a timeout is incomplete evidence. The scan should then report
+  1.2.21 as PASS.
+- Binding cluster-admin to the test ServiceAccount should fail 5.1.1 and name that subject, because it
+  is not one of the two groups the installer creates. Deleting the binding should return it to PASS, and
+  the final scan should match the baseline exactly, including the two controls that fail by default.
+transfer_solution: Check what the running process was started with. Read the API server's command in its mirror Pod, or its process arguments on the node; a manifest can contain a flag the kubelet has not applied yet, or a component may have failed to restart after the edit.
+verify_note: Every change is reverted, so the final scan matches the baseline, including the two controls a default cluster fails.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 27 setup on the host. No other lab is required.
+files:
+- cis-check.py
+- exercise.sh
+commands:
+- name: Scan the untouched cluster
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab27/exercise.sh
+    source ~/labs/lab27/helpers.sh
+    cis_scan | tee ~/labs/lab27/baseline.txt
+  record: 'Baseline row: every control with PASS or FAIL, the observed value of each failure, and the
+    totals. Keep baseline.txt.'
+  expect: The two file controls, the kubelet control and the RBAC control should pass, and the two unset
+    API server flags should fail.
+- name: Change one file mode and scan again
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    docker exec lab27-control-plane chmod 644 /etc/kubernetes/admin.conf
+    docker exec lab27-control-plane stat -c '%n %a %U:%G' /etc/kubernetes/admin.conf
+    cis_scan
+  record: 'admin.conf mode 644 row: the mode reported by stat, which control changed and its observed
+    value.'
+  expect: Only the control covering that file should change, and its observed value should show the new
+    mode.
+- name: Restore the file mode
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    docker exec lab27-control-plane chmod 600 /etc/kubernetes/admin.conf
+    cis_scan
+  record: 'admin.conf restored row: the observed value and result for both file controls.'
+  expect: The control reads the file on each scan, so restoring the mode should restore the result.
+- name: Apply the profiling flag and observe control-plane convergence
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    # The diff shows the single added argument; exit 1 means the files differ.
+    diff -u ~/labs/lab27/kube-apiserver-original.yaml ~/labs/lab27/kube-apiserver-profiling.yaml
+    install_apiserver kube-apiserver-profiling.yaml
+    wait_profiling false
+    cis_scan
+  record: 'profiling flag applied row: the one-line configuration change; seconds until readiness and
+    the expected flag were observed; the new scan result.'
+  expect: The kubelet restarts the API server after the manifest changes, so the control should flip only
+    once the new process is running and answering.
+- name: Revert the flag and confirm the cluster is back
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    install_apiserver kube-apiserver-original.yaml
+    wait_profiling default
+    k get nodes
+    cis_scan
+  record: 'profiling flag reverted row: node state; the observed value for 1.2.21; scan totals.'
+  expect: Removing the flag restarts the API server once more, so the control should return to its baseline
+    result with every node still present.
+- name: Bind cluster-admin to a ServiceAccount, then remove it
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k create serviceaccount audit-demo
+    k create clusterrolebinding ce-lab27-audit --clusterrole=cluster-admin --serviceaccount=ce-lab27:audit-demo
+    cis_scan
+    k delete clusterrolebinding ce-lab27-audit
+    k delete serviceaccount audit-demo
+    cis_scan | tee ~/labs/lab27/final.txt
+    diff ~/labs/lab27/baseline.txt ~/labs/lab27/final.txt && echo 'final scan matches the baseline'
+  record: 'cluster-admin bound to a ServiceAccount and binding removed rows: the subject named by 5.1.1,
+    its later result, and the diff against baseline.'
+  expect: The control names any subject beyond the two groups the installer creates, and the final scan
+    should be identical to the baseline.
+setup:
+- name: Prepare the benchmark scan helper
+  command: !unsafe |
+    mkdir -p ~/labs/lab27
+    cat > ~/labs/lab27/helpers.sh <<'SH'
+    k() { kubectl --kubeconfig="$HOME/labs/lab27/kubeconfig" --context=kind-lab27 --namespace=ce-lab27 --request-timeout=10s "$@"; }
+    cis_scan() { python3 "$HOME/labs/lab27/cis-check.py" lab27; }
+    SH
+    source ~/labs/lab27/helpers.sh
+    # A previous run can leave the API server restarting, so wait before using it.
+    for i in $(seq 1 90); do k get --raw /readyz >/dev/null 2>&1 && break; sleep 2; done
+    k get nodes >/dev/null
+    k create namespace ce-lab27 --dry-run=client -o yaml | k apply -f -
+    k delete clusterrolebinding ce-lab27-audit --ignore-not-found
+    docker exec lab27-control-plane chmod 600 /etc/kubernetes/admin.conf
+    # Every write to a static Pod manifest restarts the API server, so only rewrite
+    # the file when a previous run left the flag behind, then wait for it to answer.
+    if docker exec lab27-control-plane grep -q -- '--profiling=false' /etc/kubernetes/manifests/kube-apiserver.yaml; then
+      docker exec lab27-control-plane sed -i '/^    - --profiling=false$/d' /etc/kubernetes/manifests/kube-apiserver.yaml
+      for i in $(seq 1 90); do k get --raw /readyz >/dev/null 2>&1 && break; sleep 2; done
+    fi
+    k get --raw /readyz >/dev/null
+    rm -f ~/labs/lab27/baseline.txt ~/labs/lab27/final.txt
+- name: Prepare original and profiling-disabled manifests
+  command: !unsafe |
+    docker cp lab27-control-plane:/etc/kubernetes/manifests/kube-apiserver.yaml "$HOME/labs/lab27/kube-apiserver-original.yaml"
+    python3 - <<'PY'
+    from pathlib import Path
+    workspace = Path.home() / 'labs/lab27'
+    source = (workspace / 'kube-apiserver-original.yaml').read_text()
+    anchor = '    - kube-apiserver\n'
+    if source.count(anchor) != 1 or '--profiling=' in source:
+        raise SystemExit('Unexpected baseline API server command; cannot prepare this comparison')
+    (workspace / 'kube-apiserver-profiling.yaml').write_text(source.replace(anchor, anchor + '    - --profiling=false\n'))
+    PY
+    chmod 600 ~/labs/lab27/kube-apiserver-original.yaml ~/labs/lab27/kube-apiserver-profiling.yaml
+verify:
+- name: Verify the scan runs and the cluster is at its default settings
+  command: !unsafe |
+    source ~/labs/lab27/helpers.sh
+    # The API server restarts whenever its manifest is written, so wait before scanning.
+    for i in $(seq 1 90); do k get --raw /readyz >/dev/null 2>&1 && break; sleep 2; done
+    k get --raw /readyz >/dev/null
+    output=$(cis_scan)
+    printf '%s\n' "$output"
+    printf '%s\n' "$output" | grep -q '^1\.1\.13  PASS'
+    printf '%s\n' "$output" | grep -q '^5\.1\.1   PASS'
+fallback:
+- name: Restore the API server manifest if it does not come back
+  where: VM terminal 2
+  run: !unsafe |
+    source ~/labs/lab27/helpers.sh
+    source ~/labs/lab27/exercise.sh
+    install_apiserver kube-apiserver-original.yaml
+    docker exec lab27-control-plane crictl ps --name kube-apiserver
+    wait_profiling default
+    k get nodes
+reset: []

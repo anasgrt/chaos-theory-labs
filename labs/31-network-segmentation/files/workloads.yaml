@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: server
+  labels: {app: server}
+spec:
+  containers:
+  - name: web
+    image: python:3.12-slim
+    command: [python, -u, -m, http.server, "8080"]
+    readinessProbe:
+      httpGet: {path: /, port: 8080}
+      periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: server
+spec:
+  selector: {app: server}
+  ports: [{port: 80, targetPort: 8080}]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: client
+  labels: {app: client, role: allowed}
+spec:
+  containers:
+  - name: shell
+    image: python:3.12-slim
+    command: [sleep, "86400"]
+    volumeMounts:
+    - {name: scripts, mountPath: /scripts, readOnly: true}
+  volumes:
+  - name: scripts
+    configMap: {name: network-scripts}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: client-unlabelled
+  labels: {app: client-unlabelled}
+spec:
+  containers:
+  - name: shell
+    image: python:3.12-slim
+    command: [sleep, "86400"]
+    volumeMounts:
+    - {name: scripts, mountPath: /scripts, readOnly: true}
+  volumes:
+  - name: scripts
+    configMap: {name: network-scripts}

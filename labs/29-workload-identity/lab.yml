@@ -1,0 +1,131 @@
+title: Lab 29 — What a Pod's ServiceAccount can reach
+kubernetes: true
+task:
+  question: What can a workload do against the Kubernetes API, and which change grants or removes it?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§10.11.1–10.11.2.'
+    theory_sections: [10.11.1, 10.11.2]
+    theory:
+    - 'Unless a Pod opts out, the kubelet projects its ServiceAccount credential into every container at /var/run/secrets/kubernetes.io/serviceaccount: a short-lived token, the cluster ca.crt and a namespace file. The API server address arrives separately in the KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT variables, so reaching the API needs no cluster DNS.'
+    - The token is a JWT whose payload is ordinary base64 data, so a process can read its own sub claim, which is system:serviceaccount followed by the namespace and account name, and its exp expiry, without verifying anything.
+    - That identity is what every request from this Pod carries, and what anyone who reaches the container inherits. Projected tokens are bound to the Pod and rotated by the kubelet, so an expiry in the future is normal rather than a finding.
+    - Authentication and authorization are separate. Presenting a valid token establishes who you are; RBAC then decides what that identity may do. A Role lists verbs on resources, and a RoleBinding attaches it to a subject. Both are namespaced, so a grant in one namespace says nothing about another, and neither is implied by the token existing.
+    - Read the refusal rather than the status code alone. A 403 names the account, the verb, the resource and the namespace, which is exactly the information needed to write the smallest Role instead of a wider one. The same question can be asked from outside with kubectl auth can-i --as, which prints yes or no and exits nonzero when the answer is no.
+    - This lab keeps one request and changes one thing at a time. The probe lists Pods in its own namespace and in kube-system from inside the Pod, so a namespaced grant is visible as a difference between two responses in a single run rather than as a claim.
+    - Removing the credential is a different control from refusing the request. A Pod with automountServiceAccountToken false has no token and no ca.crt, so its request arrives as system:anonymous and is refused for a different reason, while the network path to the API server is unchanged. Neither control makes the API unreachable; they change identity and authorization.
+    main_lesson: >-
+      Authentication establishes the caller's identity; authorization decides what that identity may
+      do. A ServiceAccount token does not itself grant resource access, and a namespaced RoleBinding
+      grants only its stated permissions there. Compare the identity and operation in each API
+      response: removing a binding removes its grant, while omitting the token changes
+      authentication. Neither action removes the network path to the API server.
+    in_this_lab:
+    - Use namespace ce-lab29 with two identical clients that differ only in whether the token is mounted. Compare the default account, an explicit Role and RoleBinding, another namespace, and the removal of both the grant and the token.
+    readings:
+    - {signal: 'token / subject / expires_at', meaning: 'Whether the credential is mounted, the identity it names and its expiry, decoded from the token payload without verification.'}
+    - {signal: 'GET ... -> status', meaning: '200 with an item count means the list succeeded. 403 is an authorization refusal, and its message names the account and the resource.'}
+    - {signal: 'own namespace versus kube-system', meaning: 'Two requests in one run. A namespaced Role changes only the first; a difference between them is the scope of the grant.'}
+    - {signal: 'auth can-i', meaning: 'The same decision asked from the host. It prints yes or no and exits nonzero for no, so the exit status is evidence too.'}
+    - {signal: 'k', meaning: 'kubectl fixed to kind-lab29 and ce-lab29. The probe runs inside a Pod and uses only what that Pod is given.'}
+  predict: Predict both request results for the default account, after the RoleBinding, from the other namespace and from the Pod with no token.
+  answer_with:
+  - What identity did the default Pod present, and what was it allowed to do?
+  - Which of the two requests changed after the RoleBinding, and why only that one?
+  - Without a mounted token, which identity did the API server see?
+  - What changed when the RoleBinding was deleted, and what stayed?
+  evidence:
+    columns: [Case, Identity presented, Own namespace, kube-system]
+    rows: [Default account, Role and RoleBinding applied, Pod without a token, RoleBinding removed]
+  transfer: Does binding a Role in two namespaces differ from granting it cluster-wide?
+solution:
+- The default Pod should have the token, ca.crt and namespace files mounted, and its subject should read
+  system:serviceaccount followed by ce-lab29 and default, with an expiry in the future because the kubelet
+  rotates projected tokens. Both requests should return 403 quoting that account, so the Pod is authenticated
+  but not authorized for either Pod-list request tested here; a mounted credential is not a permission.
+- After the Role and RoleBinding, the request for Pods in its own namespace should return 200 with an
+  item count, while the kube-system request should still return 403 with the same message shape. Only
+  the first changed, because a Role and RoleBinding are namespaced; auth can-i should answer yes for the
+  namespace and no, with a nonzero exit, for kube-system.
+- The Pod with automountServiceAccountToken false should have no credential directory at all, so it reports
+  no token and no ca.crt, and, because the namespace file came from the same projection, the probe falls
+  back to naming the default namespace in its request. Those requests should be refused as system:anonymous
+  rather than as the ServiceAccount. The API server was still reachable, so this control removed the identity
+  rather than the connectivity, and it is not affected by the RoleBinding that the other Pod benefits
+  from.
+- Deleting the RoleBinding should return the first request to 403 with the original message, while the
+  Role object and the token remain. That isolates the binding as the cause of the earlier success and
+  leaves the fixture in its starting state.
+transfer_solution: Yes. Two RoleBindings grant exactly those two namespaces and nothing else, while a ClusterRoleBinding grants the verb in every namespace, including ones created later. Prefer the narrower pair and verify each with auth can-i against both namespaces.
+verify_note: Both client Pods are Ready, no RoleBinding grants the default account, and the in-Pod request is refused with 403.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 29 setup on the host. No other lab is required.
+files: [apicheck.py, clients.yaml, rbac.yaml]
+commands:
+- name: Read the projected credential and try the API
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab29/helpers.sh
+    k exec client -- ls -1 /var/run/secrets/kubernetes.io/serviceaccount
+    k exec client -- python -u /scripts/apicheck.py
+    k auth can-i list pods --as=system:serviceaccount:ce-lab29:default --namespace=ce-lab29
+    echo "can-i exit=$?"
+  record: 'Default account row: the mounted files, the subject and expiry, both request results, and the
+    can-i answer with its exit status.'
+  expect: The credential should be present and name this Pod's account, while authorization for listing
+    Pods has not been granted anywhere.
+- name: Grant one namespaced Role and repeat the same requests
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k apply -f ~/labs/lab29/rbac.yaml
+    k get role,rolebinding pod-reader -o custom-columns='KIND:.kind,NAME:.metadata.name'
+    k exec client -- python -u /scripts/apicheck.py
+    k auth can-i list pods --as=system:serviceaccount:ce-lab29:default --namespace=ce-lab29
+    k auth can-i list pods --as=system:serviceaccount:ce-lab29:default --namespace=kube-system
+    echo "kube-system can-i exit=$?"
+  record: 'Role and RoleBinding applied row: both request results, the item count returned, and both can-i
+    answers.'
+  expect: The grant covers one namespace and one pair of verbs, so only the matching request should change.
+- name: Run the same probe in the Pod with no mounted token
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k get pod client-notoken -o jsonpath='{.spec.automountServiceAccountToken}{"\n"}'
+    k exec client-notoken -- ls /var/run/secrets/kubernetes.io/serviceaccount
+    k exec client-notoken -- python -u /scripts/apicheck.py
+  record: 'Pod without a token row: the automount setting, whether the credential directory exists, the
+    reported identity and both request results.'
+  expect: Without the projection there is no credential to present, so the request should be attributed
+    to an anonymous identity rather than to the ServiceAccount.
+- name: Remove the grant and confirm it was the cause
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k delete rolebinding pod-reader --wait=true --timeout=30s
+    k get role,rolebinding -o custom-columns='KIND:.kind,NAME:.metadata.name'
+    k exec client -- python -u /scripts/apicheck.py
+    k auth can-i list pods --as=system:serviceaccount:ce-lab29:default --namespace=ce-lab29
+    echo "can-i exit=$?"
+  record: 'RoleBinding removed row: the remaining objects, both request results and the can-i answer.'
+  expect: Removing only the binding should restore the original refusal while the Role object and the
+    mounted token stay exactly as they were.
+setup:
+- name: Prepare the identity fixture and both clients
+  command: !unsafe |
+    mkdir -p ~/labs/lab29
+    cat > ~/labs/lab29/helpers.sh <<'SH'
+    k() { kubectl --kubeconfig="$HOME/labs/lab29/kubeconfig" --context=kind-lab29 --namespace=ce-lab29 --request-timeout=10s "$@"; }
+    SH
+    source ~/labs/lab29/helpers.sh
+    k get nodes >/dev/null
+    k create namespace ce-lab29 --dry-run=client -o yaml | k apply -f -
+    k create configmap identity-scripts --from-file=apicheck.py="$HOME/labs/lab29/apicheck.py" --dry-run=client -o yaml | k apply -f -
+    k delete rolebinding pod-reader --ignore-not-found --wait=true --timeout=30s
+    k apply -f ~/labs/lab29/clients.yaml
+    k wait pods --all --for=condition=Ready --timeout=120s --request-timeout=0
+verify:
+- name: Verify both clients start without an authorization grant
+  command: !unsafe |
+    source ~/labs/lab29/helpers.sh
+    k wait pods --all --for=condition=Ready --timeout=60s --request-timeout=0
+    test -z "$(k get rolebinding pod-reader --ignore-not-found -o name)"
+    output=$(k exec client -- python -u /scripts/apicheck.py)
+    printf '%s\n' "$output"
+    printf '%s\n' "$output" | grep -q 'pods -> 403'
+reset: []

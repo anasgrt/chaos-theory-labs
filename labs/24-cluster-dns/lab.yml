@@ -1,0 +1,241 @@
+title: Lab 24 — Search paths, ndots and a resolver outage
+kubernetes: true
+task:
+  question: What does one name lookup cost inside a Pod, and what survives a DNS outage?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§10.10.1–10.10.2.'
+    theory_sections:
+    - 10.10.1
+    - 10.10.2
+    theory:
+    - The kubelet writes each Pod's /etc/resolv.conf. With dnsPolicy ClusterFirst it lists the cluster
+      DNS service address, a search list beginning with NAMESPACE.svc.cluster.local, svc.cluster.local
+      and cluster.local, and the option ndots:5. Read that file in the Pod you are measuring; its first
+      search entry depends on the namespace.
+    - The glibc resolver applies one rule to it. A name containing at least ndots dots is tried as written
+      first; a name with fewer dots is tried against every search entry first. Either order falls back
+      to the remaining candidates when an attempt fails, so a name that resolves nowhere is tried against
+      the whole list regardless of ndots. A trailing dot skips the list.
+    - That gives the arithmetic this lab asks you to calculate. Each candidate normally costs two queries,
+      one for A and one for AAAA, although an image that skips AAAA costs one; measure that constant first
+      with a name that answers on its first candidate. Dividing any later count by it gives the candidates
+      actually tried.
+    - A lookup that succeeds costs the position of its first answering candidate, times that constant.
+      A lookup that fails everywhere costs the number of search entries plus one, times the same constant.
+      The ratio between those two is the amplification you are asked to report.
+    - 'The fixture is one Pod named web behind a ClusterIP Service in namespace ce-lab24, with two identical
+      clients that differ in one field: client keeps the default ndots:5 and client-ndots sets ndots to
+      1 through dnsConfig. You measure the short Service name, its absolute form, an external name that
+      exists and a name that exists nowhere.'
+    - Counting uses CoreDNS's own metrics. Each replica exposes coredns_dns_requests_total on port 9153,
+      and the helper sums that counter across replicas immediately before and after one lookup. CoreDNS
+      answers cluster.local itself and forwards anything else to the node's resolver, which is why an
+      external name can answer at all.
+    - The counter records queries arriving at CoreDNS, including those answered from its cache, so it
+      measures what the client asked for rather than upstream traffic. Only these client Pods query this
+      cluster's DNS, so re-measure a small unexplained difference rather than explaining it away. A count
+      reported as unavailable means the counter itself could not be read.
+    - 'Cluster DNS is a dependency of an application, not part of the Service data path. Scaling CoreDNS
+      to zero leaves the ClusterIP, its EndpointSlice and kube-proxy''s rules untouched, so a request
+      to a known address still succeeds while every request by name fails, and kubectl keeps working through
+      the API server address. Restoring replicas is not instantaneous either: endpoints must be repopulated
+      and each node''s rules rewritten first.'
+    - The failure symptom depends on the network, so record which one you saw. A Service without endpoints
+      is normally rejected at once, giving a fast error, while a dropped packet produces the resolver's
+      own timeout of several seconds per attempt, multiplied by the candidates. A name failure is a resolution
+      result, not proof that the destination application is down.
+    main_lesson: >-
+      With glibc, search paths and ndots determine candidate order; each candidate can generate A
+      and AAAA queries. A trailing dot avoids search expansion, but lowering ndots may not reduce
+      queries when every candidate fails. Count requests reaching CoreDNS, including cache hits,
+      then compare name and known-IP requests during an outage. Diagnose the resolver separately
+      from the application's network path.
+    in_this_lab:
+    - Use namespace ce-lab24 with one Service and two clients that differ only in ndots. Count CoreDNS
+      queries for in-cluster, external, absolute and absent names, then remove the resolver and compare
+      paths.
+    - wait_backend_removed waits for an empty backend set; wait_backend_ready waits for a ready endpoint.
+      Both print EndpointSlice evidence and return an error if the expected state is not observed within
+      30 checks.
+    readings:
+    - signal: ndots / search
+      meaning: From the measured Pod's /etc/resolv.conf. The number of search entries sets how many candidates
+        a non-absolute name can try.
+    - signal: queries=N
+      meaning: CoreDNS requests for one lookup, summed across replicas. Divide by the per-candidate cost
+        measured in the baseline to get the candidates tried.
+    - signal: elapsed_ms
+      meaning: Wall-clock cost of the lookup inside the Pod, including every candidate tried. Compare
+        with the query count rather than reading it alone.
+    - signal: addresses / error
+      meaning: The resolved addresses, or the resolver error. A failure after the full search is a naming
+        result, not proof the destination is down.
+    - signal: k / ksys / dns_count
+      meaning: kubectl fixed to kind-lab24, for ce-lab24 and for kube-system. dns_count POD NAME... prints
+        the measured cost of each lookup.
+  predict: Predict the query count for an in-cluster name, an external name with and without a trailing
+    dot, the same name under ndots 1, and an absent name.
+  answer_with:
+  - How many candidates did the short name and the absolute form each try?
+  - How many queries did the external name cost with ndots 5, a trailing dot, and ndots 1?
+  - Why does lowering ndots not reduce the cost of a name that resolves nowhere?
+  - With CoreDNS at zero, what still worked, and what proves the resolver recovered?
+  evidence:
+    columns:
+    - Case
+    - Client and ndots
+    - Queries counted
+    - Elapsed and result
+    rows:
+    - In-cluster short and absolute names
+    - External name default ndots
+    - External name trailing dot
+    - External name ndots 1
+    - Absent name from both clients
+    - CoreDNS scaled to zero
+    - CoreDNS restored
+  transfer: Does setting ndots to 1 reduce the cost of a hostname that no longer exists?
+solution:
+- Both clients should list the same three cluster search entries, with ndots 5 in the default client and ndots
+  1 in the other. The short Service name has no dots, so its first candidate is web.ce-lab24.svc.cluster.local,
+  which answers immediately; the absolute form skips the search list. Both lookups therefore try one candidate,
+  and their equal counts give you the per-candidate cost, normally two for A and AAAA, to use in the next
+  comparisons.
+- The external name has fewer than five dots, so the default client should try every search entry before the
+  name itself. Using your own search list and measured per-candidate cost, the expected count is the number
+  of entries plus one, times that cost. The trailing-dot form and the ndots 1 client should both answer on
+  the first candidate, so each should cost one candidate. Report the counts you measured and their ratio.
+- The absent name produces no answer anywhere, so the resolver exhausts every candidate in both Pods. The counts
+  should be close to equal, because ndots changes the order of candidates and not the set that a failed lookup
+  tries. Lowering ndots therefore does not bound the cost of names that never resolve; correcting or removing
+  the name does.
+- With no CoreDNS replica the lookups should fail while HTTP to the Service ClusterIP still returns 200 and
+  kubectl keeps working, because the Service data path and the API path do not use the cluster resolver. The
+  query counter should be unavailable during the outage. After restoring the original replica count, the same
+  name should resolve again, HTTP by name should succeed and the counter should increase once more.
+transfer_solution: It stays the same. A failed attempt at the absolute name falls back through the search list, so every candidate is tried either way; only the order changes. Reducing ndots helps names that resolve, while absent names need the name corrected, removed or their negative answers cached.
+verify_note: CoreDNS is restored to its original replica count, the Service name resolves from the default client, and an HTTP request by name returns 200.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 24 setup on the host. Outbound DNS from the VM is required for the external-name comparison. No other lab is required.
+files:
+- dns-count.py
+- web.yaml
+- clients.yaml
+- exercise.sh
+commands:
+- name: Read both resolver configurations and the CoreDNS inventory
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab24/exercise.sh
+    source ~/labs/lab24/helpers.sh
+    k exec client -- cat /etc/resolv.conf
+    k exec client-ndots -- cat /etc/resolv.conf
+    ksys get deployment coredns -o jsonpath='{.spec.replicas}{"\n"}'
+    ksys get pods -l k8s-app=kube-dns -o custom-columns='NAME:.metadata.name,IP:.status.podIP,READY:.status.conditions[?(@.type=="Ready")].status'
+    coredns_endpoints
+    SVC_IP=$(k get svc web -o jsonpath='{.spec.clusterIP}')
+    printf 'Service IP=%s\n' "$SVC_IP"
+  record: Each client's nameserver, ndots and search list, the CoreDNS replicas and addresses, and the
+    Service IP.
+  expect: Both clients should share the same search list and differ only in ndots. The metrics endpoints
+    are addresses, so reading them needs no name resolution.
+- name: Measure the in-cluster name in both forms
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    dns_count client web web.ce-lab24.svc.cluster.local.
+    probe client http://web/
+  record: 'In-cluster short and absolute names rows: the queries, elapsed_ms, addresses and HTTP result.
+    This count is your per-candidate cost.'
+  expect: The first candidate for the short name is the namespace-qualified entry, so both forms should
+    answer on their first candidate.
+- name: Measure an external name three ways
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    dns_count client dl.k8s.io
+    dns_count client dl.k8s.io.
+    dns_count client-ndots dl.k8s.io
+  record: 'External name rows, default ndots, trailing dot and ndots 1: the queries, elapsed_ms and result
+    for each.'
+  expect: Two dots is fewer than ndots 5, so the default client should try the search list first. The
+    absolute form and the ndots 1 client should reach the name itself immediately.
+- name: Measure a name that resolves nowhere from both clients
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    dns_count client chaos-lab24-absent.example
+    dns_count client-ndots chaos-lab24-absent.example
+  record: 'Absent name from both clients row: the queries, elapsed_ms and the resolver error for each
+    client.'
+  expect: No candidate can answer, so both clients should exhaust the same candidate set; only the order
+    differs.
+- name: Remove the cluster resolver and compare the three paths
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    original=$(ksys get deployment coredns -o jsonpath='{.spec.replicas}')
+    printf '%s\n' "$original" | tee ~/labs/lab24/coredns-replicas.txt
+    ksys scale deployment coredns --replicas=0
+    wait_backend_removed
+    dns_count client web
+    probe client "http://$SVC_IP/"
+    probe client http://web/
+    k get pods -o name
+  record: 'CoreDNS scaled to zero row: the lookup error and elapsed time, both HTTP results, and whether
+    kubectl answered.'
+  expect: Name resolution should fail while the address path keeps working. A fast connection error and
+    a multi-second timeout are both possible symptoms; record the one you saw.
+- name: Restore the resolver and prove recovery by name
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    ksys scale deployment coredns --replicas="$(cat ~/labs/lab24/coredns-replicas.txt)"
+    ksys rollout status deployment/coredns --request-timeout=0 --timeout=120s
+    wait_backend_ready
+    for i in $(seq 1 15); do probe client http://web/ >/dev/null 2>&1 && break; sleep 1; done
+    ksys get pods -l k8s-app=kube-dns -o custom-columns='NAME:.metadata.name,IP:.status.podIP,READY:.status.conditions[?(@.type=="Ready")].status'
+    dns_count client web
+    probe client http://web/
+  record: 'CoreDNS restored row: the replica count and readiness, the endpoint addresses, the queries
+    and elapsed time, and the HTTP result.'
+  expect: Ready replicas are not enough on their own; the Service endpoints must be repopulated before
+    the first lookup can succeed, which is what the two bounded waits allow. The short name should then
+    return to its original cost.
+setup:
+- name: Prepare the DNS measurement fixture and helpers
+  command: !unsafe |
+    mkdir -p ~/labs/lab24
+    cat > ~/labs/lab24/helpers.sh <<'SH'
+    k() { kubectl --kubeconfig="$HOME/labs/lab24/kubeconfig" --context=kind-lab24 --namespace=ce-lab24 --request-timeout=10s "$@"; }
+    ksys() { kubectl --kubeconfig="$HOME/labs/lab24/kubeconfig" --context=kind-lab24 --namespace=kube-system --request-timeout=10s "$@"; }
+    coredns_endpoints() { ksys get pods -l k8s-app=kube-dns -o jsonpath='{range .items[*]}{.status.podIP}:9153,{end}'; echo; }
+    dns_count() { local pod=$1; shift; k exec "$pod" -- python -u /scripts/dns-count.py "$(coredns_endpoints)" "$@"; }
+    probe() {
+      k exec "$1" -- python -c 'import sys, urllib.request
+    try:
+        response = urllib.request.build_opener(urllib.request.ProxyHandler({})).open(sys.argv[1], timeout=5)
+        print("HTTP", response.status)
+    except Exception as error:
+        print("FAILED", type(error).__name__, error)
+        sys.exit(1)' "$2"
+    }
+    SH
+    source ~/labs/lab24/helpers.sh
+    k get nodes >/dev/null
+    k create namespace ce-lab24 --dry-run=client -o yaml | k apply -f -
+    # A previous run may have left CoreDNS scaled to zero; restore the saved count.
+    if [ "$(ksys get deployment coredns -o jsonpath='{.spec.replicas}')" = 0 ]; then
+      ksys scale deployment coredns --replicas="$(cat ~/labs/lab24/coredns-replicas.txt 2>/dev/null || echo 2)"
+    fi
+    k create configmap dns-scripts --from-file=dns-count.py="$HOME/labs/lab24/dns-count.py" --dry-run=client -o yaml | k apply -f -
+    k apply -f ~/labs/lab24/web.yaml -f ~/labs/lab24/clients.yaml
+    k wait pods --all --for=condition=Ready --timeout=120s --request-timeout=0
+    ksys rollout status deployment/coredns --request-timeout=0 --timeout=120s
+    rm -f ~/labs/lab24/coredns-replicas.txt
+verify:
+- name: Verify the resolver, both clients and HTTP by name
+  command: !unsafe |
+    source ~/labs/lab24/helpers.sh
+    k wait pods --all --for=condition=Ready --timeout=60s --request-timeout=0
+    ksys rollout status deployment/coredns --request-timeout=0 --timeout=60s
+    test -n "$(coredns_endpoints | tr -d ',')"
+    output=$(dns_count client web)
+    printf '%s\n' "$output"
+    printf '%s\n' "$output" | grep -q 'addresses='
+    probe client http://web/ | grep -q 'HTTP 200'
+reset: []

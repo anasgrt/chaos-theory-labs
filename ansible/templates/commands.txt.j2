@@ -1,0 +1,32 @@
+{% if show_expected | default(false) %}
+STEPS AND COMMANDS FOR THESE ANSWERS
+The same steps as the question, each with its commands and what it should show.
+Expected results assume a working baseline and a confirmed fault; explain any
+difference from your own evidence.
+{% endif %}
+{% for step in selected_lab.commands %}
+
+STEP {{ loop.index }} OF {{ selected_lab.commands | length }}: {{ step.name | wordwrap(width=66, break_long_words=false, break_on_hyphens=false) | indent(9) }}
+Where: {{ step.where | default('VM terminal 1') }}
+
+{{ step.run | trim }}
+
+{{ ('Record: ' ~ step.record) | wordwrap(width=78, break_long_words=false, break_on_hyphens=false) }}
+{% if show_expected | default(false) %}
+{{ ('Expected: ' ~ step.expect) | wordwrap(width=78, break_long_words=false, break_on_hyphens=false) }}
+{% endif %}
+{% endfor %}
+{% if show_expected | default(false) %}
+
+RECOVERY CHECK
+{{ selected_lab.verify_note | wordwrap(width=78, break_long_words=false, break_on_hyphens=false) }}
+{% endif %}
+{% if selected_lab.fallback | default([]) %}
+
+ONLY IF THE RECOVERY STEP FAILS
+{% for step in selected_lab.fallback %}
+{{ (step.name ~ ' (' ~ step.where | default('VM terminal 2') ~ ')') | wordwrap(width=78, break_long_words=false, break_on_hyphens=false) }}
+
+{{ step.run | trim }}
+{% endfor %}
+{% endif %}
