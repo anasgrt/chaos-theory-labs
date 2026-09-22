@@ -6,9 +6,11 @@ from lab_content import ROOT, load_labs
 
 def render():
     labs = load_labs()
-    parts = ['''# Chaos labs
+    parts = ['''# Container and Kubernetes labs
 
 Study the theory on each card, predict a result, then run a controlled comparison.
+The 27 labs cover seven container experiments and 20 Kubernetes experiments.
+Labs are numbered consecutively from 00 through 26. Use `./lab.sh list` for the available labs.
 The card explains the mechanisms and measurements needed to answer its question.
 [chaos-theory.md](chaos-theory.md) is the deeper reference; citations use its original section numbers.
 
@@ -27,7 +29,7 @@ finished labs to free resources. `./lab.sh stop` halts the whole VM and preserve
 its files. See [the README](../README.md) for requirements and capacity.
 
 Setup prepares the fixture; the procedure injects the fault. Repeating setup resets
-the fixture (Lab 16 preserves your written card). Verify checks readiness before the
+the fixture. Verify checks readiness before the
 experiment; the card's recovery check tests its final state. Stop if the baseline
 fails. A missing measurement or an injector that never reached its target is not a pass.
 

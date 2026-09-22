@@ -1,0 +1,14 @@
+---
+- name: Verify the permanent Rancher and RKE2 management platform
+  hosts: chaos_labs
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../config/platform.yml
+  vars:
+    lab_user: vagrant
+    lab_home: /home/vagrant
+  pre_tasks:
+    - ansible.builtin.import_tasks: tasks/identity.yml
+  tasks:
+    - ansible.builtin.import_tasks: tasks/platform-verify.yml

@@ -1,0 +1,205 @@
+title: Lab 18 — Pod Security admission and what a namespace label blocks
+kubernetes: true
+task:
+  question: Which Pods does a namespace's security level actually reject, and when is that decision made?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§12.5.1–12.5.2.'
+    theory_sections:
+    - 12.5.1
+    - 12.5.2
+    theory:
+    - Pod Security admission is built into the API server. Namespace labels choose a mode and level. In
+      this fixture, an unlabelled namespace has no restrictive level; other clusters can configure stricter
+      defaults.
+    - 'There are three levels. privileged allows everything; baseline blocks the well-known escalation
+      paths, including privileged: true and host namespaces; restricted additionally requires runAsNonRoot,
+      allowPrivilegeEscalation: false, capabilities.drop of ALL and a RuntimeDefault or Localhost seccomp
+      profile.'
+    - The three modes differ only in consequence. enforce rejects the request and lists every violated
+      rule in one message. warn creates the object and returns the same list as a client warning. audit
+      records it in the audit log and creates the object. A namespace can hold different levels for different
+      modes, which is how a cluster measures a stricter level before enforcing it.
+    - Pod Security checks Pod creation and relevant updates. Adding an enforce label does not evict existing
+      Pods, although it can warn about violations. A Deployment and ReplicaSet can exist while their attempts
+      to create noncompliant Pods are rejected.
+    - This lab makes the granted authority concrete before restricting it. The privileged fixture sets
+      hostPID and privileged, so it shares the node's PID namespace and can list the node's own processes,
+      including its kubelet and container runtime. That is what the unlabelled namespace permits, and
+      what the baseline level blocks.
+    - The hardened fixture satisfies restricted, so the same image runs as UID 10001 with no capabilities,
+      no privilege escalation and the default seccomp profile. Pod Security checks the fields of a Pod
+      specification; it does not observe runtime behaviour, scan images or cover rules outside the standards,
+      and system namespaces need deliberate treatment because infrastructure workloads may legitimately
+      need host access.
+    main_lesson: >-
+      Pod Security separates the restrictions you choose (privileged, baseline or restricted) from
+      the response to violations (enforce, warn or audit). Enforce blocks violating Pod requests,
+      while warn and audit report them without blocking. Existing Pods are not evicted, so a new
+      policy changes future admission rather than repairing running workloads. Verify the
+      specification checks and actual runtime restrictions separately before claiming the workload
+      is hardened.
+    in_this_lab:
+    - Use namespace ce-lab18 with three Pod manifests. Move the same namespace from unlabelled to baseline,
+      to restricted, to warn and back, recording which creations succeed and what each message says.
+    - inspect_host_processes reads the privileged Pod’s /proc view. inspect_hardening reads the hardened
+      process’s UID, effective capabilities, NoNewPrivs and seccomp mode. These helpers observe runtime
+      settings without changing them.
+    readings:
+    - signal: namespace labels
+      meaning: The enforce, warn and audit keys currently set on ce-lab18. Removing a key removes that
+        mode; nothing is inherited from the cluster.
+    - signal: violation message
+      meaning: A rejection names the level, such as baseline:latest, and every field that violated it.
+        Read the field list, not only the first line.
+    - signal: Warning versus Error
+      meaning: A warning is advisory and is followed by the object being created. An error from server
+        (Forbidden) means nothing was created.
+    - signal: node_processes
+      meaning: Process names the privileged Pod sees through the node's PID namespace. Seeing kubelet
+        or containerd means it is observing the node.
+    - signal: k
+      meaning: kubectl fixed to kind-lab18 and ce-lab18. The namespace labels are changed with kubectl
+        label, and removed with a trailing hyphen.
+  predict: Predict which of the three Pods is created under no label, under baseline, under restricted
+    and under warn.
+  answer_with:
+  - What could the privileged Pod see before a Pod Security level was enforced?
+  - Why did labelling the namespace warn but not stop the running Pod?
+  - Which fields did restricted require, and how did the hardened Pod satisfy them?
+  - What did warn allow that enforce rejected?
+  evidence:
+    columns:
+    - Namespace configuration
+    - Pod attempted
+    - Result and message
+    - Evidence after the attempt
+    rows:
+    - Unlabelled
+    - Relabelled to baseline while running
+    - Recreated under baseline
+    - Plain under restricted
+    - Hardened under restricted
+    - Plain under warn
+    - Enforcement restored
+  transfer: A team sets warn=restricted everywhere and calls the cluster restricted. What have they established?
+solution:
+- 'In this fixture, no Pod Security level blocks the privileged Pod. With hostPID it sees the node’s PID
+  namespace, including node processes and the node’s PID 1. An unlabelled namespace is not a universal
+  permission grant: cluster-wide admission defaults, RBAC and other policies can still restrict creation.'
+- Labelling the namespace should return a warning that existing Pods violate the new level and name the
+  violating Pod, while that Pod keeps running with privileged still true. Recreating the same manifest
+  should then be rejected with a Forbidden error naming baseline:latest, host namespaces and the privileged
+  container. Admission applies to creation, so a policy change protects the next Pod rather than the current
+  one.
+- The plain Pod should be rejected under restricted with four named requirements, covering allowPrivilegeEscalation,
+  dropped capabilities, runAsNonRoot and the seccomp profile. The hardened manifest sets exactly those
+  fields and should be created; inside it the process should report UID 10001 and an empty effective capability
+  set, which is the runtime confirmation that the requested context took effect.
+- With enforce removed and warn set, the same plain Pod should produce a warning listing the same violations
+  and then be created, because warn is advisory. Restoring enforce=restricted and deleting that Pod should
+  return the namespace to rejecting it, leaving only the hardened Pod running as the recovery evidence.
+transfer_solution: Only that they will be told about violations. warn creates every object it complains about, so the cluster's authority is unchanged; it is a measurement of how much would be rejected if enforce were set, which is a useful step before enforcing but not enforcement.
+verify_note: Restricted enforcement was demonstrated with a rejected dry run, then the hardened Pod and the namespace label were removed, returning ce-lab18 to the unlabelled state the lab started from.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 18 setup on the host. No other lab is required.
+files:
+- privileged.yaml
+- plain.yaml
+- hardened.yaml
+- exercise.sh
+commands:
+- name: Create a privileged Pod in an unlabelled namespace
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab18/exercise.sh
+    source ~/labs/lab18/helpers.sh
+    k get namespace ce-lab18 -o jsonpath='{.metadata.labels}{"\n"}'
+    k apply -f ~/labs/lab18/privileged.yaml
+    k wait pod/privileged --for=condition=Ready --timeout=120s --request-timeout=0
+    inspect_host_processes
+  record: 'Unlabelled row: the namespace labels, the creation result, visible_pids, pid1, and the node
+    processes the Pod can see.'
+  expect: With no level applied, the Pod should start and observe the node's own processes through the
+    shared PID namespace.
+- name: Apply the baseline level while that Pod is running
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k label namespace ce-lab18 pod-security.kubernetes.io/enforce=baseline --overwrite
+    k get namespace ce-lab18 -o jsonpath='{.metadata.labels}{"\n"}'
+    k get pod privileged -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,PRIVILEGED:.spec.containers[0].securityContext.privileged,HOSTPID:.spec.hostPID'
+  record: 'Relabelled to baseline while running row: the warning text, the resulting labels, and the Pod''s
+    phase and fields afterwards.'
+  expect: The label command should warn about the existing Pod, and that Pod should keep running unchanged.
+- name: Recreate the same Pod under the baseline level
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k delete pod privileged --wait=true --timeout=30s
+    k apply -f ~/labs/lab18/privileged.yaml
+    echo "privileged create exit=$?"
+    k get pods
+  record: 'Recreated under baseline row: the exact rejection message and the fields it names, the exit
+    status, and whether any Pod exists.'
+  expect: The same manifest that was accepted before should now be refused at creation, naming both violations.
+- name: Move to restricted and compare a plain Pod with a hardened one
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k label namespace ce-lab18 pod-security.kubernetes.io/enforce=restricted --overwrite
+    k apply -f ~/labs/lab18/plain.yaml
+    echo "plain create exit=$?"
+    k apply -f ~/labs/lab18/hardened.yaml
+    k wait pod/hardened --for=condition=Ready --timeout=120s --request-timeout=0
+    inspect_hardening
+  record: 'Plain under restricted and Hardened under restricted rows: the fields named in the rejection,
+    and the hardened Pod''s uid, CapEff and Seccomp.'
+  expect: The plain manifest should be rejected with a list of required fields, while the manifest that
+    sets them should be admitted and show the requested identity at runtime.
+- name: Replace enforcement with a warning and repeat the plain Pod
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k label namespace ce-lab18 pod-security.kubernetes.io/enforce-
+    k label namespace ce-lab18 pod-security.kubernetes.io/warn=restricted --overwrite
+    k get namespace ce-lab18 -o jsonpath='{.metadata.labels}{"\n"}'
+    k apply -f ~/labs/lab18/plain.yaml
+    echo "plain create exit=$?"
+    k get pods -o custom-columns='NAME:.metadata.name,PHASE:.status.phase'
+  record: 'Plain under warn row: the labels, the warning text, the exit status and the Pods that exist
+    afterwards.'
+  expect: The same violations should be reported, but as an advisory warning followed by the object being
+    created.
+- name: Restore enforcement and confirm the final state
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k delete pod plain --wait=true --timeout=30s
+    k label namespace ce-lab18 pod-security.kubernetes.io/warn-
+    k label namespace ce-lab18 pod-security.kubernetes.io/enforce=restricted --overwrite
+    k get namespace ce-lab18 -o jsonpath='{.metadata.labels}{"\n"}'
+    k apply -f ~/labs/lab18/plain.yaml --dry-run=server
+    echo "dry-run exit=$?"
+    k get pods -o custom-columns='NAME:.metadata.name,PHASE:.status.phase'
+    k delete pod hardened --wait=true --timeout=30s
+    k label namespace ce-lab18 pod-security.kubernetes.io/enforce-
+    k get namespace ce-lab18 -o jsonpath='{.metadata.labels}{"\n"}'
+    k get pods
+  record: 'Enforcement restored row: the labels, the dry-run rejection and exit status, and the Pods remaining.'
+  expect: The namespace should reject the plain Pod again without creating anything while the hardened
+    Pod still runs. Removing the Pod and the label afterwards restores the state this lab started from,
+    so the comparison can be repeated.
+setup:
+- name: Prepare the unlabelled Pod Security namespace
+  command: !unsafe |
+    mkdir -p ~/labs/lab18
+    cat > ~/labs/lab18/helpers.sh <<'SH'
+    k() { kubectl --kubeconfig="$HOME/labs/lab18/kubeconfig" --context=kind-lab18 --namespace=ce-lab18 --request-timeout=10s "$@"; }
+    SH
+    source ~/labs/lab18/helpers.sh
+    k get nodes >/dev/null
+    k create namespace ce-lab18 --dry-run=client -o yaml | k apply -f -
+    k label namespace ce-lab18 pod-security.kubernetes.io/enforce- pod-security.kubernetes.io/warn- pod-security.kubernetes.io/audit- 2>/dev/null || true
+    k delete pod privileged plain hardened --ignore-not-found --wait=true --timeout=30s
+verify:
+- name: Verify the namespace applies no level yet
+  command: !unsafe |
+    source ~/labs/lab18/helpers.sh
+    k get namespace ce-lab18 -o json | jq -e '[(.metadata.labels // {}) | keys[] | select(startswith("pod-security.kubernetes.io/"))] | length == 0' >/dev/null
+    k apply -f ~/labs/lab18/privileged.yaml --dry-run=server >/dev/null
+    test -z "$(k get pods -o name)"
+reset: []

@@ -1,0 +1,280 @@
+title: Lab 06 — Placement, supervision and replacement
+kubernetes: true
+task:
+  question: How does cordoning a node differ from losing its kubelet?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§12.1.1–12.1.3 and 12.3.1–12.3.2.'
+    theory:
+    - Kubelet is the node agent that reports state and asks the container runtime to start or stop containers.
+      The runtime executes them separately. Stopping kubelet removes supervision and reporting without
+      inherently stopping an already-running application.
+    - Missing reports must first be detected. The control plane then marks the node unavailable and applies
+      a NoExecute taint. A Pod’s tolerationSeconds says how long it tolerates that taint before eviction
+      begins; it is not measured from the moment kubelet stopped.
+    - This lab explicitly gives node-web 20-second not-ready and unreachable tolerations to shorten the
+      comparison. Total replacement time still includes node detection, eviction processing, scheduling
+      and startup. Do not infer a universal Kubernetes recovery time from this configured example.
+    - A replacement Pod can be created elsewhere while the original process remains on the unsupervised
+      node. The API records desired and reported state; it cannot by itself prove that an unreachable
+      node executed a stop. Compare the original container ID in crictl with the new Pod UID, then restore
+      kubelet so the old node can reconcile.
+    - Cordon marks a node unschedulable for ordinary new Pods; it does not evict or stop existing Pods
+      and does not turn off kubelet. A replacement created after you delete a managed Pod must find another
+      eligible node. Uncordon permits future placement again; it does not move existing Pods back.
+    - The node-web workload prefers lab06-worker but does not require it. A preference can be overridden
+      when that node is unavailable; a required hostname constraint could instead leave a replacement
+      Pending. Record placement rather than assuming that replica count guarantees independent failure
+      domains. All kind nodes still share this VM.
+    - Record the Lease renewTime separately from the Node Ready condition. A stale Lease shows missing
+      heartbeats; later conditions and NoExecute taints drive a different stage. Timestamped samples place
+      events between observations; ten-second sampling does not measure exact detection latency.
+    main_lesson: >-
+      Cordon changes future placement; losing kubelet removes supervision and reporting while
+      existing containers may keep running. Replacement follows detection, taint tolerance, eviction
+      and startup, so a toleration is not the total recovery time. Compare API state with the
+      original runtime process: a new Pod elsewhere does not prove the old process stopped, and
+      restoring supervision is part of recovery.
+    in_this_lab:
+    - First cordon the worker hosting node-web and test replacement. Restore scheduling, then stop kubelet
+      on the replacement’s worker. Sample 18 times, sleeping ten seconds between samples; API calls add
+      time. Restore kubelet even if no replacement was observed.
+    - 'sample_node records 18 observations ten seconds apart: Ready, NoExecute taints, replacement UID,
+      Lease and original runtime container. Failed API reads stay unknown. node_intervals calculates the
+      two intervals from samples.tsv; these are sampled bounds, not exact transition times.'
+    readings:
+    - signal: Node Ready / taints
+      meaning: A missing heartbeat can produce Ready=Unknown, displayed as NotReady. Record when the taint
+        appears separately from the stop time.
+    - signal: Pod UID / node
+      meaning: A new UID on another node is a replacement. The old object may remain Terminating until
+        its kubelet returns.
+    - signal: crictl ps
+      meaning: Queries the runtime inside the original kind node directly, independent of kubelet’s API
+        reports. Match the recorded original container ID.
+    - signal: 20-second toleration
+      meaning: Starts when the matching NoExecute taint applies. It neither stops the old process nor
+        guarantees replacement exactly 20 seconds later.
+    - signal: spec.unschedulable
+      meaning: true blocks ordinary new placement but says nothing about the existing process or node
+        health.
+    - signal: Lease renewTime
+      meaning: Node heartbeats are represented by a Lease in kube-node-lease. Compare renewTime before
+        and during loss of kubelet supervision.
+    - signal: Observed time intervals
+      meaning: Compute stop → first unavailable sample and first taint → first replacement sample separately;
+        mark unresolved events as not observed.
+    theory_sections:
+    - 12.3.1
+    - 12.3.2
+  predict: Predict which operation changes scheduling eligibility, which stops reporting, and whether
+    either immediately kills existing containers. Predict whether uncordon moves the replacement back.
+  answer_with:
+  - What did cordoning change, and what did deleting the Pod change afterwards?
+  - How long after the kubelet stopped did the node go unavailable, and the replacement appear?
+  - Did the original container keep running while the replacement started?
+  - What evidence confirms recovery, and what remains unknown if no replacement was observed?
+  evidence:
+    columns:
+    - Event
+    - Time
+    - Node / Pod API state
+    - Original container running?
+    rows:
+    - Baseline
+    - Cordoned (same UID)
+    - Deleted while cordoned
+    - Uncordoned (no automatic move)
+    - Kubelet stopped
+    - Lease stale / taint observed
+    - Replacement observed
+    - Kubelet restored
+  transfer: Why does force-deleting the Pod object not prove only one copy runs?
+solution:
+- Cordon should set unschedulable=true while the same Pod UID and container remain and kubelet stays active.
+  Deleting that Pod should produce a new UID on another eligible node. Uncordon permits future placement
+  but should not move that replacement automatically.
+- After kubelet stops, Lease renewTime should become stale, followed by node-unavailable handling, NoExecute
+  taint and possible replacement. Report the measured stop-to-first-unavailable and first-taint-to-first-replacement
+  sample differences. They include sampling uncertainty and separate stages; the 20-second toleration
+  starts at tainting, not at the stop command. Mark absent events not observed.
+- If crictl still lists OLD_CID while the API shows a different Pod UID elsewhere, the old process and
+  replacement coexist. Kubelet reporting and desired API state do not themselves stop a runtime container.
+  A runtime query error is unknown, not evidence that the old process stopped.
+- After restoring kubelet, all four nodes should become Ready, workers should be uncordoned and node-web
+  should have one Ready Pod. If replacement occurred, OLD_CID should disappear as the old node reconciles.
+  If no replacement appeared within the sampling bound, report that limit and still verify kubelet recovery;
+  do not invent an eviction or replacement time.
+verify_note: Kubelet is running on every worker, four nodes are Ready and uncordoned, and one node-web
+  Pod is Ready. If replacement occurred, confirm the recorded old container is gone.
+commands:
+- name: Record the original Pod and runtime container
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab06/exercise.sh
+    source ~/labs/lab06/env.sh
+    k rollout status deployment/node-web --request-timeout=0 --timeout=180s
+    POD=$(k get pods -l app=node-web -o jsonpath='{.items[0].metadata.name}')
+    NODE=$(k get pod "$POD" -o jsonpath='{.spec.nodeName}')
+    date --iso-8601=seconds
+    echo "original pod=$POD node=$NODE"
+    k get pod "$POD" -o jsonpath='{.metadata.uid}{"\n"}{.spec.tolerations}{"\n"}'
+    docker exec "$NODE" crictl ps --name web
+  record: 'Baseline row: the timestamp, Pod name and UID, node, runtime container ID and both 20-second
+    tolerations.'
+  expect: One Ready node-web Pod on a worker; the two NoExecute tolerations explicitly say 20 seconds.
+    Save its container ID.
+- name: Cordon the host and inspect the existing Pod
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    ORIGINAL_NODE=$NODE
+    date --iso-8601=seconds
+    k cordon "$ORIGINAL_NODE"
+    k get node "$ORIGINAL_NODE" -o jsonpath='{.spec.unschedulable}{"\n"}'
+    k get pod "$POD" -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,NODE:.spec.nodeName'
+    docker exec "$ORIGINAL_NODE" systemctl is-active kubelet
+    docker exec "$ORIGINAL_NODE" crictl ps --name web
+  record: 'Cordoned (same UID) row: the timestamp, unschedulable, the Pod UID and node, the kubelet state
+    and the runtime ID.'
+  expect: The same UID and container remain while the node is cordoned; kubelet still runs.
+- name: Delete the Pod while its node is cordoned
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    date --iso-8601=seconds
+    k delete pod "$POD" --wait=true --timeout=60s
+    k rollout status deployment/node-web --request-timeout=0 --timeout=180s
+    k get pods -l app=node-web -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,NODE:.spec.nodeName'
+    NEW_POD=$(k get pods -l app=node-web -o jsonpath='{.items[0].metadata.name}')
+    NEW_NODE=$(k get pod "$NEW_POD" -o jsonpath='{.spec.nodeName}')
+    NEW_CID=$(docker exec "$NEW_NODE" crictl ps --name web -q)
+    echo "after deletion: pod=$NEW_POD node=$NEW_NODE container=$NEW_CID"
+  record: 'Deleted while cordoned row: the Pod UID and node, the runtime container ID and the rollout
+    result.'
+  expect: The Deployment should replace the deleted Pod on another eligible node.
+- name: Uncordon and save a fresh baseline for the kubelet trial
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    date --iso-8601=seconds
+    k uncordon "$ORIGINAL_NODE"
+    sleep 5
+    k get pods -l app=node-web -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,NODE:.spec.nodeName'
+    POD=$(k get pods -l app=node-web -o jsonpath='{.items[0].metadata.name}')
+    NODE=$(k get pod "$POD" -o jsonpath='{.spec.nodeName}')
+    OLD_CID=$(docker exec "$NODE" crictl ps --name web -q)
+    echo "kubelet trial: pod=$POD node=$NODE container=$OLD_CID"
+    OLD_UID=$(k get pod "$POD" -o jsonpath='{.metadata.uid}')
+    echo "kubelet trial UID=$OLD_UID"
+    kubectl --kubeconfig="$HOME/labs/lab06/kubeconfig" -n kube-node-lease get lease "$NODE" -o jsonpath='{.spec.renewTime}{"\n"}'
+  record: 'Uncordoned (no automatic move) row: the timestamp, the Pod UID and node, and the runtime ID.
+    Keep the saved variables.'
+  expect: Uncordon should not move the current Pod back. Treat its UID/container as the original identities
+    for the separate kubelet failure.
+- name: Stop kubelet and save command-completion time
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    docker exec "$NODE" systemctl stop kubelet
+    STOP_EPOCH=$(date +%s)
+    printf '%s\n' "$STOP_EPOCH" > ~/labs/lab06/stopped-at.txt
+    date --iso-8601=seconds
+    docker exec "$NODE" systemctl is-active kubelet
+    docker exec "$NODE" crictl ps --name web
+  record: 'Kubelet stopped row: the stop-command time, the kubelet state, and whether OLD_CID still runs.'
+  expect: kubelet should report inactive (a nonzero is-active exit is expected). The existing application
+    container can remain running.
+- name: Sample heartbeats, node state and replacement 18 times
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    sample_node
+  record: Lease stale / taint and Replacement rows, from the timestamped samples. Missing observations
+    stay unknown.
+  expect: The Lease should stop advancing before unavailable handling and eviction. A replacement may
+    appear while OLD_CID still runs; if it does not appear within this bound, record not observed and
+    restore kubelet.
+- name: Restore kubelet and check convergence
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    date --iso-8601=seconds
+    docker exec "$NODE" systemctl start kubelet
+    k wait --for=condition=Ready "node/$NODE" --request-timeout=0 --timeout=180s
+    k rollout status deployment/node-web --request-timeout=0 --timeout=180s
+    k get nodes
+    k get pods -l app=node-web -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,NODE:.spec.nodeName,DELETING:.metadata.deletionTimestamp'
+    docker exec "$NODE" crictl ps --name web
+    k get nodes -o custom-columns=NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable
+    echo "original runtime ID=$OLD_CID"
+  record: 'Kubelet restored row: the timestamp, node readiness, Pod UID and node, unschedulable flags,
+    and whether OLD_CID remains.'
+  expect: Four Ready nodes. If a replacement was created, the old container should disappear as kubelet
+    reconciles. Recheck after a short wait if it is still terminating.
+- name: Calculate the two observed intervals
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    node_intervals
+  record: The two printed intervals, or not observed. They are sampling differences, not exact latencies.
+  expect: These are differences between observation times, not exact transition latencies. A 20-second
+    toleration is only one component of recovery.
+setup:
+- name: Create the guide's node-web workload preferring lab06-worker
+  command: !unsafe |
+    mkdir -p "$HOME/labs/lab06"
+    cat > "$HOME/labs/lab06/node-web.yaml" <<'YAML'
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata: {name: node-web}
+    spec:
+      replicas: 1
+      selector: {matchLabels: {app: node-web}}
+      template:
+        metadata: {labels: {app: node-web}}
+        spec:
+          tolerations:
+          - {key: node.kubernetes.io/not-ready, operator: Exists, effect: NoExecute, tolerationSeconds: 20}
+          - {key: node.kubernetes.io/unreachable, operator: Exists, effect: NoExecute, tolerationSeconds: 20}
+          affinity:
+            nodeAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                preference:
+                  matchExpressions:
+                  - {key: kubernetes.io/hostname, operator: In, values: [lab06-worker]}
+          containers:
+          - name: web
+            image: nginx:1.27
+            readinessProbe: {httpGet: {path: /, port: 80}, periodSeconds: 2}
+    YAML
+    k() { kubectl --kubeconfig="$HOME/labs/lab06/kubeconfig" --context=kind-lab06 --namespace=chaos-labs "$@"; }
+    # A previous run may have left a kubelet stopped or a node cordoned.
+    for node in lab06-worker lab06-worker2 lab06-worker3; do
+      docker exec "$node" systemctl start kubelet
+    done
+    for i in $(seq 1 90); do
+      test "$(k get nodes --no-headers 2>/dev/null | awk '$2 == "Ready" {count++} END {print count+0}')" = 4 && break
+      sleep 2
+    done
+    k uncordon lab06-worker lab06-worker2 lab06-worker3 >/dev/null
+    k apply -f "$HOME/labs/lab06/node-web.yaml"
+    k rollout status deployment/node-web --timeout=180s
+verify:
+- name: Verify a ready node-web baseline
+  command: !unsafe |
+    k() { kubectl --kubeconfig="$HOME/labs/lab06/kubeconfig" --context=kind-lab06 --namespace=chaos-labs "$@"; }
+    test "$(k get pods -l app=node-web --no-headers | awk '$2 == "1/1" && $3 == "Running" {count++} END {print count+0}')" = 1
+    node=$(k get pods -l app=node-web -o jsonpath='{.items[0].spec.nodeName}')
+    docker exec "$node" systemctl is-active --quiet kubelet
+reset: []
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 06 setup on the host. No other lab is required.
+transfer_solution: Removing an API object does not fence or stop an unreachable machine. The old process
+  can continue; preventing concurrent writers requires an appropriate fencing or application coordination
+  mechanism.
+fallback:
+- name: Restore kubelet even if the Kubernetes API is unavailable
+  where: VM terminal 2
+  run: !unsafe |
+    for node in lab06-worker lab06-worker2 lab06-worker3; do
+      docker exec "$node" systemctl start kubelet
+    done
+
+    # After the API responds, restore placement eligibility too.
+    source ~/labs/lab06/env.sh
+    k uncordon lab06-worker lab06-worker2 lab06-worker3
+files:
+- exercise.sh

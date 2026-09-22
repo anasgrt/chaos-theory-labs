@@ -1,5 +1,10 @@
 # Container and Kubernetes chaos expansion review
 
+> Historical review: this report describes an earlier revision. The current catalog
+> contains 27 container and Kubernetes labs, renumbered 00 through 26. Lab numbers
+> and counts below use the original catalog and are historical evidence, not current
+> setup instructions. See [the numbering map](../lab-numbering.md) for retained labs.
+
 Reviewed 20 September 2026. This records the design, checks and validation limits
 for four labs added after the troubleshooting expansion: Labs 22–25. Existing lab
 numbers, procedures and theory sections are unchanged.

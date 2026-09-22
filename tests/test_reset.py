@@ -14,11 +14,12 @@ class ResetTests(unittest.TestCase):
     def test_reset_is_scoped_idempotent_and_preserves_evidence_on_failure(self):
         with tempfile.TemporaryDirectory(prefix='chaos-reset-') as directory:
             root = Path(directory)
-            paths = ['labs/lab11/marker', 'labs/lab17/marker', 'labs/lab16/marker',
-                     'labs/lab18/marker', 'labs/book/marker', 'labs/.provisioned',
-                     'containers/ce-lab17-exec', 'containers/ce-lab18-original',
-                     'volumes/ce-lab18-data', 'volumes/other-data']
-            for number in ('10', '11', '12', '14', '19', '20', '21', '23', '24', '25', '27', '28', '29', '30', '31', '32', '33', '34', '35', '36'):
+            paths = ['labs/lab04/marker', 'labs/lab07/marker',
+                     'labs/lab08/marker', 'labs/versions.txt', 'labs/.provisioned',
+                     'containers/ce-lab07-exec', 'containers/ce-lab08-original',
+                     'volumes/ce-lab08-data', 'volumes/other-data',
+                     'rke2/server/db/marker', 'rancher/bootstrap-password', '.kube/rke2.yaml']
+            for number in ('03', '04', '05', '09', '10', '11', '13', '14', '15', '17', '18', '19', '20', '21', '22', '23', '24', '25', '26'):
                 paths += [f'clusters/lab{number}', f'labs/lab{number}/kubeconfig']
             for name in paths:
                 path = root / name
@@ -44,12 +45,12 @@ esac
                 'docker': '''#!/usr/bin/env bash
 set -euo pipefail
 case "$*" in
-  "ps -aq --filter name=^/ce-lab18-")
-    find "$RESET_FIXTURE/containers" -type f -name 'ce-lab18-*' -printf '%f\\n' ;;
-  'rm -f ce-lab18-original') rm "$RESET_FIXTURE/containers/ce-lab18-original" ;;
-  'volume ls --format {{.Name}} --filter name=ce-lab18-data')
-    find "$RESET_FIXTURE/volumes" -type f -name ce-lab18-data -printf '%f\\n' ;;
-  'volume rm ce-lab18-data') rm "$RESET_FIXTURE/volumes/ce-lab18-data" ;;
+  "ps -aq --filter name=^/ce-lab08-")
+    find "$RESET_FIXTURE/containers" -type f -name 'ce-lab08-*' -printf '%f\\n' ;;
+  'rm -f ce-lab08-original') rm "$RESET_FIXTURE/containers/ce-lab08-original" ;;
+  'volume ls --format {{.Name}} --filter name=ce-lab08-data')
+    find "$RESET_FIXTURE/volumes" -type f -name ce-lab08-data -printf '%f\\n' ;;
+  'volume rm ce-lab08-data') rm "$RESET_FIXTURE/volumes/ce-lab08-data" ;;
   *) echo "Unexpected Docker operation: $*" >&2; exit 99 ;;
 esac
 ''',
@@ -64,10 +65,12 @@ esac
                 capture_output=True, text=True, timeout=300,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual({p.name for p in (root / 'clusters').iterdir()}, {'lab11'})
-            self.assertEqual({p.name for p in (root / 'containers').iterdir()}, {'ce-lab17-exec'})
+            self.assertEqual({p.name for p in (root / 'clusters').iterdir()}, {'lab04'})
+            self.assertEqual({p.name for p in (root / 'containers').iterdir()}, {'ce-lab07-exec'})
             self.assertEqual({p.name for p in (root / 'volumes').iterdir()}, {'other-data'})
-            self.assertEqual((root / 'labs/lab11/marker').read_text(), 'preserve this exact content\n')
+            self.assertEqual((root / 'labs/lab04/marker').read_text(), 'preserve this exact content\n')
+            for name in ('rke2/server/db/marker', 'rancher/bootstrap-password', '.kube/rke2.yaml'):
+                self.assertEqual((root / name).read_text(), 'preserve this exact content\n')
 
 
 if __name__ == '__main__':

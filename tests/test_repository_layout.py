@@ -18,6 +18,24 @@ from lab_content import fixture_path, lab_paths, load_labs, render_card
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_catalog_keeps_only_the_agreed_container_and_kubernetes_labs(self):
+        containers = {'00', '01', '02', '07', '08', '12', '16'}
+        kubernetes = {'03', '04', '05', '06', '09', '10', '11', '13', '14',
+                      '15', '17', '18', '19', '20', '21', '22', '23', '24', '25', '26'}
+        labs = load_labs()
+        self.assertEqual(list(labs), [f'{number:02}' for number in range(27)])
+        self.assertEqual(set(labs), containers | kubernetes)
+        self.assertEqual({number for number, lab in labs.items() if lab.get('kubernetes')}, kubernetes)
+
+    def test_numbered_titles_and_resource_references_match_the_owning_lab(self):
+        for number, lab in load_labs().items():
+            self.assertTrue(lab['title'].startswith(f'Lab {number} '), lab['title'])
+            for path in lab_paths()[number].parent.rglob('*'):
+                if not path.is_file() or path.suffix in ('.pyc', '.pyo'):
+                    continue
+                references = set(re.findall(r'(?i)lab(\d{2})(?!\d)', path.read_text(encoding='utf-8')))
+                self.assertLessEqual(references, {number}, f'{path}: foreign lab resource')
+
     def test_document_links_resolve_after_moves(self):
         missing = []
         for document in [ROOT / 'README.md', *(ROOT / 'docs').rglob('*.md')]:
@@ -44,7 +62,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_fixture_paths_cannot_escape_the_lab(self):
         for name in ('../other/file', '/tmp/file', 'folder/file', '..', '', '../lab.yml'):
             with self.subTest(name=name), self.assertRaises(ValueError):
-                fixture_path('11', name)
+                fixture_path('04', name)
 
     def test_all_assets_are_owned_and_declared(self):
         for number, lab in load_labs().items():

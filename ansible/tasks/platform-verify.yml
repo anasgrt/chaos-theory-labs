@@ -1,0 +1,59 @@
+---
+- name: Verify the RKE2 service is active
+  ansible.builtin.command: systemctl is-active rke2-server
+  changed_when: false
+
+- name: Verify the management Kubernetes API
+  ansible.builtin.command:
+    argv: [/var/lib/rancher/rke2/bin/kubectl, --kubeconfig=/etc/rancher/rke2/rke2.yaml, --context=default, --request-timeout=10s, get, --raw=/readyz]
+  register: platform_ready
+  changed_when: false
+  failed_when: platform_ready.rc != 0 or platform_ready.stdout != 'ok'
+
+- name: Verify the management node is Ready
+  ansible.builtin.command:
+    argv: [/var/lib/rancher/rke2/bin/kubectl, --kubeconfig=/etc/rancher/rke2/rke2.yaml, --context=default, --request-timeout=15s, wait, --for=condition=Ready, node/chaos-labs, --timeout=60s]
+  changed_when: false
+
+- name: Verify Rancher has an available replica
+  ansible.builtin.command:
+    argv: [/var/lib/rancher/rke2/bin/kubectl, --kubeconfig=/etc/rancher/rke2/rke2.yaml, --context=default, --namespace=cattle-system, rollout, status, deployment/rancher, --timeout=300s]
+  changed_when: false
+
+- name: Verify Rancher HTTPS through the ingress with the lab CA
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --fail
+      - --silent
+      - --show-error
+      - --noproxy
+      - '*'
+      - --connect-timeout
+      - '5'
+      - --max-time
+      - '15'
+      - --cacert
+      - /etc/chaos-platform/tls/ca.crt
+      - --resolve
+      - "{{ rancher_hostname }}:443:{{ platform_ip }}"
+      - "https://{{ rancher_hostname }}/ping"
+  register: rancher_ping
+  until: rancher_ping.rc == 0 and rancher_ping.stdout == 'pong'
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Verify the user's separate management kubeconfig
+  ansible.builtin.command: /usr/local/bin/rke2-kubectl get nodes --request-timeout=15s
+  become_user: "{{ lab_user }}"
+  environment:
+    HOME: "{{ lab_home }}"
+  changed_when: false
+
+- name: Report verified platform access without exposing credentials
+  ansible.builtin.debug:
+    msg:
+      - "Rancher is ready at https://{{ rancher_hostname }} ({{ platform_ip }})."
+      - "See ~/rancher/README.txt inside the VM for local DNS, CA trust and initial login."
+      - "Use rke2-kubectl for management. Each lab keeps its own kind kubeconfig."

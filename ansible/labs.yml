@@ -63,6 +63,18 @@
         that: shared_provisioning.stat.exists
         fail_msg: Run ./lab.sh provision once before setting up labs.
 
+    - name: Read the shared provisioning generation
+      ansible.builtin.slurp:
+        src: "{{ lab_root }}/.provisioned"
+      register: provisioning_generation
+      when: lab_action != 'reset'
+
+    - name: Require the Rancher and RKE2 environment before starting labs
+      ansible.builtin.assert:
+        that: (provisioning_generation.content | b64decode | trim) == 'shared-rke2-rancher-v2'
+        fail_msg: Run ./lab.sh provision to install and verify Rancher and RKE2 first.
+      when: lab_action != 'reset'
+
   tasks:
     - name: Clean only the selected lab before setup or reset
       ansible.builtin.include_tasks: tasks/reset.yml
@@ -91,7 +103,7 @@
 
     - name: Prepare an independent Kubernetes cluster when required
       ansible.builtin.include_tasks: tasks/kubernetes.yml
-      when: lab_action == 'setup' and selected_lab.kubernetes | default(false) and lab_id != '14'
+      when: lab_action == 'setup' and selected_lab.kubernetes | default(false)
 
     - name: Install files owned by the selected lab
       ansible.builtin.include_tasks: tasks/fixtures.yml

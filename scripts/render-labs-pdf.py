@@ -65,8 +65,9 @@ def render(target, font_dir):
                 text('Record: ' + command['record'], small)
 
     labs = load_labs()
-    text('Chaos labs', heading)
+    text('Container and Kubernetes labs', heading)
     text('Theory, evidence and controlled experiments', subhead)
+    text('27 labs: seven container experiments and 20 Kubernetes experiments, numbered consecutively from 00 through 26. Run ./lab.sh list for the available labs.')
     text('Read the relevant theory, predict, measure, explain, and check recovery. Each lab tests one question. The solutions are collected at the end so you can study and run the question without seeing its expected observations.')
     text('Run ./lab.sh provision once. Choose any lab: ./lab.sh NN setup prepares and verifies its fixture in the shared VM. Open ./lab.sh ssh, run the procedure and record your evidence. Compare NN solution. Save results before NN reset removes that lab\'s resources and files.')
     text('Stop if the baseline fails. Confirm the fault actually reached its target. Expected results are not your observations. Use Bash without set -e and preserve the same shell when blocks share variables. Keep a second VM terminal available for recovery.')
@@ -78,7 +79,7 @@ def render(target, font_dir):
             for index in range(midpoint)]
     table(['Lab', 'Topic', 'Lab', 'Topic'], rows, [.07, .43, .07, .43], padding=3)
     for number, lab in labs.items():
-        story.extend([PageBreak()] if number == '00' else [Spacer(1, 18), CondPageBreak(210)])
+        story.extend([PageBreak()] if number == next(iter(labs)) else [Spacer(1, 18), CondPageBreak(210)])
         task, brief = lab['task'], lab['task']['brief']
         text(lab['title'], heading)
         text(task['question'], subhead)
@@ -133,13 +134,13 @@ def render(target, font_dir):
         canvas.saveState()
         canvas.setFont('Body', 8)
         canvas.setFillColor(colors.HexColor('#58707d'))
-        canvas.drawString(44, 25, 'Chaos labs | Study the mechanism. Record the evidence.')
+        canvas.drawString(44, 25, 'Container and Kubernetes labs | Record the evidence.')
         canvas.drawRightString(A4[0] - 44, 25, str(doc.page))
         canvas.restoreState()
 
     target.parent.mkdir(parents=True, exist_ok=True)
     document = SimpleDocTemplate(str(target), pagesize=A4, leftMargin=44, rightMargin=44, topMargin=40, bottomMargin=44,
-                                 title='Chaos labs - theory and controlled experiments', author='Chaos Theory Labs')
+                                 title='Container and Kubernetes labs - theory and controlled experiments', author='Chaos Theory Labs')
     document.build(story, onFirstPage=footer, onLaterPages=footer)
     print(f'Rendered {target}')
 

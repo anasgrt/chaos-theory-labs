@@ -45,8 +45,8 @@ def main():
     blocks = 0
     for number, lab in labs.items():
         sections = lab['task']['brief'].get('theory_sections', [])
-        if number in ('10', '11', '12', '13', '14', '17', '18', '19', '20', '21',
-                      '22', '23', '24', '25', '26', '27', '28', '29', '30', '31', '32', '33', '34', '35', '36') and not sections:
+        if number in ('03', '04', '05', '06', '07', '08', '09', '10', '11',
+                      '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23', '24', '25', '26') and not sections:
             raise ValueError(f'Lab {number}: missing precise container/Kubernetes theory mapping')
         for section in sections:
             if not re.search(r'^#{2,4} ' + re.escape(section) + r'\s', theory, re.MULTILINE):

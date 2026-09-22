@@ -1,0 +1,253 @@
+title: Lab 13 — Endpoint removal, preStop and the grace budget
+kubernetes: true
+task:
+  question: Which requests fail when one replica is deleted, and what actually repairs them?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§10.9.1–10.9.2.'
+    theory_sections:
+    - 10.9.1
+    - 10.9.2
+    theory:
+    - Deleting a Pod starts two independent sequences at the same time. The API server records a deletion
+      timestamp; the endpoint controller marks that address not ready in its EndpointSlice and every kube-proxy
+      must observe the change and rewrite its rules. In parallel the kubelet runs any preStop hook and
+      sends SIGTERM. Nothing synchronizes the two paths.
+    - 'The in-flight count at SIGTERM tells you how many requests remain unfinished when shutdown begins.
+      It does not prove that new requests arrived after deletion. Compare it with the endpoint timeline
+      and client results: graceful shutdown can finish existing work, while abrupt exit drops that work.'
+    - EndpointSlice conditions describe the address during termination. ready becomes false almost immediately,
+      terminating becomes true, and serving can remain true, so a going-away Pod is distinguishable from
+      one that failed its probe. Readiness gates new traffic; it does not drain traffic already routed,
+      and an established connection survives a rule change.
+    - Two replicas stand behind one ClusterIP Service in namespace ce-lab13. Every request to / occupies
+      the server for two seconds while the readiness path /healthz answers at once, and the client sends
+      25 requests per second for 14 seconds, so about fifty are in flight at any moment. One replica is
+      deleted about four seconds in, while the survivor keeps answering.
+    - The same image provides both application behaviours. SHUTDOWN=graceful stops accepting, finishes
+      its in-flight requests and logs exited cleanly. SHUTDOWN=abrupt logs the same in-flight count and
+      leaves immediately with status 143. The container is PID 1, where the kernel discards a signal left
+      at its default disposition, so this fixture exits explicitly instead.
+    - A preStop hook delays the signal without delaying endpoint removal, so sleeping keeps the server
+      accepting while the withdrawal propagates and the in-flight count at SIGTERM falls towards zero.
+      The hook is an ordinary command in the container, and sleep 5 means five seconds of continued service;
+      the application is not changed.
+    - terminationGracePeriodSeconds covers preStop and application shutdown together. A hook that outlasts
+      the budget leaves no planned time for cleanup; Kubernetes allows a small one-off extension of two
+      seconds before forced termination. Measure signal timing and failures rather than assuming an exact
+      one-second cutoff. A missing SIGTERM log is missing evidence.
+    main_lesson: >-
+      Pod deletion starts traffic withdrawal and application shutdown asynchronously. Graceful
+      shutdown finishes accepted work; preStop can keep the server accepting while endpoint
+      withdrawal propagates. Both the hook and cleanup share one grace budget. Compare client
+      failures, endpoint changes and shutdown logs; unfinished work at SIGTERM does not establish
+      when it arrived. Allow time for withdrawal and cleanup, and verify that requests actually
+      finish.
+    in_this_lab:
+    - Use namespace ce-lab13 with two replicas and one client. Delete one replica under a steady 25 requests
+      per second four times, changing only the shutdown behaviour, then only the hook, then only the budget.
+    - shutdown_settings prints replicas, grace seconds, lifecycle hooks and the SHUTDOWN setting from
+      the current Deployment. The manifest named in each apply command changes the one variable described
+      in that step.
+    readings:
+    - signal: sigterm received inflight=N shutdown=MODE
+      meaning: Requests still unfinished at SIGTERM. This does not by itself prove when endpoint routing
+        stopped.
+    - signal: exited cleanly
+      meaning: Printed when the graceful mode has finished its in-flight requests. The abrupt mode exits
+        with 143 instead and never logs it.
+    - signal: ready / serving / terminating
+      meaning: EndpointSlice conditions for each backend address, sampled twice a second, including the
+        replacement Pod as it becomes ready.
+    - signal: ok / failed per second
+      meaning: Outcomes bucketed by the second each request was sent; the deletion is at t=4s. Any non-200
+        or transport error is a failure.
+    - signal: k / drain_case
+      meaning: 'kubectl fixed to kind-lab13 and ce-lab13. drain_case NAME runs one whole case: settle,
+        probe, delete at t=4s, sample endpoints, then print the timeline, probe result and server log.'
+  predict: Predict the in-flight count at SIGTERM and the failed-request count for the graceful, abrupt,
+    preStop and short-budget deletions.
+  answer_with:
+  - What does a baseline with zero failures establish before any fault is injected?
+  - How many requests were unfinished at SIGTERM, and did graceful shutdown complete them?
+  - With abrupt shutdown, how many requests failed, and how does that match the in-flight count?
+  - What did the preStop hook change, given that the application did not change?
+  - With a 1-second budget, when did SIGTERM arrive, and what does that show?
+  evidence:
+    columns:
+    - Case
+    - inflight at SIGTERM
+    - Endpoint conditions after deletion
+    - Failed requests and second
+    rows:
+    - Baseline without deletion
+    - Graceful without hook
+    - Abrupt without hook
+    - Abrupt with preStop 5 s
+    - preStop 5 s with 1 s budget
+    - Template restored
+  transfer: With preStop sleep 5 and a 5-second budget, what is left for the shutdown?
+solution:
+- The baseline probe should complete with every request successful and both addresses ready, serving and
+  not terminating. That establishes that the client, Service, DNS and both replicas work at this rate,
+  so later failures can be attributed to the injected deletion rather than to the fixture or to capacity.
+- A nonzero in-flight count shows unfinished requests at SIGTERM. Few or no client failures and an exited
+  cleanly log support that graceful shutdown completed them. Endpoint conditions may show ready=false,
+  serving=true and terminating=true. Neither this count nor zero failures proves the exact order of endpoint
+  withdrawal and signal delivery.
+- 'Abrupt exit abandons the requests still in flight, so client failures should increase when the deletion
+  overlaps work. Compare the actual counts and timestamps. They need not match exactly: requests may fail
+  during routing changes too, and the client groups results by request start time.'
+- The hook gives routing withdrawal and in-flight work time to finish before the same abrupt handler runs.
+  A lower in-flight count and fewer failures support that explanation. Five seconds is this fixture’s
+  delay, not a guarantee that every cluster has stopped routing traffic.
+- The five-second hook no longer fits inside the configured one-second budget. Compare the observed signal
+  time, any remaining requests and client failures with the previous case. The two-second termination
+  extension and asynchronous processing mean neither an exact one-second signal nor a failure count is
+  guaranteed. Restore the base template and check both ready replicas and successful baseline requests.
+transfer_solution: No planned application shutdown time remains if the hook consumes all five seconds.
+  Allow time for the hook, application cleanup and timing variation; the small termination extension is
+  not a budget to rely on. Verify with request and shutdown evidence.
+verify_note: The base template is restored, both replicas are Ready and serving, and a probe without any deletion records no failed requests.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 13 setup on the host. No other lab is required.
+files:
+- drain-server.py
+- drain-probe.py
+- web.yaml
+- web-abrupt.yaml
+- web-prestop.yaml
+- web-shortgrace.yaml
+- client.yaml
+- exercise.sh
+commands:
+- name: Load the helpers and measure the fixture without any fault
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab13/exercise.sh
+    source ~/labs/lab13/helpers.sh
+    shutdown_settings
+    k get pods -l app=drain-web -o custom-columns='NAME:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status,NODE:.spec.nodeName'
+    endpoint_conditions
+    k exec client -- python -u /scripts/drain-probe.py http://web/ 6 25
+  record: 'Baseline without deletion row: the replica count, the grace budget, the shutdown mode, the
+    endpoint conditions and the probe totals.'
+  expect: The baseline should show two ready and serving addresses, no terminating address and no failed
+    requests at this rate.
+- name: Delete one replica while the application drains its requests
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    drain_case graceful
+  record: 'Graceful without hook row: the deletion time, the in-flight count at SIGTERM, the sampled endpoint
+    conditions, and the failures.'
+  expect: Compare unfinished requests at SIGTERM, completed requests and the sampled endpoint conditions.
+    A nonzero count alone does not show whether new traffic arrived after deletion.
+- name: Change only the shutdown behaviour and repeat the same deletion
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k apply -f ~/labs/lab13/web-abrupt.yaml
+    k rollout status deployment/drain-web --request-timeout=0 --timeout=120s
+    shutdown_settings
+    drain_case abrupt
+  record: 'Abrupt without hook row: the shutdown mode, the in-flight count at SIGTERM, and the failed
+    requests and their second.'
+  expect: Only the application's response to the signal changed. The requests it was holding are no longer
+    finished.
+- name: Add only the preStop hook and repeat again
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k apply -f ~/labs/lab13/web-prestop.yaml
+    k rollout status deployment/drain-web --request-timeout=0 --timeout=120s
+    shutdown_settings
+    drain_case prestop
+  record: 'Abrupt with preStop 5 s row: the hook, the in-flight count at SIGTERM, the deletion-to-SIGTERM
+    delay and the failures.'
+  expect: The hook delays SIGTERM while endpoint withdrawal and request completion proceed. Measure whether
+    five seconds is enough in this run.
+- name: Keep the hook and shorten only the grace budget
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k apply -f ~/labs/lab13/web-shortgrace.yaml
+    k rollout status deployment/drain-web --request-timeout=0 --timeout=120s
+    shutdown_settings
+    drain_case short-grace
+  record: 'preStop 5 s with 1 s budget row: the deletion and SIGTERM times, the in-flight count then,
+    and the failures.'
+  expect: The hook is longer than the whole budget, so it cannot run to completion. Compare when the signal
+    arrived with the previous case.
+- name: Restore the base template and re-measure without a deletion
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k apply -f ~/labs/lab13/web.yaml
+    k rollout status deployment/drain-web --request-timeout=0 --timeout=120s
+    wait_settled
+    shutdown_settings
+    endpoint_conditions
+    k exec client -- python -u /scripts/drain-probe.py http://web/ 6 25
+  record: 'Template restored row: the replica count, the grace budget, the shutdown mode, the endpoint
+    conditions and the probe totals.'
+  expect: The restored fixture should again serve every request from two ready addresses, with no terminating
+    address present.
+setup:
+- name: Prepare the drain fixture, scripts and case helper
+  command: !unsafe |
+    mkdir -p ~/labs/lab13
+    cat > ~/labs/lab13/helpers.sh <<'SH'
+    k() { kubectl --kubeconfig="$HOME/labs/lab13/kubeconfig" --context=kind-lab13 --namespace=ce-lab13 --request-timeout=10s "$@"; }
+    endpoint_conditions() {
+      k get endpointslices -l kubernetes.io/service-name=web -o json |
+        jq -c '[.items[].endpoints[] | {pod: .targetRef.name, ready: .conditions.ready, serving: .conditions.serving, terminating: .conditions.terminating}]'
+    }
+    wait_settled() {
+      local i pods
+      for i in $(seq 1 60); do
+        pods=$(k get pods -l app=drain-web -o json) || return 1
+        if printf '%s' "$pods" | jq -e '(.items | length) == 2 and ([.items[] | select(.metadata.deletionTimestamp == null) | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))] | length) == 2' >/dev/null; then
+          return 0
+        fi
+        sleep 1
+      done
+      echo "Two settled replicas did not appear; inspect the Deployment before measuring." >&2
+      return 1
+    }
+    drain_case() {
+      local case_name=$1 directory="$HOME/labs/lab13" victim probe_pid logs_pid i
+      wait_settled || return 1
+      k exec client -- python -u /scripts/drain-probe.py http://web/ 14 25 > "$directory/$case_name-probe.txt" 2>&1 &
+      probe_pid=$!
+      sleep 4
+      victim=$(k get pods -l app=drain-web --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}') || return 1
+      printf 'case=%s victim=%s deleted_at=%s\n' "$case_name" "$victim" "$(date +%T.%3N)" > "$directory/$case_name-timeline.txt"
+      k logs -f "$victim" --timestamps > "$directory/$case_name-server.log" 2>&1 &
+      logs_pid=$!
+      k delete pod "$victim" --wait=false >> "$directory/$case_name-timeline.txt"
+      for i in $(seq 1 16); do
+        printf '%s %s\n' "$(date +%T.%3N)" "$(endpoint_conditions)" >> "$directory/$case_name-timeline.txt"
+        sleep 0.5
+      done
+      wait "$probe_pid"
+      wait "$logs_pid" 2>/dev/null
+      echo "--- $case_name timeline"; cat "$directory/$case_name-timeline.txt"
+      echo "--- $case_name probe"; cat "$directory/$case_name-probe.txt"
+      echo "--- $case_name server log"; cat "$directory/$case_name-server.log"
+    }
+    SH
+    source ~/labs/lab13/helpers.sh
+    k get nodes >/dev/null
+    k create namespace ce-lab13 --dry-run=client -o yaml | k apply -f -
+    k create configmap drain-scripts --from-file=drain-server.py="$HOME/labs/lab13/drain-server.py" --from-file=drain-probe.py="$HOME/labs/lab13/drain-probe.py" --dry-run=client -o yaml | k apply -f -
+    k apply -f ~/labs/lab13/web.yaml -f ~/labs/lab13/client.yaml
+    k rollout status deployment/drain-web --request-timeout=0 --timeout=180s
+    k wait pod/client --for=condition=Ready --timeout=120s --request-timeout=0
+    rm -f ~/labs/lab13/*-probe.txt ~/labs/lab13/*-timeline.txt ~/labs/lab13/*-server.log
+verify:
+- name: Verify two serving replicas and a working client path
+  command: !unsafe |
+    source ~/labs/lab13/helpers.sh
+    k rollout status deployment/drain-web --timeout=60s --request-timeout=0
+    k wait pod/client --for=condition=Ready --timeout=30s --request-timeout=0
+    wait_settled
+    k get deployment drain-web -o json | jq -e '.status.readyReplicas == 2 and (.spec.template.spec.containers[0].lifecycle == null) and .spec.template.spec.terminationGracePeriodSeconds == 30' >/dev/null
+    endpoint_conditions | jq -e 'length == 2 and all(.[]; .ready == true and .terminating != true)' >/dev/null
+    output=$(k exec client -- python -u /scripts/drain-probe.py http://web/ 3 10)
+    printf '%s\n' "$output"
+    printf '%s\n' "$output" | grep -q ' failed=0$'
+reset: []

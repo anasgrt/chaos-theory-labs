@@ -48,7 +48,12 @@ chmod +x "$work/bin/"*
 cd "$root"
 run() { : > "$CALLS"; bash lab.sh "$@" > "$work/out" 2>&1; }
 contains() { grep -F -- "$1" "$CALLS" >/dev/null; }
-for number in $(seq -w 0 36); do
+lab_count=0
+for definition in "$root"/labs/[0-9][0-9]-*/lab.yml; do
+  directory=${definition%/lab.yml}
+  number=${directory##*/}
+  number=${number%%-*}
+  lab_count=$((lab_count + 1))
   export EXPECTED_ID=$number
   run "$number" setup
   contains 'vagrant <status> <chaos> <--machine-readable>'
@@ -64,8 +69,8 @@ for number in $(seq -w 0 36); do
   contains '<--limit> <chaos>'
   ! grep -E '<up>|<destroy>|<halt>|provision.yml' "$CALLS"
 done
-export EXPECTED_ID=07
-run 7 verify
+export EXPECTED_ID=02
+run 2 verify
 contains '<--limit> <chaos>'
 contains '<lab_action=verify>'
 for action in start ssh stop status; do
@@ -77,47 +82,53 @@ run provision
 contains 'vagrant <up> <chaos> <--provider=virtualbox> <--no-provision>'
 contains '/provision.yml>'
 test "$(grep -c '^ansible' "$CALLS")" -eq 1
+run platform
+contains '/platform.yml>'
+contains '<--limit> <chaos>'
+! grep -E '<up>|<destroy>|<halt>|provision.yml' "$CALLS"
 for action in question solution; do
-  run 07 "$action"
+  run 02 "$action"
   ! grep '^vagrant' "$CALLS"
-  grep -Fx 'CARD 07' "$work/out" >/dev/null
+  grep -Fx 'CARD 02' "$work/out" >/dev/null
 done
 run list
 ! grep '^vagrant' "$CALLS"
-for bad in '' 37 100 -1 x 0x10 '../11' '11;false'; do
-  if run "$bad" setup; then echo "Accepted invalid ID: $bad" >&2; exit 1; fi
-  test ! -s "$CALLS"
+for bad in '' 27 28 29 30 31 32 33 34 35 36 37 99 100 -1 x 0x10 '../04' '04;false'; do
+  for action in setup verify reset question solution; do
+    if run "$bad" "$action"; then echo "Accepted invalid ID: $bad ($action)" >&2; exit 1; fi
+    test ! -s "$CALLS"
+  done
 done
-if run 07 unknown; then exit 1; fi
+if run 02 unknown; then exit 1; fi
 test ! -s "$CALLS"
 export UP_RC=9
 if run provision; then exit 1; fi
 test "$(wc -l < "$CALLS")" -eq 1
 unset UP_RC
 export VM_STATE=poweroff
-if run 07 verify; then exit 1; fi
+if run 02 verify; then exit 1; fi
 ! grep '^ansible' "$CALLS"
-if run 07 reset; then exit 1; fi
+if run 02 reset; then exit 1; fi
 ! grep '^ansible' "$CALLS"
 unset VM_STATE
 export ANSIBLE_RC=7
-if run 07 setup; then exit 1; fi
+if run 02 setup; then exit 1; fi
 ! grep '^CARD' "$work/out"
-if run 07 question; then exit 1; fi
+if run 02 question; then exit 1; fi
 unset ANSIBLE_RC
 # Resolve the checkout from the script location, including spaces, not the CWD.
 mkdir -p "$work/repo with spaces"
-cp -R "$root/lab.sh" "$root/ansible" "$root/labs" "$root/scripts" "$work/repo with spaces/"
+cp -R "$root/lab.sh" "$root/ansible" "$root/labs" "$root/scripts" "$root/config" "$work/repo with spaces/"
 cd "$work"
 : > "$CALLS"
-bash "$work/repo with spaces/lab.sh" 07 setup > "$work/out" 2>&1
+bash "$work/repo with spaces/lab.sh" 02 setup > "$work/out" 2>&1
 contains '<--limit> <chaos>'
-grep -Fx 'CARD 07' "$work/out" >/dev/null
+grep -Fx 'CARD 02' "$work/out" >/dev/null
 # Duplicate IDs must fail before Vagrant can select a machine.
-mkdir "$work/repo with spaces/labs/07-duplicate"
-cp "$root/labs/07-external-network-injection/lab.yml" "$work/repo with spaces/labs/07-duplicate/lab.yml"
+mkdir "$work/repo with spaces/labs/02-duplicate"
+cp "$root/labs/02-external-network-injection/lab.yml" "$work/repo with spaces/labs/02-duplicate/lab.yml"
 : > "$CALLS"
-if bash "$work/repo with spaces/lab.sh" 07 reset > "$work/out" 2>&1; then exit 1; fi
+if bash "$work/repo with spaces/lab.sh" 02 reset > "$work/out" 2>&1; then exit 1; fi
 test ! -s "$CALLS"
 test -z "$(find "$TMPDIR" -mindepth 1 -print -quit)"
-echo 'Lifecycle tests passed: one VM, 37 independent actions, offline cards, invalid input, failures and temporary-file cleanup.'
+echo "Lifecycle tests passed: one VM, $lab_count independent actions, offline cards, out-of-range/invalid IDs, failures and temporary-file cleanup."

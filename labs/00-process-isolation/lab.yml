@@ -1,0 +1,168 @@
+title: Lab 00 — A container is several Linux mechanisms
+units: [ce-lab00.scope]
+task:
+  question: Why does an isolated process view not reveal the sandbox's CPU budget?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§5.2–5.5.2 and §5.7.1.'
+    theory:
+    - A Linux container combines mechanisms; it is not a small machine with its own kernel. chroot changes
+      where absolute filesystem paths begin. A mount namespace separates mount configuration. A PID namespace
+      gives processes their own PID numbering and visibility.
+    - unshare --pid --fork starts a child in a new PID namespace. Its first process is PID 1 there but
+      has an ordinary PID visible from the VM. A fresh proc mount is needed for ps to display the new
+      view; changing the filesystem root alone does not hide host processes.
+    - Cgroups separately account for and constrain resource consumption. The systemd scope places the
+      sandbox in a group with CPUQuota=20%, MemoryMax=128M and TasksMax=50. An isolated ps listing says
+      nothing about those budgets.
+    - 'A CPU quota is time per period: divide the two cpu.max numbers. Read cpu.stat before and during
+      a busy loop to distinguish a configured cap from actual throttling. The sandbox still shares the
+      VM kernel and, because no network namespace is requested, its network. Each isolation claim needs
+      its own evidence.'
+    main_lesson: >-
+      A container combines separate controls: filesystem roots and namespaces change what a process
+      sees, while cgroups limit what it consumes. An isolated PID listing proves neither a CPU
+      budget nor complete isolation; this sandbox still shares the VM kernel and network. Inspect
+      each boundary separately, and distinguish a configured resource limit from evidence that the
+      workload actually reached it.
+    in_this_lab:
+    - The prepared BusyBox sandbox uses chroot, PID and mount namespaces, and a systemd scope with CPU,
+      memory and task limits.
+    - In the host shell, sandbox_limits prints the active scope limits and PID namespaces. sandbox_throttling
+      takes two cpu.stat readings five seconds apart and prints the counter increases.
+    readings:
+    - signal: echo $$ / ps
+      meaning: PID 1 and the small process list establish the sandbox’s PID view. The host can still see
+        these processes.
+    - signal: ls /
+      meaning: Shows the exported BusyBox filesystem used as the sandbox’s root.
+    - signal: cpu.max / memory.max / pids.max
+      meaning: cpu.max gives quota and period in microseconds; 20000 / 100000 = 0.2 of one CPU. memory.max
+        is bytes; 128 MiB = 134217728 bytes. pids.max counts tasks, including threads.
+    - signal: cpu.stat
+      meaning: 'nr_throttled counts throttled periods and throttled_usec their microseconds. Take later
+        minus earlier: an increase during the loop shows enforcement, an old total alone does not.'
+  predict: Predict which observation shows a separate PID view and which shows enforced CPU limiting.
+  answer_with:
+  - Which mechanisms produced the sandbox's filesystem and PID views?
+  - What CPU, memory and task limits did the host read from the sandbox's cgroup?
+  - How much did nr_throttled and throttled_usec rise while the busy loop ran?
+  - Why can a separate PID view exist with or without a CPU cap?
+  evidence:
+    columns:
+    - Observation
+    - Value / change
+    - Responsible mechanism
+    rows:
+    - Filesystem view
+    - PID view
+    - Configured limits
+    - Busy-loop throttling
+  transfer: Would removing CPUQuota make host processes appear in the sandbox’s ps output?
+solution:
+- The sandbox should show the exported BusyBox tree under / and its shell as PID 1 with only sandbox
+  processes in ps. chroot changes its filesystem root; the PID namespace and fresh proc mount provide
+  the process view. The VM still sees the sandbox under an ordinary host PID.
+- cpu.max should have quota/period = 0.2, memory.max should be 134217728 bytes, and pids.max should be
+  50. Cite the actual values; these cgroup settings are independent of the filesystem and PID views.
+- Subtract the first cpu.stat snapshot from the second. Increasing nr_throttled and throttled_usec
+  while the loop runs show active enforcement. A configured cap or an old nonzero total alone does
+  not prove throttling during this measurement.
+- Namespaces control visibility while cgroups control resource budgets. A separate PID view can exist
+  with or without a CPU cap; the sandbox still shares the VM's kernel and, here, its network.
+verify_note: The sandbox is exited and its scope is no longer active.
+commands:
+- name: Confirm the exported BusyBox root filesystem
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab00/exercise.sh
+    ls ~/labs/lab00/rootfs
+    systemctl is-active ce-lab00.scope; echo "scope status=$? (nonzero means not active)"
+  expect: The exported tree contains bin and proc, and no previous sandbox scope is active.
+  record: 'Preconditions: the prepared root''s directory names and the ce-lab00 scope state.'
+- name: Start the sandbox; this shell becomes the sandbox
+  where: VM terminal 1
+  run: !unsafe |
+    sudo systemd-run --unit=ce-lab00 --scope --collect \
+      -p MemoryMax=128M -p MemorySwapMax=0 -p TasksMax=50 -p CPUQuota=20% \
+      unshare --fork --pid --mount --mount-proc="$HOME/labs/lab00/rootfs/proc" \
+      chroot "$HOME/labs/lab00/rootfs" /bin/sh
+  expect: Terminal 1 presents the BusyBox shell and stays inside the sandbox until you run exit.
+  record: Terminal 1 is now the sandbox. Leave it open and run host commands in terminal 2.
+- name: Inspect the view inside the sandbox
+  where: Sandbox shell (terminal 1)
+  run: !unsafe |
+    echo $$
+    ps
+    ls /
+  expect: $$ is 1, ps lists only the sandbox processes, and / is the BusyBox tree.
+  record: 'Filesystem view and PID view rows: the directory listing, the shell PID and the visible processes.'
+- name: Read the limits and PID namespaces from the host
+  where: VM terminal 2
+  run: !unsafe |
+    source ~/labs/lab00/exercise.sh
+    sandbox_limits
+  expect: cpu.max 20000 100000, memory.max 134217728, pids.max 50; lsns shows a separate PID namespace
+    whose command is sh.
+  record: 'Configured limits row: cpu.max, memory.max, pids.max, and the sandbox namespace''s host PID
+    from lsns.'
+- name: Run a finite busy loop inside the sandbox
+  where: Sandbox shell (terminal 1); observe from terminal 2 while it runs
+  run: !unsafe |
+    timeout 30 sh -c "while :; do :; done"
+    echo "busy-loop exit=$?"
+  expect: The loop runs for at most 30 seconds before timeout terminates it and the sandbox prompt returns.
+    While it runs, switch immediately to VM terminal 2 and run the next step.
+  record: The start and completion of the loop. Switch to terminal 2 while it is still running.
+- name: Read the throttling counters from the host
+  where: VM terminal 2
+  run: !unsafe |
+    sandbox_throttling
+  expect: nr_throttled and throttled_usec increase during the loop. top may show the busy sh process near
+    20 percent CPU; the cgroup counter differences provide the direct enforcement evidence.
+  record: 'Busy-loop throttling row: nr_throttled and throttled_usec before and after; their increases.
+    Compare these with the configured cpu.max.'
+- name: After the loop finishes, exit the sandbox
+  where: Sandbox shell (terminal 1)
+  run: !unsafe |
+    exit
+  expect: After the finite loop ends, exit closes the BusyBox shell and returns terminal 1 to the VM shell.
+  record: That you exited the sandbox after recording the measurements.
+- name: Confirm the scope stopped
+  where: VM terminal 2
+  run: !unsafe |
+    systemctl is-active ce-lab00.scope; echo "status=$? (nonzero means not active)"
+  expect: The scope is inactive or already collected after the sandbox exits.
+  record: The final ce-lab00 scope state.
+setup:
+- name: Export the BusyBox root filesystem
+  command: !unsafe |
+    rootfs="$HOME/labs/lab00/rootfs"
+    rm -rf "$rootfs"
+    mkdir -p "$rootfs"
+    container=$(docker create --name ce-lab00-copy busybox:1.36)
+    trap 'docker rm "$container" >/dev/null 2>&1 || true' EXIT
+    docker export "$container" | tar -x -C "$rootfs"
+    docker rm "$container" >/dev/null
+    trap - EXIT
+    mkdir -p "$rootfs/proc"
+verify:
+- name: Verify namespace fixture readiness
+  command: !unsafe |
+    test -x "$HOME/labs/lab00/rootfs/bin/sh"
+    ! systemctl is-active --quiet ce-lab00.scope
+reset:
+- name: Remove a leftover Lab 00 export container
+  command: !unsafe |
+    containers=$(docker ps -aq --filter 'name=^/ce-lab00-copy$')
+    if [[ -n "$containers" ]]; then docker rm -f $containers; fi
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 00 setup on the host. No other lab is required.
+transfer_solution: No. The PID view is controlled by the PID namespace and proc mount. Removing a bandwidth
+  limit changes resource consumption, not visibility.
+fallback:
+- name: Fallback if the sandbox shell is unresponsive
+  where: VM terminal 2
+  run: !unsafe |
+    sudo systemctl stop ce-lab00.scope
+    sudo systemctl reset-failed ce-lab00.scope 2>/dev/null || true
+files:
+- exercise.sh

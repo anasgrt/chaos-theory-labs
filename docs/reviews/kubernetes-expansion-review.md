@@ -1,5 +1,10 @@
 # Kubernetes expansion and main-lesson review
 
+> Historical review: this report describes an earlier revision. The current catalog
+> contains 27 container and Kubernetes labs, renumbered 00 through 26. Lab numbers
+> and counts below use the original catalog and are historical evidence, not current
+> setup instructions. See [the numbering map](../lab-numbering.md) for retained labs.
+
 Reviewed on 2026-09-21. This extends the earlier
 [simplicity review](simplicity-review.md) with Labs 33-36 and the main-lesson
 sections for all 37 labs.

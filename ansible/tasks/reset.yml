@@ -39,4 +39,3 @@
     path: "{{ lab_workspace }}"
     state: absent
   become: true
-  when: lab_action == 'reset' or not (selected_lab.preserve_on_setup | default(false))

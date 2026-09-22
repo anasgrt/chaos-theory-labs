@@ -1,0 +1,188 @@
+title: Lab 09 — Unscheduled Pods versus memory-killed containers
+kubernetes: true
+task:
+  question: Did the workload fail before placement or after exceeding its memory limit?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§10.6.1–10.6.2.'
+    theory_sections:
+    - 10.6.1
+    - 10.6.2
+    theory:
+    - Requests and limits answer different questions. The scheduler accounts for requested resources against
+      node allocatable capacity and existing requests. It does not place a Pod merely because live CPU
+      usage looks low. CPU 20m means 0.02 CPU; CPU 1000 means one thousand CPUs, not one thousand millicores.
+    - An impossible request leaves this Pod unassigned with PodScheduled=False and reason Unschedulable.
+      No application container has started, so application logs cannot diagnose its execution. Scheduling
+      events describe constraints; inspect the current Pod UID because a previous object may have used
+      the same name.
+    - A memory limit is enforced at runtime through the container's memory cgroup. Kubernetes Mi means
+      MiB (1048576 bytes). The OOM fixture requests 16 MiB but has a 32 MiB limit and deliberately touches
+      96 MiB. Its request fits; its allocation does not. A memory request is not the maximum amount the
+      application may use.
+    - OOMKilled in lastState.terminated, an exit code and a rising restartCount identify a different stage
+      from Unschedulable. Exit 137 alone cannot identify OOM. CrashLoopBackOff describes a delay before
+      repeated restarts, not their root cause. Inspect the previous instance's logs while the Pod still
+      exists.
+    - These standalone Pods use restartPolicy Always by default. Kubelet can restart a container inside
+      the same Pod UID. The procedure intentionally deletes and recreates the Pod between configurations
+      because scheduling and resource fields cannot all be edited in place. That intentional UID change
+      is not evidence of self-healing by a Deployment.
+    - Repair the demonstrated cause. Restarting cannot make a 1000-CPU request fit. Repeated restarts
+      cannot make the same 96 MiB allocation fit a 32 MiB limit. In a real workload, investigate memory
+      growth before choosing a measured limit; simply removing limits can move the failure to the node.
+    main_lesson: >-
+      Requests guide scheduling; memory limits constrain a running container. An impossible request
+      prevents placement, while exceeding the memory limit can kill and restart a container inside
+      the same Pod. Use scheduling events, node assignment, termination reason and UID to identify
+      the stage; neither Pending, CrashLoopBackOff nor exit 137 alone names the cause. Restarting
+      cannot repair an unchanged resource mismatch.
+    in_this_lab:
+    - Use namespace ce-lab09 on this lab’s chaos cluster. Compare a healthy HTTP process, an impossible
+      CPU request and a bounded memory allocation; then restore the healthy fixture.
+    - Use describe to read Node, Requests, Limits, State, Last State, Restart Count and Events. The separate
+      UID line distinguishes a replaced Pod from a restarted container.
+    readings:
+    - signal: nodeName / PodScheduled / events
+      meaning: Distinguish no placement from a node-assigned runtime problem. Events are filtered by this
+        Pod UID.
+    - signal: requests / limits / allocatable
+      meaning: Read configured quantities and node capacity. No metrics-server is required for this diagnosis.
+    - signal: lastState.terminated / restartCount
+      meaning: The previous container result and restart count remain attached to this Pod. Capture them
+        before deleting it.
+    - signal: logs --previous
+      meaning: Reads the previous container instance, not a previous Pod with the same name. Missing logs
+        are not proof that no failure happened.
+    - signal: k
+      meaning: kubectl using Lab 09’s private kubeconfig, kind-lab09 context and only namespace ce-lab09.
+  predict: Predict node assignment, available logs and restart evidence for the impossible request and
+    the memory limit failure.
+  answer_with:
+  - Which stage failed for the 1000-CPU request, and what shows it?
+  - What terminated the container under the 32 MiB limit, and how do you know?
+  - Which UID changes were deliberate replacements, and which restart happened inside one Pod?
+  evidence:
+    columns:
+    - Phase
+    - UID / node
+    - Scheduled / Ready
+    - Reason / restarts
+    rows:
+    - Healthy
+    - 1000 CPU request
+    - 32 MiB limit / 96 MiB allocation
+    - Healthy restored
+  transfer: Would increasing the CPU limit fix an unschedulable Pod whose CPU request exceeds every node's
+    capacity?
+solution:
+- The healthy fixture should be node-assigned and Ready with a 20m CPU request. The 1000-CPU request should
+  remain unassigned with PodScheduled=False/Unschedulable and current-UID scheduling events showing insufficient
+  CPU on eligible workers. Its application has not started, so a failed logs request is not an application
+  crash.
+- The OOM fixture retains a fitting 16 MiB memory request but has a 32 MiB limit and deliberately allocates
+  96 MiB. It should be assigned to a node, then show OOMKilled in the previous termination, typically exit
+  137 and a positive restart count. The previous log should identify the allocation. Use OOMKilled and the
+  resource evidence, not exit 137 or CrashLoopBackOff alone, to diagnose the runtime failure.
+- Applying good.yaml after deleting the faulty Pod should produce a new Ready Pod with the healthy resource
+  configuration and no previous OOM/repeated restarts. The command sequence deliberately changes UID between
+  fixtures. Compare the OOM UID captured at creation with the crash snapshot to show that kubelet restarted
+  a container inside the same Pod.
+transfer_solution: No. Placement uses the request and available allocatable capacity. Increasing a limit does not reduce that request or add a suitable node.
+verify_note: The healthy resource-web Pod is Ready, and its current container has no OOM termination or repeated restarts.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 09 setup on the host. No other lab is required.
+files: [good.yaml, unscheduled.yaml, oom.yaml]
+commands:
+- name: Record the healthy placement and configured resources
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab09/helpers.sh
+    k get nodes -o custom-columns='NAME:.metadata.name,CPU:.status.allocatable.cpu,MEMORY:.status.allocatable.memory'
+    k describe pod resource-web
+    k get pod resource-web -o custom-columns=NAME:.metadata.name,UID:.metadata.uid
+    k logs resource-web --tail=5
+  record: 'Healthy row: the Pod UID, the node, Scheduled and Ready, requests and limits, restarts, and
+    node allocatable capacity.'
+  expect: The baseline should be assigned and Ready. Requests describe scheduling demand; limits describe
+    runtime bounds. The readiness probe fetches the page every second, so the log tail only confirms that
+    the application is serving.
+- name: Replace the baseline with the impossible CPU request
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k delete pod resource-web --wait=true --timeout=30s
+    k apply -f ~/labs/lab09/unscheduled.yaml
+    k wait pod/resource-web --for=jsonpath='{.status.conditions[?(@.type=="PodScheduled")].reason}'=Unschedulable --timeout=60s --request-timeout=0
+    k describe pod resource-web
+    k get pod resource-web -o custom-columns=NAME:.metadata.name,UID:.metadata.uid
+  record: '1000 CPU request row: the UID, the node value, the CPU request, and the PodScheduled status
+    and reason.'
+  expect: The request is 1000 CPUs, not 1000m. No eligible worker can satisfy it, so the Pod should remain
+    unassigned.
+- name: Collect scheduling events and check application-log availability
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    uid=$(k get pod resource-web -o jsonpath='{.metadata.uid}')
+    k get events --field-selector "involvedObject.uid=$uid"
+    k logs resource-web --request-timeout=5s
+    echo "logs exit=$?"
+  record: '1000 CPU request row: the current UID, the scheduling event message, and the log-request result
+    and exit.'
+  expect: Events should explain failed placement. The logs request should fail because there is no started
+    application container.
+- name: Replace it with the memory failure and wait for OOM evidence
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k delete pod resource-web --wait=true --timeout=30s
+    k apply -f ~/labs/lab09/oom.yaml
+    oom_uid=$(k get pod resource-web -o jsonpath='{.metadata.uid}')
+    echo "OOM fixture initial UID=$oom_uid"
+    k wait pod/resource-web --for=jsonpath='{.status.containerStatuses[0].lastState.terminated.reason}'=OOMKilled --timeout=90s --request-timeout=0
+  record: The OOM fixture UID at creation and the wait result. Do not delete the Pod yet.
+  expect: This request fits, but the deliberately oversized allocation should exceed the runtime memory
+    limit.
+- name: Save the runtime crash, prior logs and current-UID events
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k get pod resource-web -o json > ~/labs/lab09/oom-evidence.json
+    k describe pod resource-web
+    k get pod resource-web -o custom-columns=NAME:.metadata.name,UID:.metadata.uid
+    k logs resource-web --previous | tee ~/labs/lab09/previous.log
+    uid=$(k get pod resource-web -o jsonpath='{.metadata.uid}')
+    printf 'Initial OOM UID=%s; current UID=%s\n' "$oom_uid" "$uid"
+    k get events --field-selector "involvedObject.uid=$uid"
+  record: '32 MiB limit / 96 MiB allocation row: node, both UIDs, conditions, limits, the termination
+    reason and exit, restarts and the previous log.'
+  expect: The previous instance should be OOMKilled inside the same Pod UID. Capture the reason and log
+    while the Pod still exists; rerun this observation if restart status is updating.
+- name: Restore the healthy fixture and verify recovery
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k delete pod resource-web --wait=true --timeout=30s
+    k apply -f ~/labs/lab09/good.yaml
+    k wait pod/resource-web --for=condition=Ready --timeout=60s --request-timeout=0
+    k describe pod resource-web
+    k get pod resource-web -o custom-columns=NAME:.metadata.name,UID:.metadata.uid
+  record: 'Healthy restored row: the UID, node, conditions, resources, restarts and prior termination
+    state.'
+  expect: The new healthy Pod should be Ready with no OOM termination or repeated restarts. Saved fault
+    evidence remains in the lab workspace.
+setup:
+- name: Prepare the isolated resource namespace and helper
+  command: !unsafe |
+    mkdir -p ~/labs/lab09
+    cat > ~/labs/lab09/helpers.sh <<'SH'
+    k() { kubectl --kubeconfig="$HOME/labs/lab09/kubeconfig" --context=kind-lab09 --namespace=ce-lab09 --request-timeout=10s "$@"; }
+    SH
+    source ~/labs/lab09/helpers.sh
+    k get nodes >/dev/null
+    k create namespace ce-lab09 --dry-run=client -o yaml | k apply -f -
+    # A previous run may have left a fault fixture; a Pod spec cannot be patched.
+    k delete pod resource-web --ignore-not-found --wait=true --timeout=60s
+    k apply -f ~/labs/lab09/good.yaml
+    k wait pod/resource-web --for=condition=Ready --timeout=90s --request-timeout=0
+verify:
+- name: Verify the resource baseline
+  command: !unsafe |
+    source ~/labs/lab09/helpers.sh
+    k wait pod/resource-web --for=condition=Ready --timeout=30s --request-timeout=0
+    k get pod resource-web -o json | jq -e '.spec.containers[0].resources.requests.cpu == "20m" and .spec.containers[0].resources.limits.memory == "128Mi" and .status.containerStatuses[0].restartCount == 0' >/dev/null
+reset: []
