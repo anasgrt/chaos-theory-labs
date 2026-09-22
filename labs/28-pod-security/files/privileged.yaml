@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: privileged
+  labels:
+    app: privilege-demo
+spec:
+  hostPID: true
+  terminationGracePeriodSeconds: 2
+  containers:
+  - name: app
+    image: python:3.12-slim
+    command:
+    - python
+    - -u
+    - -c
+    - import time; time.sleep(3600)
+    securityContext:
+      privileged: true
+    resources:
+      requests:
+        cpu: 20m
+        memory: 16Mi
+      limits:
+        memory: 128Mi

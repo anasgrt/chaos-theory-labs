@@ -1,0 +1,26 @@
+---
+- name: Load this lab
+  ansible.builtin.include_vars:
+    file: "{{ lab_definition }}"
+    name: selected_lab
+
+- name: Prepare an isolated test destination
+  ansible.builtin.file:
+    path: "{{ lab_workspace }}"
+    state: directory
+    mode: '0700'
+
+- name: Use the production fixture installation tasks
+  ansible.builtin.include_tasks: ../../ansible/tasks/fixtures.yml
+
+- name: Render the real question template
+  ansible.builtin.template:
+    src: "{{ repository }}/ansible/templates/task.txt.j2"
+    dest: "{{ lab_workspace }}/question.txt"
+    mode: '0600'
+
+- name: Render the real solution template
+  ansible.builtin.template:
+    src: "{{ repository }}/ansible/templates/solution.txt.j2"
+    dest: "{{ lab_workspace }}/solution.txt"
+    mode: '0600'

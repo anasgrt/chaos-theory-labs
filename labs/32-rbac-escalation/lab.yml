@@ -1,0 +1,199 @@
+title: Lab 32 — Grants that reach further than they name
+kubernetes: true
+task:
+  question: Which ordinary-looking grant lets an account act as a stronger one?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§12.9.1–12.9.2.'
+    theory_sections: [12.9.1, 12.9.2]
+    theory:
+    - RBAC answers one question at a time, whether this subject may perform this verb on this resource in
+      this namespace. A grant is therefore exactly as narrow as the objects it names, and reading it as an
+      intention rather than as a list of objects is what produces surprises.
+    - Some objects carry another identity. A Pod spec chooses its own serviceAccountName, so an account that
+      may create Pods in a namespace may run a workload as any ServiceAccount in that namespace and use the
+      token the kubelet projects into it. Nothing in the create request mentions secrets, and no secret
+      permission is needed to make the request.
+    - The same applies to a Pod that already exists. create on pods/exec runs a process inside a container
+      with that container's identity, mounts and network position, so the grant is worth whatever the target
+      Pod holds rather than whatever the caller holds.
+    - 'One escalation route is blocked in the API server itself. Writing a Role or RoleBinding that grants
+      permissions the writer does not hold is refused with a message that names the extra rule, unless the
+      writer holds the escalate or bind verb. A Role limited to what the writer already has is accepted, so
+      the guard is about the delta rather than about writing roles at all.'
+    - 'This lab uses three ServiceAccounts in one namespace: one that may create Pods, one that may list
+      Secrets, and one that may write Roles. Each is refused what the others hold, which is what makes any
+      successful read from the wrong account an escalation rather than a configuration.'
+    - 'Ask the authorization question the way the request will be made. kubectl auth can-i uses TYPE/NAME
+      syntax: can-i create pods/exec asks about a Pod named exec, not the exec subresource. It can answer
+      yes for permission to create Pods while the exec operation is refused.'
+    - 'The forms that agree with the request are can-i create pods --subresource=exec and a
+      SubjectAccessReview whose resourceAttributes name resource pods and subresource exec. This lab runs
+      all four and compares them, so the disagreement is measured rather than described.'
+    - Treat a review as a prediction and the operation as the result. When an authorization answer matters,
+      name the subresource, and confirm with the request itself.
+    main_lesson: >-
+      Effective RBAC authority includes what a permitted operation lets you reach. Where admission
+      allows it, creating a Pod can expose a stronger ServiceAccount's token; exec can expose an
+      existing container's credentials and mounts. Role-writing guards do not remove those routes.
+      Check the exact resource, subresource and verb against the real request: a direct denial does
+      not prove the same access is impossible indirectly.
+    in_this_lab:
+    - Use namespace ce-lab32 with three ServiceAccounts whose Roles do not overlap, then read Secrets from
+      the stronger account, try to widen a Role, and compare four ways of checking exec access.
+    readings:
+    - {signal: 'subject=', meaning: 'The identity the token names, decoded inside the Pod. It is the account
+        the API server will authorize, not the account that created the Pod.'}
+    - {signal: 'secrets -> 200 items=N', meaning: 'The list succeeded. From a Pod created by an account that
+        is refused the same read, this is the escalation.'}
+    - {signal: 'secrets -> 403', meaning: 'An authorization refusal naming the account, the verb and the
+        resource. It is the baseline this lab compares against.'}
+    - {signal: 'not currently held', meaning: 'The API server''s escalation guard. It names the rule that
+        exceeded what the writer holds.'}
+    - {signal: 'can-i answers', meaning: 'Four ways of asking one question. Where they differ, the operation
+        decides.'}
+  predict: Predict whether the builder account can read Secrets directly, whether a Pod it creates can, and
+    whether it can grant itself the missing verb.
+  answer_with:
+  - What was the builder account refused directly, and what did its own Pod report?
+  - How did a Pod created by that same account list the Secrets?
+  - Which Role was accepted and which was refused, and what did the refusal name?
+  - Which ways of asking about pods/exec disagreed with the real request?
+  evidence:
+    columns: [Case, Account acting, Result, What it establishes]
+    rows: [Builder baseline, Pod running as the builder, Pod running as the reader, Role within rights, Role beyond rights, Four authorization answers, Grants removed]
+  transfer: An account may only create Pods in one namespace. Which credentials in that namespace are within its reach?
+solution:
+- can-i get secrets should answer no for the builder account with a nonzero exit, and the Pod running
+  as that account should report subject=system:serviceaccount:ce-lab32:builder and secrets -> 403, with
+  a message naming the account, the verb and the resource. That is a genuine refusal, and it is the baseline
+  the rest of the lab is compared against.
+- The builder creates a Pod whose spec sets serviceAccountName to the reader account. Nothing in that
+  request mentions Secrets and the builder still cannot read them, but the kubelet projects the reader's
+  token into the container, so the probe inside it reports that subject and secrets -> 200 with the namespace's
+  Secret names. Permission to create Pods can therefore expose another ServiceAccount’s rights when admission
+  allows selecting that account.
+- The Role limited to what the writer already holds should be created. The Role that adds get on secrets
+  should be refused with is attempting to grant RBAC permissions not currently held, and the message should
+  quote the extra rule with its API group, resource and verb. The guard compares the new rules against
+  what the writer holds, so writing Roles is allowed while widening them is not.
+- TYPE/NAME syntax makes pods/exec ask about a Pod named exec, so it can answer yes for the builder’s
+  Pod-creation grant. The explicit --subresource=exec check and SubjectAccessReview ask about the exec
+  subresource and should deny it. The real exec request should also be denied; record its actual verb
+  and error, which can vary with the client transport.
+transfer_solution: Every credential that any ServiceAccount in that namespace can reach, plus anything
+  mounted into the Pods it may create. Creating a Pod selects an identity and the kubelet supplies its token,
+  so the reachable set is the union of the namespace's accounts, not the creator's own rights.
+verify_note: Only the builder Pod remains, no borrowed Pod exists, and the builder account is still refused
+  get on Secrets.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 32 setup on the host. No
+  other lab is required.
+files:
+- apiprobe.py
+- rbac.yaml
+- own-pod.yaml
+- borrowed-pod.yaml
+- exec-review.yaml
+commands:
+- name: Read what each account is granted
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab32/helpers.sh
+    k get role -o custom-columns='NAME:.metadata.name,RULES:.rules[*].resources'
+    k auth can-i create pods --as=system:serviceaccount:ce-lab32:builder
+    k auth can-i get secrets --as=system:serviceaccount:ce-lab32:builder
+    echo "builder secrets can-i exit=$?"
+    k exec builder-pod -- python -u /scripts/apiprobe.py
+  record: 'Builder baseline and Pod running as the builder rows: each Role''s resources, both can-i answers,
+    and the Pod''s own result.'
+  expect: The builder may create Pods and is refused get on Secrets, and its own Pod reports that subject
+    with secrets -> 403 naming the account and the resource.
+- name: Create a Pod that runs as the reader
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k --as=system:serviceaccount:ce-lab32:builder apply -f ~/labs/lab32/borrowed-pod.yaml
+    echo "create exit=$?"
+    k wait pod/borrowed-pod --for=condition=Ready --timeout=120s --request-timeout=0
+    k get pod borrowed-pod -o jsonpath='{.spec.serviceAccountName}{"\n"}'
+    k exec borrowed-pod -- python -u /scripts/apiprobe.py
+  record: 'Pod running as the reader row: the create result, the ServiceAccount in the spec, and the result
+    reported inside the Pod.'
+  expect: The create should be accepted for an account that cannot read Secrets, and the probe inside
+    the new Pod should report the reader subject with secrets -> 200 and the Secret names.
+- name: Try to widen a Role beyond its own rights
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k auth can-i get secrets --as=system:serviceaccount:ce-lab32:role-writer
+    k --as=system:serviceaccount:ce-lab32:role-writer create role within-rights --verb=get --resource=roles
+    echo "within rights exit=$?"
+    k --as=system:serviceaccount:ce-lab32:role-writer create role beyond-rights --verb=get --resource=secrets
+    echo "beyond rights exit=$?"
+  record: 'Role within rights and Role beyond rights rows: both create results with their exit statuses,
+    and the refusal text.'
+  expect: The Role limited to what the writer holds is created; the Role adding secrets is refused as
+    an attempt to grant permissions not currently held, quoting the extra rule.
+- name: Ask about pods/exec four ways and run the operation
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k auth can-i create pods/exec --as=system:serviceaccount:ce-lab32:builder
+    k auth can-i create pods --subresource=exec --as=system:serviceaccount:ce-lab32:builder
+    cat ~/labs/lab32/exec-review.yaml
+    k create -f ~/labs/lab32/exec-review.yaml -o jsonpath='{.status.allowed}{"\n"}'
+    k --as=system:serviceaccount:ce-lab32:builder exec borrowed-pod -- echo reached-the-container
+    echo "exec exit=$?"
+  record: 'Four authorization answers row: the answer from each of the four forms, and the exit status
+    of the real exec.'
+  expect: The slashed form answers yes while the subresource form answers no, the review returns false,
+    and the operation is refused with cannot create resource pods/exec.
+- name: Remove the borrowed Pod and the grants
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k delete pod borrowed-pod --ignore-not-found --wait=true --timeout=60s
+    k delete role within-rights --ignore-not-found
+    k delete rolebinding reader-lists-secrets --ignore-not-found --wait=true --timeout=30s
+    k exec builder-pod -- python -u /scripts/apiprobe.py
+    k auth can-i get secrets --as=system:serviceaccount:ce-lab32:secret-reader
+    echo "reader secrets can-i exit=$?"
+    k apply -f ~/labs/lab32/rbac.yaml
+  record: 'Grants removed row: the remaining objects, the builder Pod''s result, and the reader''s can-i
+    answer once its binding is gone.'
+  expect: With the binding removed the reader is refused as well, which shows the binding rather than
+    the account was the grant; reapplying the fixture returns the namespace to its starting state.
+setup:
+- name: Prepare the three accounts and the builder's own Pod
+  command: !unsafe |
+    mkdir -p ~/labs/lab32
+    cat > ~/labs/lab32/helpers.sh <<'SH'
+    k() { kubectl --kubeconfig="$HOME/labs/lab32/kubeconfig" --context=kind-lab32 --namespace=ce-lab32 --request-timeout=10s "$@"; }
+    SH
+    source ~/labs/lab32/helpers.sh
+    for i in $(seq 1 90); do k get --raw /readyz >/dev/null 2>&1 && break; sleep 2; done
+    k get nodes >/dev/null
+    k create namespace ce-lab32 --dry-run=client -o yaml | k apply -f -
+    k create configmap rbac-scripts --from-file=apiprobe.py="$HOME/labs/lab32/apiprobe.py" --dry-run=client -o yaml | k apply -f -
+    k create secret generic app-credentials --from-literal=password=lab32-secret --dry-run=client -o yaml | k apply -f -
+    k delete role within-rights beyond-rights --ignore-not-found
+    k apply -f ~/labs/lab32/rbac.yaml
+    k delete pod borrowed-pod builder-pod --ignore-not-found --wait=true --timeout=60s
+    k apply -f ~/labs/lab32/own-pod.yaml
+    k wait pod/builder-pod --for=condition=Ready --timeout=120s --request-timeout=0
+verify:
+- name: Verify the builder starts without secret access
+  command: !unsafe |
+    source ~/labs/lab32/helpers.sh
+    k wait pod/builder-pod --for=condition=Ready --timeout=60s --request-timeout=0
+    test -z "$(k get pod borrowed-pod --ignore-not-found -o name)"
+    output=$(k exec builder-pod -- python -u /scripts/apiprobe.py)
+    printf '%s\n' "$output"
+    printf '%s\n' "$output" | grep -q 'secrets -> 403'
+    ! k auth can-i get secrets --as=system:serviceaccount:ce-lab32:builder >/dev/null
+reset: []
+fallback:
+- name: Remove the borrowed Pod and restore the grants without the helpers
+  where: VM terminal 2
+  run: !unsafe |
+    kubectl --kubeconfig="$HOME/labs/lab32/kubeconfig" --context=kind-lab32 --namespace=ce-lab32 \
+      delete pod borrowed-pod --ignore-not-found
+    kubectl --kubeconfig="$HOME/labs/lab32/kubeconfig" --context=kind-lab32 --namespace=ce-lab32 \
+      delete role within-rights beyond-rights --ignore-not-found
+    kubectl --kubeconfig="$HOME/labs/lab32/kubeconfig" --context=kind-lab32 --namespace=ce-lab32 \
+      apply -f "$HOME/labs/lab32/rbac.yaml"

@@ -1,0 +1,193 @@
+title: Lab 07 — Network delay accumulates across sequential calls
+task:
+  question: How does the same network delay affect one dependency exchange versus four sequential exchanges?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§5.8–5.8.1 and Experiment Card 5.5.'
+    theory:
+    - A network namespace holds interfaces, routes and packet queueing configuration. nsenter --net starts
+      a host command in a target process’s network namespace. The command uses the host’s installed tc
+      tool while changing the container’s eth0. No extra tool needs to be installed in the target image.
+    - tc configures a queueing discipline (qdisc), the rule for scheduling outgoing packets on an interface.
+      netem delay 25ms delays each outgoing packet by approximately 25 ms. Here only the dependency’s
+      egress is changed; the VM interface and the opposite direction are not independently delayed.
+    - The prepared client sends one byte, waits for its reply, and repeats on the same TCP connection.
+      If a request contains N sequential exchanges, added delay is approximately N × d, with packet and
+      scheduling variation. Timing starts after connecting, so connection establishment is excluded. Compare
+      N=1 and N=4 after subtracting each case’s own baseline. Sequential waits add; independent parallel
+      exchanges can overlap, so their completion time follows the slowest required exchange.
+    - The tc command exits after installing the rule. The rule remains in the network namespace until
+      removed or the interface is destroyed. Inspect qdisc state and counters, measure a near-zero control
+      and the larger delay, then delete the rule and repeat the original measurement.
+    main_lesson: >-
+      Sequential dependency waits add: delaying each reply by d adds roughly N times d to N
+      sequential exchanges, after subtracting the baseline. Parallel exchanges can overlap, so the
+      same arithmetic does not apply to every request pattern. Confirm that the queueing rule
+      handled the measured traffic and remove it explicitly; the injector exiting does not mean the
+      network fault ended.
+    in_this_lab:
+    - 'A Python echo server runs in ce-lab07 on port 8070. The host client measures one or four exchanges
+      per sample. Change only the container’s eth0 egress: no delay → 1 ms control → 25 ms → no delay.'
+    - net runs tc in this container’s network namespace. compare_delay subtracts each case’s own baseline
+      from its recorded mean; it does not inject another fault.
+    readings:
+    - signal: exchanges / mean_ms
+      meaning: Each sample is the elapsed time for N sequential echo exchanges after connecting. Five
+        samples give a mean and range.
+    - signal: tc -s qdisc show
+      meaning: netem with the requested delay confirms configuration; Sent counters increasing after probes
+        confirm traffic traversed it.
+    - signal: 1 ms control
+      meaning: Checks the measurement path with a small injected dose. It includes that dose and timing
+        noise, so it is not a pure measurement of tool overhead.
+    - signal: noqueue after deletion
+      meaning: The fault has been removed. The repeated client measurement checks service recovery separately.
+  predict: Estimate the added time for one and four sequential exchanges at 25 ms per outgoing reply.
+    Will exiting tc remove the delay?
+  answer_with:
+  - What were the mean and range for one and four exchanges in each phase?
+  - How much time did the 25 ms delay add to one exchange, and to four?
+  - Which qdisc and counter evidence proves the delay reached the measured traffic?
+  - Did exiting tc remove the delay, and which measurements show recovery?
+  evidence:
+    columns:
+    - Delay
+    - 1 exchange mean / range (ms)
+    - 4 exchanges mean / range (ms)
+    - qdisc / traffic evidence
+    rows:
+    - None
+    - 1 ms control
+    - 25 ms
+    - Removed
+  transfer: If the four exchanges ran in parallel, would their delays still add up?
+solution:
+- Report your observed mean, minimum and maximum for both exchange counts in each of the four phases.
+  The 1 ms control should add a small delay, with timing noise; it is not a zero-cost control.
+- For the 25 ms phase, subtract the baseline for one exchange from its delayed mean and do the same
+  independently for four exchanges. Expected additions are roughly 25 ms and 100 ms because each reply
+  is another sequential wait. Report deviations from these estimates rather than replacing measured values.
+- netem delay 1ms and then 25ms should appear only on ce-lab07's eth0. Increasing Sent packet/byte
+  counters between the before and after snapshots establish that measured traffic crossed the queue;
+  configuration alone does not.
+- The qdisc remains after the installing tc command exits. net qdisc del dev eth0 root removes it.
+  Recovery requires both the absence of netem and echo timings moving toward each case's own baseline.
+verify_note: The container has no netem qdisc and both client measurements return toward their own baseline.
+commands:
+- name: Measure the unchanged dependency
+  where: VM terminal 1
+  run: !unsafe |
+    cd ~/labs/lab07
+    source ~/labs/lab07/exercise.sh
+    net qdisc show dev eth0
+    python3 probe.py 1 | tee baseline-1.txt
+    python3 probe.py 4 | tee baseline-4.txt
+  expect: The client receives every echo; eth0 has its default noqueue, with no custom root qdisc. Stop
+    if either check fails.
+  record: 'None row: both means and ranges, and the qdisc state. Keep this shell; net stays defined.'
+- name: Measure a 1 ms control
+  where: VM terminal 1
+  run: !unsafe |
+    net qdisc add dev eth0 root netem delay 1ms
+    net -s qdisc show dev eth0 | tee control-before.txt
+    python3 probe.py 1 | tee control-1.txt
+    python3 probe.py 4 | tee control-4.txt
+    net -s qdisc show dev eth0 | tee control-after.txt
+  expect: netem remains installed after tc exits, with traffic counters. Added time should be small; record
+    the range.
+  record: '1 ms control row: both means and ranges, and the Sent counters before and after.'
+- name: Change only the dose to 25 ms
+  where: VM terminal 1
+  run: !unsafe |
+    net qdisc change dev eth0 root netem delay 25ms
+    net -s qdisc show dev eth0 | tee delayed-before.txt
+    python3 probe.py 1 | tee delayed-1.txt
+    python3 probe.py 4 | tee delayed-4.txt
+    net -s qdisc show dev eth0 | tee delayed-after.txt
+  expect: Four sequential exchanges should accumulate more delay than one. Compare baseline-subtracted
+    times, not raw ratios.
+  record: '25 ms row: both means and ranges, the configured delay, and the Sent counters before and after.'
+- name: Remove the rule and repeat both probes
+  where: VM terminal 1
+  run: !unsafe |
+    net qdisc del dev eth0 root
+    net qdisc show dev eth0
+    python3 probe.py 1 | tee recovered-1.txt
+    python3 probe.py 4 | tee recovered-4.txt
+  expect: No netem remains and timing returns toward baseline.
+  record: 'Removed row: both means and ranges, and the final qdisc state.'
+- name: Calculate added time from each case's own baseline
+  where: VM terminal 1
+  run: !unsafe |
+    compare_delay
+  expect: Added time at the 25 ms dose should be roughly 25 ms for one exchange and 100 ms for four, with
+    packet and scheduling variation. Recovery deltas should approach zero.
+  record: The printed added time for each exchange count, and the recovery differences.
+setup:
+- name: Prepare and start the echo dependency
+  command: !unsafe |
+    mkdir -p "$HOME/labs/lab07"
+    cat > "$HOME/labs/lab07/server.py" <<'PY'
+    import socketserver
+    class Echo(socketserver.BaseRequestHandler):
+        def handle(self):
+            self.request.settimeout(10)
+            try:
+                while data := self.request.recv(1):
+                    self.request.sendall(data)
+            except TimeoutError:
+                pass
+    class Server(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+    with Server(('0.0.0.0', 8070), Echo) as server:
+        server.serve_forever()
+    PY
+    cat > "$HOME/labs/lab07/probe.py" <<'PY'
+    import socket, statistics, sys, time
+    exchanges = int(sys.argv[1])
+    if exchanges not in (1, 4):
+        raise SystemExit('Use 1 or 4 exchanges')
+    samples = []
+    for _ in range(5):
+        with socket.create_connection(('127.0.0.1', 8070), timeout=2) as conn:
+            start = time.monotonic()
+            for _ in range(exchanges):
+                conn.sendall(b'x')
+                if conn.recv(1) != b'x':
+                    raise SystemExit('Baseline/fault probe did not receive its echo')
+            samples.append((time.monotonic() - start) * 1000)
+    print(f'exchanges={exchanges} mean_ms={statistics.mean(samples):.2f} '
+          f'min_ms={min(samples):.2f} max_ms={max(samples):.2f}')
+    PY
+    docker run -d --name ce-lab07 --memory=64m --pids-limit=64       -p 127.0.0.1:8070:8070 -v "$HOME/labs/lab07/server.py:/server.py:ro"       python:3.12-slim python /server.py
+    for i in $(seq 1 20); do
+      timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/8070; printf x >&3; IFS= read -r -n 1 -t 2 reply <&3; test "$reply" = x' && exit 0
+      sleep 0.5
+    done
+    exit 1
+verify:
+- name: Check echo and unmodified network
+  command: !unsafe |
+    timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/8070; printf x >&3; IFS= read -r -n 1 -t 2 reply <&3; test "$reply" = x'
+    pid=$(docker inspect -f '{{.State.Pid}}' ce-lab07)
+    test "$pid" -gt 1
+    qdisc=$(sudo nsenter --target "$pid" --net -- tc qdisc show dev eth0)
+    ! grep -q netem <<< "$qdisc"
+reset:
+- name: Remove only the echo container and its network namespace
+  command: !unsafe |
+    containers=$(docker ps -aq --filter 'name=^/ce-lab07$')
+    if [[ -n "$containers" ]]; then docker rm -f $containers; fi
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 07 setup on the host. No other lab is required.
+transfer_solution: No. Sequential dependency waits add along a request’s critical path. Independent parallel
+  waits can overlap; other overhead still needs measurement.
+fallback:
+- name: Remove only this container’s injected queue
+  where: VM terminal 2
+  run: !unsafe |
+    PID=$(docker inspect -f '{{.State.Pid}}' ce-lab07)
+    if [ "$PID" -gt 1 ]; then
+      sudo nsenter --target "$PID" --net -- tc qdisc del dev eth0 root
+    fi
+files:
+- exercise.sh

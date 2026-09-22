@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: goldpinger
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: goldpinger
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: goldpinger
+subjects:
+- kind: ServiceAccount
+  name: goldpinger
+  namespace: chaos-labs
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: goldpinger
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: goldpinger
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: goldpinger
+      component: baseline
+  template:
+    metadata:
+      labels:
+        app: goldpinger
+        component: baseline
+    spec:
+      serviceAccountName: goldpinger
+      containers:
+      - name: goldpinger
+        image: bloomberg/goldpinger:3.11.3
+        env:
+        - name: HOST
+          value: 0.0.0.0
+        - name: PORT
+          value: '8080'
+        - name: CLIENT_PORT_OVERRIDE
+          value: '8080'
+        - name: PING_TIMEOUT
+          value: 300ms
+        - name: REFRESH_INTERVAL
+          value: '2'
+        - name: NAMESPACE
+          value: chaos-labs
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        ports:
+        - name: http
+          containerPort: 8080
+        readinessProbe:
+          tcpSocket:
+            port: http
+          periodSeconds: 2
+        resources:
+          requests:
+            cpu: 20m
+            memory: 64Mi
+          limits:
+            memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: goldpinger
+spec:
+  type: NodePort
+  selector:
+    app: goldpinger
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+    nodePort: 30080

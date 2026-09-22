@@ -1,0 +1,57 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  message: version-one
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: config-web
+spec:
+  replicas: 2
+  progressDeadlineSeconds: 30
+  minReadySeconds: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: config-web
+  template:
+    metadata:
+      labels:
+        app: config-web
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+      - name: web
+        image: python:3.12-slim
+        command:
+        - python
+        - -u
+        - -c
+        - "import os\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\n\
+          class Handler(BaseHTTPRequestHandler):\n    def do_GET(self):\n        body=(os.environ['MESSAGE']+'\\\
+          n').encode()\n        self.send_response(200); self.end_headers(); self.wfile.write(body)\n\
+          HTTPServer(('0.0.0.0',8080),Handler).serve_forever()\n"
+        resources:
+          requests:
+            cpu: 20m
+            memory: 16Mi
+          limits:
+            memory: 128Mi
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          periodSeconds: 1
+        env:
+        - name: MESSAGE
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: message

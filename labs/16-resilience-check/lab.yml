@@ -1,0 +1,126 @@
+title: Lab 16 — Design one clear experiment
+preserve_on_setup: true
+task:
+  question: How would you test one resilience claim so the result has a clear meaning?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§1.3, 2.5; Appendix C; Master Cheat Sheet §6.'
+    theory:
+    - 'An experiment tests a specific service claim under a specific fault. Start with a user-visible
+      measurement: for example, successful HTTP responses divided by total probes, or response time in
+      milliseconds. An SLI is that measured quantity; an SLO is the target you choose for it.'
+    - 'Write the baseline and hypothesis using the same operation, load and measurement window. For example:
+      “With one of three replicas unavailable for 20 seconds, at least 99 of 100 probes return HTTP 200
+      within one second.” This states a condition and a falsifiable outcome; replace the numbers with
+      ones justified by your system.'
+    - Specify the exact target and dose, and how to prove the fault reached it. A selector matching nothing
+      gives a misleading pass; one matching too much changes the experiment. A control with no fault and
+      a recovery measurement help distinguish the injected cause from an already-broken baseline.
+    - Define a stop threshold, the command that removes the fault, and a fallback that works when the
+      normal control path fails. Analysis must connect measurements to a mechanism and limit the conclusion
+      to the tested conditions. This lab produces a plan, so leave observations unclaimed until an authorized
+      run supplies them.
+    main_lesson: >-
+      A useful chaos hypothesis links one precise fault to a measurable service outcome under stated
+      conditions. Use the same operation and measurement window for baseline, fault and recovery;
+      specify scope, dose, duration, proof of injection, stop threshold and rollback. The conclusion
+      must stay within those conditions. A written plan makes a claim testable, but only an observed
+      run can support or challenge it.
+    in_this_lab:
+    - Fill the prepared card for one service and one fault. Nothing is deployed or disrupted in this lab.
+    readings:
+    - signal: Baseline / hypothesis
+      meaning: Use a named measurement with units, load and duration in both. “Healthy” without a criterion
+        is not enough.
+    - signal: Fault confirmation
+      meaning: Name the evidence that proves the intended target and dose were affected.
+    - signal: Stop / recovery
+      meaning: Stop threshold tells the operator when to abort. Recovery criteria tell them whether service
+        was restored; these are different checks.
+    - signal: Blank-field check
+      meaning: Finds empty fields only. A reviewer must still judge whether the plan is measurable and
+        executable.
+  predict: State what you expect to measure under one fault and why the service should behave that way.
+  answer_with:
+  - Which service, measurement and baseline command did you choose?
+  - Which fault, target and duration did you choose, and what threshold do you predict?
+  - What stops the experiment, and which commands roll it back and prove recovery?
+  - What can this plan not establish?
+  evidence:
+    columns:
+    - Design element
+    - Your choice
+    - How another operator checks it
+    rows:
+    - Measurement / baseline
+    - Fault / target / duration
+    - Prediction / threshold
+    - Stop / rollback / recovery
+  transfer: Can a completed card or a passing no-fault control establish resilience to the proposed disruption?
+solution:
+- The completed card should identify one service/environment and an executable measurement with units,
+  load and duration. The baseline command and fault-phase measurement must use the same operation and
+  window so their results can be compared. A statement such as "service is healthy" is insufficient.
+- The card should name one fault and bounded target/duration, provide the exact injection command, and
+  provide a separate command that confirms the target count and dose. The predicted threshold must use
+  the chosen measurement and have a stated mechanism; it remains a prediction until tested.
+- The stop threshold states when to abort. Rollback states exactly how to remove the fault; the fallback
+  covers loss of the normal removal path. Recovery requires an executable check against an explicit service
+  criterion, not merely a successful cleanup command.
+- A completed plan is not evidence of resilience. Review each field for a clear target, executable command,
+  measurement and recovery criterion. The hypothesis remains untested until you run the experiment.
+verify_note: The card answers each field clearly; this is a design review, not a live test.
+commands:
+- name: Read the card and choose one service and one fault
+  where: VM terminal 1
+  run: !unsafe |
+    cd ~/labs/lab16
+    cat experiment-card.md
+  record: Your chosen service and environment, and the one fault. Map the card fields to the four questions.
+  expect: Setup creates the card only if it is absent, so an existing plan is preserved. This lab does
+    not execute the proposed fault.
+- name: Write the complete plan, including executable commands
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    cd ~/labs/lab16
+    ${EDITOR:-nano} experiment-card.md
+  record: 'Each field: the exact command, where it runs, and its values. In nano save with Ctrl+O, Enter,
+    then Ctrl+X.'
+  expect: The saved card should let another operator understand each operation without guessing missing
+    commands or values. Leave observations explicitly unmeasured.
+- name: Read the saved plan and check each field
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    cd ~/labs/lab16
+    cat experiment-card.md
+  record: For each field, check that it is filled and testable. Identify the measurement, one fault, its
+    limit, the stop condition and the recovery check.
+  expect: Every field should be filled with a concrete choice. Reading the plan is a review of its meaning;
+    a nonempty field alone does not make an experiment valid.
+setup:
+- name: Create the resilience experiment card
+  command: !unsafe |
+    mkdir -p "$HOME/labs/lab16"
+    if [[ ! -f "$HOME/labs/lab16/experiment-card.md" ]]; then
+      cat > "$HOME/labs/lab16/experiment-card.md" <<'MARKDOWN'
+    # Experiment plan (no observed results yet)
+
+    Service and environment:
+    Measurement, units, load and sampling window:
+    Normal baseline and how to measure it:
+    One fault, exact target and maximum duration:
+    How to confirm target count and injected dose:
+    Expected outcome and measurement threshold:
+    Stop condition:
+    Rollback and fallback if normal removal fails:
+    Recovery check:
+    What this experiment would not establish:
+    MARKDOWN
+    fi
+verify:
+- name: Verify experiment-card availability
+  command: !unsafe |
+    test -s "$HOME/labs/lab16/experiment-card.md"
+reset: []
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 16 setup on the host. No other lab is required.
+transfer_solution: No. The card is a plan, and the control establishes the measurement path and baseline.
+  Only an observed fault trial and analysis can support the specific resilience claim.

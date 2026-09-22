@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web
+  labels:
+    app: web
+spec:
+  terminationGracePeriodSeconds: 2
+  containers:
+  - name: web
+    image: python:3.12-slim
+    command:
+    - python
+    - -u
+    - -m
+    - http.server
+    - '8080'
+    - --bind
+    - 0.0.0.0
+    resources:
+      requests:
+        cpu: 20m
+        memory: 16Mi
+      limits:
+        memory: 128Mi
+    readinessProbe:
+      httpGet:
+        path: /
+        port: 8080
+      periodSeconds: 1

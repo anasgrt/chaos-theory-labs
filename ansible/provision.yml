@@ -1,0 +1,370 @@
+---
+- name: Configure the Chaos Labs teaching VM
+  hosts: chaos_labs
+  become: true
+  gather_facts: true
+  vars:
+    lab_user: vagrant
+    lab_home: "/home/{{ lab_user }}"
+    lab_root: "{{ lab_home }}/labs"
+    book_repository: https://github.com/seeker89/chaos-engineering-book.git
+    book_commit: 3e3ee64db71f51a5e9f79af8562dd4aa913a0e71
+    kind_version: v0.33.0
+    required_packages:
+      - ca-certificates
+      - curl
+      - git
+      - jq
+      - openssl
+      - python3
+      - python3-redis
+      - redis-server
+      - build-essential
+      - nginx
+      - sysstat
+      - stress-ng
+      - strace
+      - libseccomp-dev
+      - util-linux
+      - iproute2
+      - iptables
+      - cloud-guest-utils
+      - e2fsprogs
+      - lvm2
+      - docker.io
+    lab_images:
+      - hello-world:latest
+      - busybox:1.36
+      - ubuntu:24.04
+      - python:3.12-slim
+      - nginx:1.27
+      - bloomberg/goldpinger:3.11.3
+      - ghcr.io/shopify/toxiproxy:2.12.0
+
+  pre_tasks:
+    - ansible.builtin.import_tasks: tasks/identity.yml
+
+    - name: Require Ubuntu 24.04
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == 'Ubuntu'
+          - ansible_facts['distribution_version'] is version('24.04', '==')
+        fail_msg: This playbook requires an Ubuntu Server 24.04 VM.
+
+    - name: Verify the lab user exists
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ lab_user }}"
+
+  tasks:
+    - name: Update apt metadata
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+        lock_timeout: 300
+
+    - name: Install the shared dependencies
+      ansible.builtin.apt:
+        name: "{{ required_packages }}"
+        state: present
+        lock_timeout: 300
+
+    - name: Expand the ext4 root logical volume to the virtual disk capacity
+      ansible.builtin.shell: |
+        set -euo pipefail
+        root_device=$(findmnt -no SOURCE /)
+        root_filesystem=$(findmnt -no FSTYPE /)
+        test "$root_filesystem" = ext4
+        volume_group=$(lvs --noheadings -o vg_name "$root_device" | xargs)
+        free_extents=$(vgs --noheadings -o vg_free_count "$volume_group" | xargs)
+        if (( free_extents > 0 )); then
+          lvextend --resizefs -l +100%FREE "$root_device"
+        fi
+      args:
+        executable: /bin/bash
+      register: root_filesystem_expansion
+      changed_when: root_filesystem_expansion.stdout | length > 0
+
+    - name: Enable rootful Docker
+      ansible.builtin.systemd_service:
+        name: docker
+        enabled: true
+        state: started
+
+    # VirtualBox's IPv4 NAT resolver (10.0.2.3) can stay silent while the VM
+    # resolves through systemd-resolved's other upstreams. Containers on the
+    # default bridge only receive 10.0.2.3, so give them the host's resolver.
+    - name: Read the default Docker bridge gateway
+      ansible.builtin.command:
+        argv: [docker, network, inspect, bridge, --format, '{{ "{{" }}(index .IPAM.Config 0).Gateway{{ "}}" }}']
+      register: docker_bridge_gateway
+      changed_when: false
+
+    - name: Require a Docker bridge gateway address
+      ansible.builtin.assert:
+        that: docker_bridge_gateway.stdout is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$')
+        fail_msg: Could not read the default Docker bridge gateway.
+
+    - name: Create the systemd-resolved drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        mode: '0755'
+
+    - name: Let systemd-resolved answer on the Docker bridge gateway
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/docker-bridge.conf
+        content: |
+          [Resolve]
+          DNSStubListenerExtra={{ docker_bridge_gateway.stdout }}
+        mode: '0644'
+      register: resolved_bridge_listener
+
+    - name: Restart systemd-resolved after adding the bridge listener
+      ansible.builtin.systemd_service:
+        name: systemd-resolved
+        state: restarted
+      when: resolved_bridge_listener.changed
+
+    - name: Point default Docker DNS at the host resolver
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        content: "{{ {'dns': [docker_bridge_gateway.stdout]} | to_nice_json }}\n"
+        mode: '0644'
+      register: docker_dns_config
+
+    - name: Restart Docker after changing its DNS configuration
+      ansible.builtin.systemd_service:
+        name: docker
+        state: restarted
+      when: docker_dns_config.changed
+
+    # Every kind node runs its own kubelet and systemd; multi-node lab
+    # containers exceed the default 128 inotify instances, so a kubelet fails
+    # with "too many open files". These are kind's documented values.
+    - name: Raise inotify limits for multi-node kind clusters
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/60-kind-inotify.conf
+        content: |
+          fs.inotify.max_user_instances = 512
+          fs.inotify.max_user_watches = 524288
+        mode: '0644'
+      register: kind_inotify_limits
+
+    - name: Apply the inotify limits
+      ansible.builtin.command: sysctl --load /etc/sysctl.d/60-kind-inotify.conf
+      when: kind_inotify_limits.changed
+
+    - name: Read the active inotify instance limit
+      ansible.builtin.command: sysctl -n fs.inotify.max_user_instances
+      register: inotify_instances
+      changed_when: false
+
+    - name: Require the kind inotify instance limit
+      ansible.builtin.assert:
+        that: inotify_instances.stdout | int >= 512
+        fail_msg: fs.inotify.max_user_instances is below 512; multi-node kind clusters can fail.
+
+    - name: Keep Redis stopped until its lab starts it
+      ansible.builtin.systemd_service:
+        name: redis-server
+        enabled: false
+        state: stopped
+
+    - name: Keep NGINX stopped until its lab configures it
+      ansible.builtin.systemd_service:
+        name: nginx
+        enabled: false
+        state: stopped
+
+    - name: Grant the lab user Docker access for new login sessions
+      ansible.builtin.user:
+        name: "{{ lab_user }}"
+        groups: docker
+        append: true
+
+    - name: Reconnect with the lab user's Docker group membership
+      ansible.builtin.meta: reset_connection
+
+    - name: Create the Linux-local lab workspace
+      ansible.builtin.file:
+        path: "{{ lab_root }}"
+        state: directory
+        owner: "{{ lab_user }}"
+        group: "{{ lab_user }}"
+        mode: '0755'
+
+    - name: Clone the pinned companion source
+      ansible.builtin.git:
+        repo: "{{ book_repository }}"
+        dest: "{{ lab_root }}/book"
+        version: "{{ book_commit }}"
+        update: true
+        force: false
+      become_user: "{{ lab_user }}"
+
+    - name: Select the kind binary architecture
+      ansible.builtin.set_fact:
+        kind_architecture: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(ansible_architecture, '') }}"
+
+    - name: Require a supported VM architecture
+      ansible.builtin.assert:
+        that: kind_architecture | length > 0
+        fail_msg: "Unsupported architecture for kind: {{ ansible_architecture }}"
+
+    - name: Install the cluster-matched kubectl installer
+      ansible.builtin.copy:
+        src: install-kubectl-for-kind.sh
+        dest: "{{ lab_root }}/install-kubectl-for-kind.sh"
+        owner: "{{ lab_user }}"
+        group: "{{ lab_user }}"
+        mode: '0755'
+
+    - name: Install the kind image loader
+      ansible.builtin.copy:
+        src: load-lab-images-into-kind.sh
+        dest: "{{ lab_root }}/load-lab-images-into-kind.sh"
+        owner: "{{ lab_user }}"
+        group: "{{ lab_user }}"
+        mode: '0755'
+
+    - name: Copy the lab guide into the VM
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../docs/chaos-labs.md"
+        dest: "{{ lab_root }}/chaos-labs.md"
+        owner: "{{ lab_user }}"
+        group: "{{ lab_user }}"
+        mode: '0644'
+
+    - name: Copy provisioning notes into the VM
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../README.md"
+        dest: "{{ lab_root }}/README-provisioning.md"
+        owner: "{{ lab_user }}"
+        group: "{{ lab_user }}"
+        mode: '0644'
+
+    - name: Install the pinned kind binary
+      ansible.builtin.get_url:
+        url: "https://kind.sigs.k8s.io/dl/{{ kind_version }}/kind-linux-{{ kind_architecture }}"
+        dest: /usr/local/bin/kind
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Inspect locally available lab images
+      ansible.builtin.command:
+        argv: [docker, image, inspect, "{{ item }}"]
+      loop: "{{ lab_images }}"
+      register: image_inspections
+      changed_when: false
+      failed_when: false
+
+    - name: Cache the shared workload images
+      ansible.builtin.command:
+        argv: [timeout, 10m, docker, pull, "{{ item.item }}"]
+      loop: "{{ image_inspections.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.rc != 0
+
+    - name: Read the cgroup filesystem type
+      ansible.builtin.command: stat -fc %T /sys/fs/cgroup
+      register: cgroup_filesystem
+      changed_when: false
+
+    - name: Require cgroup v2
+      ansible.builtin.assert:
+        that: cgroup_filesystem.stdout == 'cgroup2fs'
+        fail_msg: The VM did not boot with the cgroup v2 unified hierarchy.
+
+    - name: Read available cgroup controllers
+      ansible.builtin.command: cat /sys/fs/cgroup/cgroup.controllers
+      register: cgroup_controllers
+      changed_when: false
+
+    - name: Require CPU memory and PID cgroup controllers
+      ansible.builtin.assert:
+        that:
+          - "'cpu' in cgroup_controllers.stdout.split()"
+          - "'memory' in cgroup_controllers.stdout.split()"
+          - "'pids' in cgroup_controllers.stdout.split()"
+        fail_msg: Required cgroup v2 controllers are unavailable.
+
+    - name: Verify the Docker daemon
+      ansible.builtin.command: docker info
+      register: docker_info
+      changed_when: false
+
+    - name: Verify Docker can run a container
+      ansible.builtin.command: docker run --rm hello-world:latest
+      changed_when: false
+
+    - name: Verify DNS from a default-bridge container
+      ansible.builtin.command: docker run --rm busybox:1.36 nslookup -timeout=5 dl.k8s.io
+      changed_when: false
+
+    - name: Require Docker cgroup v2
+      ansible.builtin.assert:
+        that: "'Cgroup Version: 2' in docker_info.stdout"
+        fail_msg: Docker is not using cgroup v2.
+
+    - name: Verify passwordless sudo for the lab user
+      ansible.builtin.command: sudo -n true
+      become: false
+      changed_when: false
+
+    - name: Read root filesystem capacity in GiB
+      ansible.builtin.shell: "df -BG / | awk 'NR == 2 {gsub(/G/, \"\", $2); print $2}'"
+      args:
+        executable: /bin/bash
+      register: root_disk_gib
+      changed_when: false
+
+    - name: Require the minimum root filesystem capacity
+      ansible.builtin.assert:
+        that: root_disk_gib.stdout | int >= 60
+        fail_msg: The VM root filesystem is smaller than the 60 GiB lab minimum.
+
+    - name: Record provisioned versions
+      ansible.builtin.shell: |
+        {
+          uname -a
+          systemd --version | head -1
+          docker version
+          python3 --version
+          strace --version
+          if command -v kind >/dev/null; then kind version; fi
+        } > "{{ lab_root }}/versions.txt" 2>&1
+      args:
+        executable: /bin/bash
+      become_user: "{{ lab_user }}"
+      changed_when: false
+
+    - name: Record the checked-out companion source commit
+      ansible.builtin.command:
+        argv: [git, -C, "{{ lab_root }}/book", rev-parse, HEAD]
+      become_user: "{{ lab_user }}"
+      register: checked_out_book_commit
+      changed_when: false
+
+    - name: Save the checked-out companion source commit
+      ansible.builtin.copy:
+        content: "{{ checked_out_book_commit.stdout }}\n"
+        dest: "{{ lab_root }}/book-commit.txt"
+        owner: "{{ lab_user }}"
+        group: "{{ lab_user }}"
+        mode: '0644'
+
+    - name: Confirm the companion source commit
+      ansible.builtin.assert:
+        that: checked_out_book_commit.stdout == book_commit
+        fail_msg: The companion source is not at the required commit.
+
+    - name: Record successful shared provisioning
+      ansible.builtin.copy:
+        content: "shared-v1\n"
+        dest: "{{ lab_root }}/.provisioned"
+        owner: "{{ lab_user }}"
+        group: "{{ lab_user }}"
+        mode: '0644'

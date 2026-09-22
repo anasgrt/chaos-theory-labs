@@ -1,67 +1,186 @@
-# Chaos Labs VM
+# Chaos theory labs
 
-This project creates the disposable Ubuntu 24.04 VM required by `chaos-labs.md`, then configures its shared tooling with a separate Ansible run. It installs prerequisites and caches required images; it does **not** create a lab service, a kind cluster, a fault, or an experiment result.
+Learn one mechanism, change one thing, observe the result, and explain why it happened.
+These 37 independent labs connect Kubernetes, Linux containers and chaos engineering
+theory to small, controlled experiments.
 
-## Prerequisites
+Start with a question card: `./lab.sh 01 question`. It contains the theory you need
+and the steps to run. Each lab's **Main lesson to learn in this lab** section
+distils the central mechanism, key distinction and conclusion into one short paragraph.
+Write your explanation, then compare with
+`./lab.sh 01 solution`. Answers explain expected behaviour; your measurements may differ.
 
-- Vagrant 2.4 or later
-- VirtualBox 7.1 or later
-- Ansible on the macOS host
-- Working outbound HTTPS and DNS resolution from the VM while Ansible downloads sources and container images
-- At least 16 GB host RAM free for the default 12 GiB VM; use 16 GiB in the VM before Lab 19.
+Commands that express the lesson stay visible: change a timeout, delete a Pod,
+set a resource limit, apply a policy, or restore a configuration. Setup supplies
+the fixture. Small named helpers handle repeated sampling, timing and output
+formatting. Each card explains what its helpers do and what their output means;
+you do not need to study their shell code to complete the lab.
 
-The default box is `bento/ubuntu-24.04` version `202502.21.0`, with catalog update checks disabled. It publishes native `arm64` and `amd64` VirtualBox variants and supplies a 64 GiB virtual disk. The box initially exposes a 30 GiB LVM root volume; the shared Ansible playbook expands it to the available disk capacity before downloading lab fixtures. The default VM has 4 vCPUs and 12 GiB RAM. Set `CHAOS_LABS_CPUS` or `CHAOS_LABS_MEMORY_MB` before first boot to increase them. The Ansible capacity gate verifies the guide's 60 GiB minimum.
+Choose a topic you need, or begin with this short path:
 
-## Bring up and configure
+| Lab | Learn |
+| --- | --- |
+| 01 | Why an exception handler needs a timeout |
+| 10 | Pod replacement, disruption budgets and Service selection |
+| 11 | Why a health check can disagree with a real caller |
+| 19 | Scheduling failures versus runtime memory limits |
+| 20 | Diagnose DNS, Service ports and listener addresses separately |
+| 21 | Configuration changes and rollout recovery |
+| 33 | Startup, readiness and liveness failures |
+| 34 | Volume placement, deletion protection and retained data |
+| 35 | ResourceQuota and LimitRange admission failures |
+| 36 | Secret encryption, missing keys and data recovery |
 
-One command: `./up.sh` runs `vagrant up`, then `./ansible/run.sh`. The same steps run manually:
+Use the [learner guide](docs/chaos-labs.md) for all 37 labs, the full topic map and
+results tables, or the [print edition](docs/chaos-labs.pdf) for offline study.
+[chaos-theory.md](docs/chaos-theory.md) is the deeper theory reference; its archived
+PDF is historical. See the [simplicity review](docs/reviews/simplicity-review.md)
+for the refactor decisions, and the [expansion review](docs/reviews/kubernetes-expansion-review.md)
+for the new labs' live results and validation limits.
 
-1. Create only the VM with `vagrant up --provider=virtualbox`.
-2. From the macOS host, run `./ansible/run.sh` to configure it.
-3. Open a new VM login with `vagrant ssh`. The new login activates the Docker group membership.
-4. Read `~/labs/chaos-labs.md` and begin the desired lab.
+## One VM, independent labs
 
-`ansible/run.sh` obtains the live SSH host, port, and private key from `vagrant ssh-config`; it does not depend on a fixed forwarded port or a macOS shared folder. Re-run it safely to repair/install missing shared prerequisites. Forward Ansible options to it, for example `./ansible/run.sh --check`.
+Install Bash, Vagrant 2.4+, VirtualBox 7.1+ and Ansible on a Linux or macOS host.
+Provisioning and Kubernetes setup need outbound HTTPS and DNS. The lifecycle uses Vagrant and Ansible,
+with no custom Python setup or reset program. Ansible and some teaching applications
+use Python internally.
 
-After the Ansible run succeeds, save `01-tools` with Vagrant before practicing. Use a new snapshot before each session and restore a snapshot rather than trying to recover a lost VM or an unclean fault.
+```bash
+./lab.sh provision       # once: create the VM and install shared tools
+./lab.sh 11 setup        # prepare Lab 11, without running any other lab
+./lab.sh ssh             # run the question's procedure inside the VM
+./lab.sh 11 reset        # remove only Lab 11's resources and files
+./lab.sh 03 setup        # choose any next lab
+```
 
-## Tear down
+All 37 labs run inside the same Ubuntu VM, named `chaos`. Each setup creates its
+own fixture. Each reset stops its own processes and removes its containers,
+services, mounts, fault rules and `~/labs/labNN/` workspace as applicable. Shared
+tools, cached images, the companion source and other labs are preserved.
 
-`./down.sh` destroys the VM and its snapshots immediately, without a confirmation prompt. The downloaded box stays cached.
+Kubernetes labs each create a named kind cluster inside this VM (`lab10`, `lab11`,
+and so on), with a private kubeconfig. Lab 11 does not need Lab 10. Lab 14 does not
+require deleting another cluster. Reset deletes only the selected cluster and
+works when its Kubernetes API is broken; the VM, SSH and Docker must still work.
+The first Kubernetes setup downloads a large node image; cluster creation allows
+up to 30 minutes for that initial work. Later setups reuse the image cache.
 
-## Run an individual lab
+| Command | Effect |
+| --- | --- |
+| `./lab.sh NN setup` | Clear that lab's previous fixture, prepare it and verify readiness |
+| `./lab.sh NN verify` | Check that lab's starting state |
+| `./lab.sh NN reset` | Remove that lab's resources and workspace |
+| `./lab.sh NN question` | Read its theory and procedure without a VM |
+| `./lab.sh NN solution` | Read its explanation and expected patterns without a VM |
+| `./lab.sh list` | List all labs |
+| `./lab.sh ssh` | Open a shell in the shared VM |
+| `./lab.sh status` | Show the shared VM state |
+| `./lab.sh stop` | Halt the whole VM, preserving all files |
+| `./lab.sh start` | Resume the VM without provisioning again |
 
-The shared provisioner remains separate from individual labs. From the macOS host, use the numbered lifecycle runner:
+Save results before setup or reset removes them. Lab 16 preserves its written
+card on repeated setup; reset still removes it. The recovery commands within a
+question test recovery; reset cleans up the experiment afterward.
 
-1. List the available labs with `./ansible/run-lab.sh list`.
-2. Prepare one lab with `./ansible/run-lab.sh 05 setup`.
-3. Confirm its safe baseline with `./ansible/run-lab.sh 05 verify`.
-4. Print the core solution, verification objective and step-by-step practical commands with `./ansible/run-lab.sh 05 solution`.
-5. Remove only that lab's automated fixture with `./ansible/run-lab.sh 05 reset`.
+The VM has 16 GiB RAM, 4 vCPUs and a dynamically allocated 64 GiB disk, including
+enough configured RAM for Lab 14. Allow memory for the host as well. Reset finished
+labs to release their resources; keeping many Kubernetes clusters running can
+exhaust the same VM. Resource contention is shared even though setup/reset targets
+are separate. No lab sequence or per-lab memory reload is required.
 
-`setup` first runs that lab's scoped reset, then creates only its safe prerequisites; it never executes the intentional fault. `verify` runs executable readiness checks. `solution` prints the guide-aligned solution path, then each lab's `commands` list as plain, pasteable blocks: where to run each block (VM terminal, Mac host, or browser) and the expected evidence. The commands follow the lab's core experiment in `chaos-labs.md`, adapted to the fixture that `setup` already created (for example, the recorded PID files that `reset` uses). Command blocks are tagged `!unsafe` so Ansible does not template Docker/kubectl `{{...}}` formats, and they are rendered to a local text file because Ansible's `debug` output escapes quotes and newlines. The full **Concept** and **Mechanism** text is printed before every setup so the learning objective stays with the runnable fixture.
+The pinned box is `bento/ubuntu-24.04` version `202502.21.0`. Files live on the guest
+filesystem; no host folder is shared. Kind nodes are containers, not additional
+VMs or independent physical machines. Ansible checks the inventory name and guest
+hostname before changing lab resources.
 
-**VS Code YAML support:** `.vscode/settings.json` contains `"yaml.customTags": ["!unsafe scalar"]` so the YAML extension recognizes Ansible's `!unsafe` tag without reporting it as unknown. `scalar` means a single value, including a multiline command string. The tag tells Ansible to preserve that text literally; the VS Code setting only affects editor validation and does not enable command execution or change Ansible's behavior.
+## Repository structure
 
-Labs are independently addressable but retain the guide's explicit shared-fixture dependencies: Lab 6 and Lab 9 require Lab 5's WordPress/MySQL stack; Lab 11 uses the Lab 10 theory only; Labs 16–18 require Lab 15's `chaos` kind cluster; Lab 19 uses a separate `ha` cluster and should not run alongside `chaos` on the default-memory VM. Run the prerequisite lab's `setup` first and preserve its fixture until dependent labs are complete.
+```text
+lab.sh                       Public command for every lab action
+Vagrantfile                  One shared VM for all labs
+labs/
+  NN-topic/
+    lab.yml                  Theory, question, procedure and lifecycle steps
+    files/                   Supporting programs and manifests, when needed
+ansible/
+  provision.yml              Configure the shared Ubuntu VM once
+  labs.yml                   Set up, verify or reset the selected fixture
+  cards.yml                  Read questions and solutions without a VM
+  tasks/                     Shared identity, file-copy and cluster tasks
+  files/                     Shared guest helpers and cluster manifests
+  templates/                 Question and solution templates
+  inventory/                 Empty default inventory; runtime targets one VM
+scripts/
+  validate.sh                Run all local maintainer checks
+  render-labs*.py             Generate the learner guide and print edition
+  check-labs.py              Validate content, embedded code and guide freshness
+  lab_content.py             Shared authoring loader and card renderer
+  labs.py                    Read cards with the authoring renderer
+  run-ansible.sh, lib/        Internal lifecycle shell helpers
+tests/                       Regression tests and Ansible integration checks
+docs/
+  chaos-theory.md             Maintained theory reference
+  chaos-labs.md               Generated learner guide
+  chaos-labs.pdf              Generated print edition
+  lab-design.md              Content contract and authoring instructions
+  reviews/                   Review reports and validation evidence
+  archive/                   Historical theory PDF
+```
 
-Labs 15 and 19 check resolution of the Docker registry and Kubernetes download endpoints before creating a cluster. If that check fails, repair VM DNS and rerun the setup; no partial cluster is created by that preflight.
+Edit a lab in its own folder; the guide and print edition are generated from those
+definitions. File names under `files:` are relative to that lab's `files/` folder.
+Ansible installs them into the same `~/labs/labNN/` guest paths used by the exercises.
+Keep files in `ansible/files/` only when they are shared infrastructure.
 
-## Deliberate boundaries
+The public entry point is now `./lab.sh`. It replaces `ansible/run-lab.sh`,
+`up.sh` and `down.sh`; use `./lab.sh NN setup` and `./lab.sh NN reset`.
+The current commands use the single `chaos` VM; old per-lab VMs are not deleted automatically.
+Local `tmp/`, `output/` and `.vagrant/` directories hold ignored diagnostics,
+rendering output and VM state; they are not lab source files.
 
-- `Vagrantfile` only declares the Linux VM, CPU/RAM/disk resources, and disables `/vagrant` sharing. It has no provisioner.
-- `ansible/playbook.yml` installs the Lab 0 package set, enables rootful Docker, runs `hello-world`, leaves Redis and NGINX stopped, verifies cgroup v2 and available controllers, clones the pinned companion source, installs kind v0.33.0, and caches core lab images.
-- A kind cluster is **not** created by Ansible. Labs 15–18 use the `chaos` cluster and Lab 19 creates the separate `ha` cluster; cluster lifecycle is part of the exercises.
-- `kubectl` is intentionally not installed until after a kind cluster is created. Run `~/labs/install-kubectl-for-kind.sh chaos` (or `ha`) to install the client version derived from that cluster's control plane and verified with the upstream SHA-256 file.
-- The published Goldpinger v3.11.3 tag has no ARM64 manifest. On ARM64, Ansible installs Ubuntu's `docker-buildx` plugin and builds its pinned v3.11.3 source locally under the unchanged `bloomberg/goldpinger:v3.11.3` tag. Labs 15 and 19 load their required, locally cached fixture images into their kind nodes before applying manifests; `~/labs/load-lab-images-into-kind.sh chaos` remains available to load Goldpinger manually. This avoids later per-Pod registry downloads and is safe on AMD64 too.
-- Optional BCC tracing tools, Byteman, Prometheus, and PowerfulSeal are not installed because the guide marks them optional and version-dependent.
+The provisioner installs common tools and caches the required images; individual
+setups create the services and clusters. It leaves Redis and system NGINX stopped.
+It configures Docker DNS through the VM resolver, requires cgroup v2 and raises
+inotify limits for kind. It installs kind v0.33.0. `kubectl` is installed after
+cluster creation using the control plane's version and an upstream checksum.
 
-The VM's lab workspace is `~/labs` on its VM-local root filesystem, not a macOS mount. It contains the guide, provisioning notes, `common.sh`, version record, pinned book source, and Kubernetes client installer. This avoids distorting Docker volumes, `fio` measurements, namespace mounts, or ownership semantics.
+Goldpinger uses the published `bloomberg/goldpinger:3.11.3` image on AMD64 and
+ARM64. The image tag has no `v` prefix, unlike its source release tag. Cluster
+setups load cached images into their nodes, avoiding per-Pod registry downloads. The companion
+book source is pinned at `3e3ee64db71f51a5e9f79af8562dd4aa913a0e71` for Lab 08.
 
-## Lab capacity and browser access
+`scripts/run-ansible.sh NN` obtains connection details for the shared `chaos` VM from Vagrant.
+Use `./lab.sh provision` once, then `./lab.sh NN setup` to prepare a lab.
+Command blocks use `!unsafe` to preserve literal Docker and kubectl `{{...}}`
+expressions. For a YAML editor, register the custom tag `!unsafe scalar`.
 
-The default configuration meets the guide's baseline. Before Lab 19, remove the earlier `chaos` kind cluster as instructed and reboot/reload the VM with at least 16 GiB (`CHAOS_LABS_MEMORY_MB=16384`) if the host has capacity.
+## Validate changes
 
-For Lab 14, start the fixture inside the VM, then use the `HostName`, `Port`, `User`, and `IdentityFile` reported by `vagrant ssh-config` to create the SSH tunnel from macOS. This uses the VM loopback service exactly as the lab specifies.
+These optional authoring tools use Python; they are not used by setup or reset.
+On Linux or WSL, install Ansible, Bash, jq and `requirements-dev.txt`, then run:
 
-All workload, fault-injection, and recovery commands remain in the lab guide and run only when you choose to practice that lab.
+```bash
+python3 -m pip install -r requirements-dev.txt
+bash scripts/validate.sh
+```
+
+The validation command works from any working directory and does not change the
+VM or generated documents. It requires Ansible so integration checks cannot be
+silently skipped. It checks content and guide freshness, shell routing, all three
+playbooks, identity guards and the complete regression suite. Integration tests
+install every lab's files into a temporary directory and compare all 66
+Ansible-rendered cards with the authoring renderer. Process cleanup checks require
+Linux's `/proc` filesystem.
+
+After editing lab definitions, run `python3 scripts/render-labs.py` to refresh the
+guide, then validate again. Local checks do not replace live Ubuntu, Docker and
+Kubernetes experiments; acceptance steps are in [docs/lab-design.md](docs/lab-design.md).
+Current results and the unresolved VirtualBox Kubernetes acceptance failure are
+recorded in [the isolation review](docs/reviews/isolation-review.md).
+The earlier [procedure review](docs/reviews/procedure-review.md) covers Labs 00–21.
+The [simplicity review](docs/reviews/simplicity-review.md) covers the current refactor.
+
+To regenerate the print edition, install ReportLab and DejaVu Sans/Mono fonts,
+then run `python3 scripts/render-labs-pdf.py` to update `docs/chaos-labs.pdf`. Use
+`--font-dir` if the fonts are outside `/usr/share/fonts/truetype/dejavu`. Render
+and inspect the resulting pages before committing the PDF.

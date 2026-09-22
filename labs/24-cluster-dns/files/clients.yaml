@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: client
+  labels:
+    app: dns-client
+spec:
+  terminationGracePeriodSeconds: 2
+  volumes:
+  - name: scripts
+    configMap:
+      name: dns-scripts
+  containers:
+  - name: client
+    image: python:3.12-slim
+    command:
+    - python
+    - -c
+    - import time; time.sleep(86400)
+    volumeMounts:
+    - name: scripts
+      mountPath: /scripts
+    resources:
+      requests:
+        cpu: 20m
+        memory: 16Mi
+      limits:
+        memory: 128Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: client-ndots
+  labels:
+    app: dns-client
+spec:
+  terminationGracePeriodSeconds: 2
+  dnsPolicy: ClusterFirst
+  dnsConfig:
+    options:
+    - name: ndots
+      value: '1'
+  volumes:
+  - name: scripts
+    configMap:
+      name: dns-scripts
+  containers:
+  - name: client
+    image: python:3.12-slim
+    command:
+    - python
+    - -c
+    - import time; time.sleep(86400)
+    volumeMounts:
+    - name: scripts
+      mountPath: /scripts
+    resources:
+      requests:
+        cpu: 20m
+        memory: 16Mi
+      limits:
+        memory: 128Mi
