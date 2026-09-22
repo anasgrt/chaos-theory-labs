@@ -1,6 +1,6 @@
 hostname: {{ rancher_hostname }}
 replicas: 1
-bootstrapPassword: {{ rancher_bootstrap_password.stdout | to_json }}
+bootstrapPassword: {{ rancher_admin_password | to_json }}
 privateCA: true
 agentTLSMode: strict
 ingress:

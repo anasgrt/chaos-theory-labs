@@ -8,8 +8,6 @@
   vars:
     rke2_kubeconfig:
       content: "{{ sample_kubeconfig | to_yaml | b64encode }}"
-    rancher_bootstrap_password:
-      stdout: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     sample_kubeconfig:
       apiVersion: v1
       kind: Config

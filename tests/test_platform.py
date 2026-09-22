@@ -122,6 +122,59 @@ else:
                     if scenario == 'unready-node':
                         self.assertFalse(any(Path(args[0]).name == 'curl' for args in executed))
 
+    def test_client_checks_distinguish_dns_routing_response_and_trust_failures(self):
+        # Exercise the saved Ansible conditions without touching DNS, keychains,
+        # or a VM. Substitute only the public CA source and external commands.
+        with tempfile.TemporaryDirectory(prefix='client checks ') as tmp:
+            directory = Path(tmp)
+            ca = directory / 'ca.crt'
+            ca.write_text('public CA fixture')
+            stub = directory / 'client.py'
+            stub.write_text("""import os, sys
+args = sys.argv[1:]
+scenario = os.environ['CLIENT_SCENARIO']
+if args[0] != 'curl':
+    print('192.168.56.10' if scenario != 'wrong-dns' else '192.0.2.1')
+    sys.exit(1 if scenario in ('missing-dns', 'wrong-dns') else 0)
+assert '--resolve' not in args and '-k' not in args and '--insecure' not in args
+assert '--noproxy' in args and '--max-time' in args
+if scenario == 'routing-error':
+    sys.exit(7)
+if scenario == 'trust-error' and '--cacert' not in args:
+    sys.exit(60)
+print('wrong' if scenario == 'wrong-response' else 'pong')
+""")
+            tasks = yaml.safe_load((ROOT / 'ansible/tasks/platform-client-verify.yml').read_text())
+            tasks[0]['ansible.builtin.fetch'].update(src=str(ca), dest=str(directory / 'exported.crt'))
+            for task in tasks[1]['block']:
+                if 'ansible.builtin.command' in task:
+                    argv = task['ansible.builtin.command']['argv']
+                    task['ansible.builtin.command']['argv'] = ['python3', str(stub), *argv]
+            playbook = directory / 'client.yml'
+            playbook.write_text(yaml.safe_dump([{
+                'hosts': 'localhost', 'connection': 'local', 'gather_facts': False,
+                'vars': {'rancher_hostname': 'rancher.chaos.test', 'platform_ip': '192.168.56.10'},
+                'tasks': tasks,
+            }]))
+            failures = {
+                'missing-dns': 'laptop DNS is missing or points elsewhere',
+                'wrong-dns': 'laptop DNS is missing or points elsewhere',
+                'routing-error': 'CA-verified HTTPS to Rancher failed',
+                'wrong-response': 'CA-verified HTTPS to Rancher failed',
+                'trust-error': 'default curl trust/access failed',
+            }
+            for scenario in ('healthy', *failures):
+                with self.subTest(scenario=scenario):
+                    result = subprocess.run(['ansible-playbook', '-i', 'localhost,', str(playbook)],
+                        env=dict(os.environ, ANSIBLE_CONFIG=str(ROOT / 'ansible/ansible.cfg'),
+                                 CLIENT_SCENARIO=scenario),
+                        capture_output=True, text=True, timeout=60)
+                    output = result.stdout + result.stderr
+                    self.assertEqual(result.returncode == 0, scenario == 'healthy', output)
+                    if scenario in failures:
+                        self.assertIn(failures[scenario], output)
+                    self.assertEqual((directory / 'exported.crt').read_text(), ca.read_text())
+
     def test_management_wrapper_rejects_target_overrides_before_invoking_kubectl(self):
         for flag in ('--kubeconfig=/tmp/foreign', '--context=kind-lab03', '--server=x', '-s', '-shttps://foreign', '--insecure-skip-tls-verify'):
             result = subprocess.run(['bash', str(ROOT / 'ansible/files/rke2-kubectl'), 'get', 'nodes', flag], capture_output=True, text=True)
@@ -142,6 +195,7 @@ else:
             self.assertEqual(config['write-kubeconfig-mode'], '0600')
             self.assertNotEqual(config['cluster-cidr'], '10.244.0.0/16')
             values = yaml.safe_load((directory / 'rancher-values.yaml').read_text())
+            self.assertEqual(values['bootstrapPassword'], 'SuperAdmin@123')
             self.assertTrue(values['privateCA'])
             self.assertEqual(values['agentTLSMode'], 'strict')
             self.assertEqual(values['ingress']['tls']['source'], 'secret')

@@ -22,7 +22,7 @@ export ANSIBLE_CONFIG="$repo_dir/ansible/ansible.cfg"
 
 python3 scripts/check-labs.py
 bash tests/test-lifecycle.sh
-for playbook in provision platform labs cards; do
+for playbook in provision platform browser-export labs cards reset-all; do
   ansible-playbook -i ansible/inventory/vagrant.ini "ansible/$playbook.yml" --syntax-check
 done
 ansible-playbook -i localhost, tests/ansible/identity.yml

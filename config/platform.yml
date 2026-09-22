@@ -2,6 +2,12 @@
 # Shared by Vagrant and Ansible. Choose a free address in VirtualBox's host-only range.
 platform_ip: 192.168.56.10
 rancher_hostname: rancher.chaos.test
+# Lab-only credential: reapplied on EVERY provision and printed on success.
+rancher_admin_password: SuperAdmin@123
+# Register each lab's disposable kind cluster with Rancher during setup so it
+# appears in the UI, and remove it again during reset. Set false to keep lab
+# clusters free of Rancher's agent components.
+rancher_import_labs: true
 vm_memory_mb: 24576
 vm_cpus: 6
 

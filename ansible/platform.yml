@@ -12,3 +12,4 @@
     - ansible.builtin.import_tasks: tasks/identity.yml
   tasks:
     - ansible.builtin.import_tasks: tasks/platform-verify.yml
+    - ansible.builtin.import_tasks: tasks/platform-client-verify.yml

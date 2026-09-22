@@ -1,0 +1,114 @@
+---
+# Remove this lab's cluster record from Rancher before the kind cluster is
+# deleted, so Rancher can still reach the agent and clean up after itself.
+# Reset is the recovery path: a Rancher that is stopped, broken or not yet
+# provisioned must never block a learner from deleting a lab, so every call
+# here is tolerant and reports what was left behind instead of failing.
+- name: Log in to Rancher to remove this lab's cluster
+  ansible.builtin.uri:
+    url: "https://{{ rancher_hostname }}/v3-public/localProviders/local?action=login"
+    method: POST
+    body_format: json
+    body:
+      username: admin
+      password: "{{ rancher_admin_password }}"
+      responseType: json
+      description: "Chaos lab {{ lab_id }} cluster removal"
+      ttl: 600000
+    ca_path: "{{ lab_rancher_ca }}"
+    validate_certs: true
+    use_proxy: false
+    status_code: 201
+    timeout: 30
+  register: lab_rancher_removal_login
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Remove this lab's cluster from Rancher
+  vars:
+    lab_rancher_headers:
+      Authorization: "Bearer {{ lab_rancher_removal_login.json.token | default('') }}"
+    # Rancher matches ?name= loosely, so act only on an exact lab cluster name.
+    lab_rancher_matching: >-
+      {{ lab_rancher_present.json.data | default([])
+         | selectattr('name', 'equalto', lab_cluster) | list }}
+  when: lab_rancher_removal_login.status | default(0) == 201
+  block:
+    - name: Look for this lab's cluster in Rancher
+      ansible.builtin.uri:
+        url: "https://{{ rancher_hostname }}/v3/clusters?name={{ lab_cluster }}"
+        headers: "{{ lab_rancher_headers }}"
+        ca_path: "{{ lab_rancher_ca }}"
+        validate_certs: true
+        use_proxy: false
+        timeout: 30
+      register: lab_rancher_present
+      failed_when: false
+      changed_when: false
+      no_log: true
+
+    - name: Delete only this lab's cluster record
+      ansible.builtin.uri:
+        url: "https://{{ rancher_hostname }}/v3/clusters/{{ item.id }}"
+        method: DELETE
+        headers: "{{ lab_rancher_headers }}"
+        ca_path: "{{ lab_rancher_ca }}"
+        validate_certs: true
+        use_proxy: false
+        status_code: [200, 204, 404]
+        timeout: 60
+      loop: "{{ lab_rancher_matching }}"
+      loop_control:
+        label: "{{ item.id }}"
+      when: lab_rancher_present.status | default(0) == 200
+      changed_when: true
+      failed_when: false
+
+    - name: Wait for Rancher to finish removing this lab's cluster
+      ansible.builtin.uri:
+        url: "https://{{ rancher_hostname }}/v3/clusters?name={{ lab_cluster }}"
+        headers: "{{ lab_rancher_headers }}"
+        ca_path: "{{ lab_rancher_ca }}"
+        validate_certs: true
+        use_proxy: false
+        timeout: 30
+      register: lab_rancher_gone
+      until: lab_rancher_gone.status | default(0) != 200 or lab_rancher_gone.json.data | length == 0
+      retries: 24
+      delay: 5
+      failed_when: false
+      changed_when: false
+      no_log: true
+      when: lab_rancher_matching | length > 0
+
+    - name: Report a Rancher cluster that outlived its removal request
+      ansible.builtin.debug:
+        msg: >-
+          Rancher still lists the cluster {{ lab_cluster }}. Delete it under
+          Cluster Management at https://{{ rancher_hostname }} once it settles.
+      when:
+        - lab_rancher_gone.json.data | default([]) | length > 0
+
+  always:
+    - name: Revoke this lab's removal login
+      ansible.builtin.uri:
+        url: "https://{{ rancher_hostname }}/v3/tokens?action=logout"
+        method: POST
+        headers: "{{ lab_rancher_headers }}"
+        ca_path: "{{ lab_rancher_ca }}"
+        validate_certs: true
+        use_proxy: false
+        status_code: [200, 204]
+        timeout: 30
+      failed_when: false
+      changed_when: false
+      no_log: true
+
+- name: Report a lab cluster that Rancher could not be asked to remove
+  ansible.builtin.debug:
+    msg: >-
+      Rancher was unreachable, so the cluster {{ lab_cluster }} may still be
+      listed there. The kind cluster is still removed below. Delete the stale
+      entry under Cluster Management at https://{{ rancher_hostname }}.
+  when: lab_rancher_removal_login.status | default(0) != 201

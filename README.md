@@ -7,6 +7,9 @@ controlled experiments: seven container labs and 20 Kubernetes labs.
 Provisioning installs **Rancher on a permanent single-node RKE2 cluster** inside
 the teaching VM. The experiments retain separate Docker containers and disposable
 kind clusters, so a lab can break its API server or DNS without targeting Rancher.
+Each Kubernetes lab registers its own cluster with Rancher during setup and removes
+it again during reset, so you can watch an experiment in the Rancher UI without
+running it on the management cluster.
 See [Rancher and RKE2 setup](docs/rancher-rke2.md) for installation, browser access,
 credentials, verification and the exact limits of this architecture.
 
@@ -63,12 +66,26 @@ use Python internally.
 
 ```bash
 ./lab.sh provision       # once: create the VM and install shared tools
-./lab.sh platform        # verify RKE2, Rancher and HTTPS
+./lab.sh browser-setup   # once per Mac/VM CA: configure laptop DNS and TLS trust
+./lab.sh platform        # verify VM health plus laptop DNS, HTTPS and CA trust
 ./lab.sh 04 setup        # prepare Lab 04, without running any other lab
 ./lab.sh ssh             # run the question's procedure inside the VM
 ./lab.sh 04 reset        # remove only Lab 04's resources and files
 ./lab.sh 07 setup        # choose any next lab
 ```
+
+**Before opening Rancher on macOS:** run `./lab.sh browser-setup` in your Mac
+Terminal and approve administrator authentication if prompted. It configures the
+laptop hosts entry and lab CA trust using `config/platform.yml`; repeat runs are
+safe. See [Open Rancher](docs/rancher-rke2.md#open-rancher) for details and Linux
+manual setup. Provisioning configures the VM only. `./lab.sh platform` now checks laptop access too and reports missing
+DNS or certificate trust explicitly.
+
+Every `./lab.sh provision` resets the Rancher login to **`admin` / `SuperAdmin@123`**
+and prints both credentials after verifying login. The password is configured in
+[config/platform.yml](config/platform.yml). UI password changes are overwritten
+on the next provision; this published credential is for this local lab only.
+`platform` and `browser-setup` do not change the password.
 
 All 27 labs run inside the same Ubuntu VM, named `chaos`. Each setup creates its
 own fixture. Each reset stops its own processes and removes its containers,
@@ -82,15 +99,27 @@ works when its Kubernetes API is broken; the VM, SSH and Docker must still work.
 The first Kubernetes setup downloads a large node image; cluster creation allows
 up to 30 minutes for that initial work. Later setups reuse the image cache.
 
+Setup then registers that cluster with Rancher under the same name, so `lab03`
+appears beside `local` in Cluster Management and you can browse its Pods, nodes
+and events in the UI. Reset asks Rancher to remove the cluster first, while its
+agent can still be reached, and only then deletes the kind cluster. A Rancher that
+is stopped or unreachable never blocks a reset: the lab is still removed and the
+run reports the stale entry to delete by hand. Registration adds Rancher's agent
+to the lab cluster, which is extra moving parts inside an experiment; set
+`rancher_import_labs: false` in [config/platform.yml](config/platform.yml) to run
+labs on plain kind clusters instead.
+
 | Command | Effect |
 | --- | --- |
 | `./lab.sh NN setup` | Clear that lab's previous fixture, prepare it and verify readiness |
 | `./lab.sh NN verify` | Check that lab's starting state |
 | `./lab.sh NN reset` | Remove that lab's resources and workspace |
+| `./lab.sh reset-all` | Remove every lab installed in the VM, after confirming |
 | `./lab.sh NN question` | Read its theory and procedure without a VM |
 | `./lab.sh NN solution` | Read its explanation and expected patterns without a VM |
 | `./lab.sh list` | List all labs |
-| `./lab.sh platform` | Verify the permanent RKE2 API, Rancher deployment and HTTPS |
+| `./lab.sh browser-setup` | Configure macOS hosts and lab CA trust, then verify access |
+| `./lab.sh platform` | Verify RKE2/Rancher health plus laptop DNS, HTTPS and CA trust |
 | `./lab.sh ssh` | Open a shell in the shared VM |
 | `./lab.sh status` | Show the shared VM state |
 | `./lab.sh stop` | Halt the whole VM, preserving all files |
@@ -98,6 +127,14 @@ up to 30 minutes for that initial work. Later setups reuse the image cache.
 
 Save results before setup or reset removes them. The recovery commands within a
 question test recovery; reset cleans up the experiment afterward.
+
+`./lab.sh reset-all` clears a VM that accumulated several labs. It discovers what
+is actually installed, from the lab workspaces and the kind clusters, lists those
+labs, and asks you to type `reset-all` before removing anything. One run resets
+them all, instead of paying for a separate Ansible start-up and SSH set-up per
+lab. It removes exactly what the individual resets remove, including each lab's
+Rancher entry, and leaves shared tools, cached images, RKE2 and Rancher alone.
+Use `./lab.sh reset-all yes` to skip the prompt in a script.
 
 The VM defaults to 24 GiB RAM, 6 vCPUs and a dynamically allocated 64 GiB disk.
 Set resources and the host-only IP in [config/platform.yml](config/platform.yml)
@@ -167,6 +204,10 @@ cluster creation using the control plane's version and an upstream checksum.
 RKE2 uses its own containerd, bundled Kubernetes client and private kubeconfig.
 Use `rke2-kubectl` inside the VM for management; the lab `k` helpers continue to
 target their own kind clusters. Lab reset does not uninstall RKE2 or Rancher.
+Provisioning also publishes Rancher's server URL, which is what lets a lab cluster
+register at all. The agent image is pulled by the lab cluster itself the first time
+it registers; it is deliberately not preloaded, because copying it into every kind
+node is slower than one registry pull.
 
 Goldpinger uses the published `bloomberg/goldpinger:3.11.3` image on AMD64 and
 ARM64. The image tag has no `v` prefix, unlike its source release tag. Cluster
@@ -198,7 +239,11 @@ install every lab's files into a temporary directory and compare all 54
 Ansible-rendered cards with the authoring renderer. Process cleanup checks require
 Linux's `/proc` filesystem.
 Platform checks exercise real certificate generation and renewal, Ansible templates,
-private kubeconfig references and cluster-target guards. They do not boot a VM.
+private kubeconfig references and cluster-target guards. Cluster registration runs
+the shipped import and removal tasks against a stub Rancher API, covering reuse of
+an existing record, refusal without a published server URL, removal of only the
+selected lab, and a reset that still succeeds while Rancher is unreachable.
+They do not boot a VM.
 
 After editing lab definitions, run `python3 scripts/render-labs.py` to refresh the
 guide, then validate again. Local checks do not replace live Ubuntu, Docker and

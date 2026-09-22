@@ -2,13 +2,18 @@
 - name: Run one Chaos Lab lifecycle action
   hosts: chaos_labs
   gather_facts: false
+  vars_files:
+    - ../config/platform.yml
   vars:
     lab_action: setup
     lab_definition: ''
     lab_id: "{{ lab_definition | dirname | basename | regex_replace('-.*$', '') }}"
-    lab_root: /home/vagrant/labs
+    lab_home: /home/vagrant
+    lab_root: "{{ lab_home }}/labs"
     lab_workspace: "{{ lab_root }}/lab{{ lab_id }}"
     lab_cluster: "lab{{ lab_id }}"
+    # Public CA only; the lab user reads this copy, never the platform private key.
+    lab_rancher_ca: "{{ lab_home }}/rancher/ca.crt"
     # Local file for plain-text output; set by lab.sh.
     lab_text_output: ''
 
@@ -104,6 +109,13 @@
     - name: Prepare an independent Kubernetes cluster when required
       ansible.builtin.include_tasks: tasks/kubernetes.yml
       when: lab_action == 'setup' and selected_lab.kubernetes | default(false)
+
+    - name: Show this lab's cluster in Rancher
+      ansible.builtin.include_tasks: tasks/rancher-import.yml
+      when:
+        - lab_action == 'setup'
+        - selected_lab.kubernetes | default(false)
+        - rancher_import_labs | default(true)
 
     - name: Install files owned by the selected lab
       ansible.builtin.include_tasks: tasks/fixtures.yml

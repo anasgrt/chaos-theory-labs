@@ -40,42 +40,16 @@
     group: "{{ lab_user }}"
     mode: '0644'
 
-- name: Generate the bootstrap password once without printing it
-  ansible.builtin.shell: |
-    set -euo pipefail
-    umask 077
-    if [[ ! -s /etc/chaos-platform/bootstrap-password ]]; then
-      temporary=$(mktemp /etc/chaos-platform/.password.XXXXXX)
-      trap 'rm -f "$temporary"' EXIT
-      openssl rand -hex 32 > "$temporary"
-      mv "$temporary" /etc/chaos-platform/bootstrap-password
-      echo created
-    fi
-  args:
-    executable: /bin/bash
-  register: bootstrap_generation
-  changed_when: "'created' in bootstrap_generation.stdout"
-  no_log: true
-
-- name: Read the persistent bootstrap password for the chart
-  ansible.builtin.command: cat /etc/chaos-platform/bootstrap-password
-  register: rancher_bootstrap_password
-  changed_when: false
-  no_log: true
-
-- name: Require a complete bootstrap credential
-  ansible.builtin.assert:
-    that: rancher_bootstrap_password.stdout is match('^[a-f0-9]{64}$')
-  no_log: true
-
-- name: Give the lab user the initial login credential privately
+- name: Save the configured lab password for bootstrap and local reference
   ansible.builtin.copy:
-    src: /etc/chaos-platform/bootstrap-password
-    dest: "{{ lab_home }}/rancher/bootstrap-password"
-    remote_src: true
-    owner: "{{ lab_user }}"
-    group: "{{ lab_user }}"
+    content: "{{ rancher_admin_password }}\n"
+    dest: "{{ item.path }}"
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
     mode: '0600'
+  loop:
+    - {path: /etc/chaos-platform/bootstrap-password, owner: root}
+    - {path: "{{ lab_home }}/rancher/bootstrap-password", owner: "{{ lab_user }}"}
   no_log: true
 
 - name: Create the management namespace and install the TLS secrets
@@ -124,8 +98,28 @@
       - --wait
       - --timeout=15m
       - --history-max=5
-  # Helm output can include chart NOTES; credentials must never enter logs.
+  # Keep Helm internals private; print the verified lab login at provisioning completion.
   no_log: true
+
+# A downstream cluster agent is told where to call home through this setting.
+# Until it holds a value, Rancher issues registration tokens with an empty
+# manifest URL and no imported cluster can ever register.
+- name: Wait for Rancher to create the server-url setting
+  ansible.builtin.command:
+    argv: [/var/lib/rancher/rke2/bin/kubectl, --kubeconfig=/etc/rancher/rke2/rke2.yaml, --context=default, --request-timeout=15s, get, settings.management.cattle.io, server-url, -o, 'jsonpath={.value}']
+  register: rancher_server_url
+  changed_when: false
+  until: rancher_server_url.rc == 0
+  retries: 12
+  delay: 5
+
+- name: Publish the Rancher server URL used by downstream cluster agents
+  ansible.builtin.command:
+    argv: [/var/lib/rancher/rke2/bin/kubectl, --kubeconfig=/etc/rancher/rke2/rke2.yaml, --context=default, --request-timeout=30s, patch, settings.management.cattle.io, server-url, --type=merge, -p, '{"value": "https://{{ rancher_hostname }}"}']
+  when: rancher_server_url.stdout != 'https://' + rancher_hostname
+
+- name: Reset and verify the lab admin password on every provision
+  ansible.builtin.import_tasks: rancher-password.yml
 
 - name: Save Rancher access instructions
   ansible.builtin.copy:
@@ -135,9 +129,12 @@
     mode: '0644'
     content: |
       Rancher: https://{{ rancher_hostname }}
-      Host hosts-file entry: {{ platform_ip }} {{ rancher_hostname }}
-      Import ca.crt into your browser or operating system's trusted roots.
-      Initial username: admin
-      Initial password: read ~/rancher/bootstrap-password privately, then change it in Rancher.
+      LAPTOP hosts-file entry: {{ platform_ip }} {{ rancher_hostname }}
+      VM health checks bypass DNS; the laptop needs its own hostname mapping and CA trust.
+      Import ca.crt into your laptop browser or operating system's trusted roots.
+      From the repository on the laptop: see docs/rancher-rke2.md#open-rancher, then run ./lab.sh platform.
+      Username: admin
+      Password: read ~/rancher/bootstrap-password or the provisioning output.
+      Every provision resets the admin password to the value in config/platform.yml.
       Management Kubernetes: rke2-kubectl get nodes
       Labs use separate kind clusters. Do not run destructive labs on management.

@@ -1,0 +1,26 @@
+---
+- name: Verify the teaching VM and export public browser configuration
+  hosts: chaos_labs
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../config/platform.yml
+  vars:
+    lab_user: vagrant
+    lab_home: /home/vagrant
+  pre_tasks:
+    - ansible.builtin.import_tasks: tasks/identity.yml
+  tasks:
+    - ansible.builtin.import_tasks: tasks/platform-verify.yml
+    - name: Export only the public lab CA
+      ansible.builtin.fetch:
+        src: /etc/chaos-platform/tls/ca.crt
+        dest: "{{ playbook_dir }}/../rancher-lab-ca.crt"
+        flat: true
+    - name: Export configured browser hostname and address
+      ansible.builtin.copy:
+        content: "{{ {'hostname': rancher_hostname, 'ip': platform_ip} | to_json }}\n"
+        dest: "{{ playbook_dir }}/../.vagrant/browser-access.json"
+        mode: '0600'
+      delegate_to: localhost
+      become: false

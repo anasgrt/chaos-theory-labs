@@ -93,6 +93,24 @@ for action in question solution; do
 done
 run list
 ! grep '^vagrant' "$CALLS"
+# reset-all targets its own playbook, never a single lab, and only "yes" skips
+# the confirmation prompt.
+run reset-all
+contains '/reset-all.yml>'
+contains '<--limit> <chaos>'
+! grep -E '<up>|<destroy>|<halt>|provision.yml|labs.yml' "$CALLS"
+! grep -F 'reset_all_confirmed' "$CALLS"
+run reset-all yes
+contains '/reset-all.yml>'
+contains '<--extra-vars> <reset_all_confirmed=yes>'
+for bad in no maybe -y 02 ''; do
+  if run reset-all "$bad"; then echo "Accepted invalid reset-all argument: $bad" >&2; exit 1; fi
+  test ! -s "$CALLS"
+done
+export VM_STATE=poweroff
+if run reset-all; then exit 1; fi
+! grep '^ansible' "$CALLS"
+unset VM_STATE
 for bad in '' 27 28 29 30 31 32 33 34 35 36 37 99 100 -1 x 0x10 '../04' '04;false'; do
   for action in setup verify reset question solution; do
     if run "$bad" "$action"; then echo "Accepted invalid ID: $bad ($action)" >&2; exit 1; fi

@@ -1,0 +1,158 @@
+---
+# Register this lab's disposable kind cluster with Rancher so it appears in the
+# UI beside the permanent local cluster. The cluster record must be created
+# through the Rancher API as a real user: a provisioning.cattle.io resource
+# applied with kubectl is stamped with the creator "system:admin", which is not
+# a Rancher user, and its registration token then never leaves an empty status.
+# Lab pods reach the platform through the VM's own resolver, which provisioning
+# already points at /etc/hosts, so no cluster DNS changes are needed here.
+- name: Log in to Rancher to register this lab's cluster
+  ansible.builtin.uri:
+    url: "https://{{ rancher_hostname }}/v3-public/localProviders/local?action=login"
+    method: POST
+    body_format: json
+    body:
+      username: admin
+      password: "{{ rancher_admin_password }}"
+      responseType: json
+      description: "Chaos lab {{ lab_id }} cluster registration"
+      ttl: 1800000
+    ca_path: "{{ lab_rancher_ca }}"
+    validate_certs: true
+    use_proxy: false
+    status_code: 201
+  register: lab_rancher_login
+  until: lab_rancher_login.status == 201
+  retries: 6
+  delay: 5
+  no_log: true
+
+- name: Register this lab's cluster and wait for its agent
+  vars:
+    lab_rancher_headers:
+      Authorization: "Bearer {{ lab_rancher_login.json.token }}"
+    # Rancher matches ?name= loosely, so accept only an exact lab cluster name.
+    lab_rancher_match: >-
+      {{ lab_rancher_existing.json.data | default([])
+         | selectattr('name', 'equalto', lab_cluster) | list }}
+  block:
+    - name: Read the published Rancher server URL
+      ansible.builtin.uri:
+        url: "https://{{ rancher_hostname }}/v3/settings/server-url"
+        headers: "{{ lab_rancher_headers }}"
+        ca_path: "{{ lab_rancher_ca }}"
+        validate_certs: true
+        use_proxy: false
+      register: lab_rancher_server_url
+      no_log: true
+
+    - name: Require a published Rancher server URL before registering a cluster
+      ansible.builtin.assert:
+        that: lab_rancher_server_url.json.value | default('') | length > 0
+        fail_msg: >-
+          Rancher has no server-url, so it cannot issue a registration manifest.
+          Run ./lab.sh provision to publish it, then set up this lab again.
+
+    - name: Look for an existing Rancher record for this lab's cluster
+      ansible.builtin.uri:
+        url: "https://{{ rancher_hostname }}/v3/clusters?name={{ lab_cluster }}"
+        headers: "{{ lab_rancher_headers }}"
+        ca_path: "{{ lab_rancher_ca }}"
+        validate_certs: true
+        use_proxy: false
+      register: lab_rancher_existing
+      no_log: true
+
+    - name: Create the Rancher record for this lab's cluster
+      ansible.builtin.uri:
+        url: "https://{{ rancher_hostname }}/v3/clusters"
+        method: POST
+        body_format: json
+        body:
+          type: cluster
+          name: "{{ lab_cluster }}"
+          description: "Chaos lab {{ lab_id }}: disposable kind cluster, removed by ./lab.sh {{ lab_id }} reset"
+        headers: "{{ lab_rancher_headers }}"
+        ca_path: "{{ lab_rancher_ca }}"
+        validate_certs: true
+        use_proxy: false
+        status_code: 201
+      register: lab_rancher_created
+      when: lab_rancher_match | length == 0
+      no_log: true
+
+    - name: Keep this lab's Rancher cluster identifier
+      ansible.builtin.set_fact:
+        lab_rancher_cluster_id: >-
+          {{ lab_rancher_match[0].id if lab_rancher_match | length > 0
+             else lab_rancher_created.json.id }}
+
+    - name: Wait for the registration manifest for this lab's cluster
+      ansible.builtin.uri:
+        url: "https://{{ rancher_hostname }}/v3/clusterregistrationtokens?clusterId={{ lab_rancher_cluster_id }}"
+        headers: "{{ lab_rancher_headers }}"
+        ca_path: "{{ lab_rancher_ca }}"
+        validate_certs: true
+        use_proxy: false
+      register: lab_rancher_tokens
+      until: lab_rancher_tokens.json.data | map(attribute='manifestUrl') | select('truthy') | list | length > 0
+      retries: 24
+      delay: 5
+      no_log: true
+
+    # Fetched with the private CA rather than passed to kubectl as a URL, so the
+    # agent manifest is verified by the same trust root as every other call here.
+    - name: Fetch the agent manifest for this lab's cluster
+      ansible.builtin.uri:
+        url: "{{ lab_rancher_tokens.json.data | map(attribute='manifestUrl') | select('truthy') | first }}"
+        ca_path: "{{ lab_rancher_ca }}"
+        validate_certs: true
+        use_proxy: false
+        return_content: true
+      register: lab_rancher_manifest
+      no_log: true
+
+    - name: Install the Rancher agent in this lab's cluster
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - "--kubeconfig={{ lab_workspace }}/kubeconfig"
+          - "--context=kind-{{ lab_cluster }}"
+          - --request-timeout=60s
+          - apply
+          - -f
+          - '-'
+        stdin: "{{ lab_rancher_manifest.content }}"
+      changed_when: true
+
+    # Rancher redeploys the agent with its final configuration once it first
+    # connects, so readiness is taken from Rancher rather than from the Pod.
+    - name: Wait for Rancher to report this lab's cluster active
+      ansible.builtin.uri:
+        url: "https://{{ rancher_hostname }}/v3/clusters/{{ lab_rancher_cluster_id }}"
+        headers: "{{ lab_rancher_headers }}"
+        ca_path: "{{ lab_rancher_ca }}"
+        validate_certs: true
+        use_proxy: false
+      register: lab_rancher_state
+      until: lab_rancher_state.json.state | default('') == 'active'
+      retries: 60
+      delay: 10
+      no_log: true
+
+    - name: Show where this lab's cluster appears in Rancher
+      ansible.builtin.debug:
+        msg: "Rancher cluster {{ lab_cluster }} is active at https://{{ rancher_hostname }}/dashboard/c/{{ lab_rancher_cluster_id }}/explorer"
+
+  always:
+    - name: Revoke this lab's registration login
+      ansible.builtin.uri:
+        url: "https://{{ rancher_hostname }}/v3/tokens?action=logout"
+        method: POST
+        headers: "{{ lab_rancher_headers }}"
+        ca_path: "{{ lab_rancher_ca }}"
+        validate_certs: true
+        use_proxy: false
+        status_code: [200, 204]
+      failed_when: false
+      no_log: true

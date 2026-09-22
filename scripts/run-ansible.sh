@@ -3,7 +3,7 @@ set -euo pipefail
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 ansible_dir="$repo_dir/ansible"
 source "$repo_dir/scripts/lib/lab-env.sh"
-if [[ ${1:-} == provision || ${1:-} == platform ]]; then
+if [[ ${1:-} == provision || ${1:-} == platform || ${1:-} == reset-all ]]; then
   lab_id=''; definition=''; playbook="$ansible_dir/$1.yml"
 else
   select_lab "${1:-}"

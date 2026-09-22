@@ -328,3 +328,11 @@
         owner: "{{ lab_user }}"
         group: "{{ lab_user }}"
         mode: '0644'
+
+    - name: Show the verified lab Rancher login
+      ansible.builtin.debug:
+        msg:
+          - "Rancher URL: https://{{ rancher_hostname }}"
+          - "Username: admin"
+          - "Password: {{ rancher_admin_password }}"
+          - "Every provision restores this lab password, including after a UI password change."

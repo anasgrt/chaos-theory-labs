@@ -1,0 +1,28 @@
+---
+# One step of reset-all. Selecting the definition here, rather than in the
+# playbook, keeps the shipped single-lab reset tasks exactly as ./lab.sh NN
+# reset runs them, including their own workspace and cluster name guards.
+- name: Select the definition for this lab
+  ansible.builtin.set_fact:
+    lab_reset_definitions: >-
+      {{ all_lab_definitions.files | map(attribute='path')
+         | select('search', '/' + lab_id + '-[^/]+/lab\.yml$') | list }}
+
+- name: Require exactly one definition for this lab
+  ansible.builtin.assert:
+    that: lab_reset_definitions | length == 1
+    fail_msg: >-
+      Lab {{ lab_id }} is installed in the VM but has no single definition in
+      this checkout. Reset it with the matching checkout before renumbering.
+
+- name: Load this lab's definition
+  ansible.builtin.include_vars:
+    file: "{{ lab_reset_definitions[0] }}"
+    name: lab_reset_selected
+
+- name: Remove this lab
+  ansible.builtin.include_tasks: reset.yml
+  vars:
+    selected_lab: "{{ lab_reset_selected }}"
+    lab_workspace: "{{ lab_root }}/lab{{ lab_id }}"
+    lab_cluster: "lab{{ lab_id }}"

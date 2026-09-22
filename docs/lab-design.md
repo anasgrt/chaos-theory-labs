@@ -221,7 +221,12 @@ rejects connections to another machine.
 The VM also hosts the permanent Rancher management installation on RKE2. Its
 data, certificates and `~/.kube/rke2.yaml` are outside lab workspaces. Destructive
 experiments keep their private kind clusters; they must not target RKE2, Rancher,
-or management's bundled client. See [platform setup](rancher-rke2.md).
+or management's bundled client. A Kubernetes lab's own cluster is registered with
+Rancher during setup and removed during reset, so it can be watched in the UI
+without moving the experiment onto the management cluster. That registration adds
+Rancher's agent to the cluster under test; `rancher_import_labs: false` in
+config/platform.yml turns it off for measurements that count cluster-wide state.
+See [platform setup](rancher-rke2.md).
 
 Each `labs/NN-topic/` directory owns its `lab.yml` and optional `files/` directory.
 Declare plain filenames under `files:`; Ansible installs them in `~/labs/labNN/`.
