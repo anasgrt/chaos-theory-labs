@@ -24,7 +24,7 @@ def exercise(number, command, stubs='', home=None):
 
 class ObservationTests(unittest.TestCase):
     def test_missing_api_data_is_not_an_empty_backend_set(self):
-        for lab in (24, 25):
+        for lab in (14, 15):
             for command in ('wait_backend_removed', 'wait_backend_ready'):
                 with self.subTest(lab=lab, command=command):
                     result = exercise(lab, command, 'ksys() { return 1; };')
@@ -32,7 +32,7 @@ class ObservationTests(unittest.TestCase):
                     self.assertIn('STOP:', result.stderr)
 
     def test_backend_wait_distinguishes_empty_unready_and_ready(self):
-        for lab in (24, 25):
+        for lab in (14, 15):
             for endpoints, removed, ready in (([], True, False),
                                               ([{'conditions': {'ready': False}}], False, False),
                                               ([{'conditions': {'ready': True}}], False, True)):
@@ -46,9 +46,9 @@ class ObservationTests(unittest.TestCase):
     def test_secret_wait_claims_a_change_only_after_reading_it(self):
         for stub, success in (('k() { return 1; };', False),
                               ('k() { echo old-value; };', False),
-                              ('k() { echo rotated-lab30; };', True)):
+                              ('k() { echo rotated-lab20; };', True)):
             with self.subTest(stub=stub):
-                result = exercise(30, 'wait_secret rotated-lab30', stub)
+                result = exercise(20, 'wait_secret rotated-lab20', stub)
                 self.assertEqual(result.returncode == 0, success)
                 self.assertEqual('observed after' in result.stdout, success)
 
@@ -58,37 +58,37 @@ class ObservationTests(unittest.TestCase):
             value = json.dumps({'spec': {'containers': [{'command': arguments}]}})
             stub = f"k() {{ if [[ $1 == get ]]; then echo ok; else printf '%s' '{value}'; fi; }};"
             with self.subTest(arguments=arguments):
-                result = exercise(27, 'wait_profiling false', stub)
+                result = exercise(17, 'wait_profiling false', stub)
                 self.assertEqual(result.returncode == 0, expected)
                 self.assertEqual('observed after' in result.stdout, expected)
-        result = exercise(27, 'wait_profiling default', 'k() { return 1; };')
+        result = exercise(17, 'wait_profiling default', 'k() { return 1; };')
         self.assertNotEqual(result.returncode, 0)
 
     def test_network_probe_exit_zero_without_http_200_is_not_recovery(self):
         for response, expected in (('failed TimeoutError', False), ('ok status=200', True)):
             with self.subTest(response=response):
-                result = exercise(31, 'wait_network_recovery', f"probe() {{ echo '{response}'; }};")
+                result = exercise(21, 'wait_network_recovery', f"probe() {{ echo '{response}'; }};")
                 self.assertEqual(result.returncode == 0, expected)
 
     def test_startup_error_invalidates_previous_completed_sample(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
-            workspace = home / 'labs/lab12'
+            workspace = home / 'labs/lab05'
             workspace.mkdir(parents=True)
             (workspace / 'restored-complete.txt').write_text('3\n')
             (workspace / 'runs-restored.txt').write_text('run=1 success=1\n' * 3)
             (workspace / 'run.sh').write_text('echo failed >&2\nexit 1\n')
-            result = exercise(12, 'trial restored 3', home=home)
+            result = exercise(5, 'trial restored 3', home=home)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse((workspace / 'restored-complete.txt').exists())
-            result = exercise(12, 'startup_summary', home=home)
+            result = exercise(5, 'startup_summary', home=home)
             self.assertNotEqual(result.returncode, 0)
             self.assertNotIn('healthy sample:', result.stdout)
 
     def test_completed_startup_misses_count_in_the_sample(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
-            workspace = home / 'labs/lab12'
+            workspace = home / 'labs/lab05'
             workspace.mkdir(parents=True)
             (workspace / 'run.sh').write_text('''mkdir -p diagnostics metrics
 for n in 1 2 3; do
@@ -97,10 +97,10 @@ for n in 1 2 3; do
 done
 echo 'ce_start_success 0' > metrics/start.prom
 ''')
-            result = exercise(12, 'trial restored 3', home=home)
+            result = exercise(5, 'trial restored 3', home=home)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue((workspace / 'evidence-restored-3.json').exists())
-            result = exercise(12, 'startup_summary', home=home)
+            result = exercise(5, 'startup_summary', home=home)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('0/3 = 0.000', result.stdout)
 

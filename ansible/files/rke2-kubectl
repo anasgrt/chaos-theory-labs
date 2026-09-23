@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Always target the management cluster with its bundled, matching client.
+set -euo pipefail
+for argument in "$@"; do
+  case "$argument" in
+    -s*|--kubeconfig*|--context*|--server*|--cluster*|--user*|--token*|--certificate-authority*|--client-certificate*|--client-key*|--insecure-skip-tls-verify*)
+      echo 'rke2-kubectl uses only the management kubeconfig and context.' >&2
+      exit 1 ;;
+  esac
+done
+exec /var/lib/rancher/rke2/bin/kubectl \
+  --kubeconfig="$HOME/.kube/rke2.yaml" --context=rke2-management "$@"

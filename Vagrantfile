@@ -1,6 +1,12 @@
 # frozen_string_literal: true
 
 require "rbconfig"
+require "yaml"
+require "ipaddr"
+
+platform = YAML.safe_load(File.read(File.join(__dir__, "config/platform.yml")))
+abort "platform_ip must be an IPv4 address" unless IPAddr.new(platform.fetch("platform_ip")).ipv4?
+abort "Use at least 16384 MiB RAM and 4 CPUs" unless platform.fetch("vm_memory_mb") >= 16_384 && platform.fetch("vm_cpus") >= 4
 
 box_architecture = case RbConfig::CONFIG.fetch("host_cpu")
                    when "arm64", "aarch64" then "arm64"
@@ -26,10 +32,11 @@ Vagrant.configure("2") do |config|
   # Provision once. Lab setup/reset only changes resources inside this VM.
   config.vm.define "chaos", primary: true do |vm|
     vm.vm.hostname = "chaos-labs"
+    vm.vm.network "private_network", ip: platform.fetch("platform_ip")
     vm.vm.provider "virtualbox" do |vb|
       vb.name = "chaos-labs"
-      vb.cpus = 4
-      vb.memory = 16_384
+      vb.cpus = platform.fetch("vm_cpus")
+      vb.memory = platform.fetch("vm_memory_mb")
       vb.gui = false
     end
   end

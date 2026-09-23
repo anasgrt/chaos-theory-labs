@@ -1,5 +1,10 @@
 # Theory-first lab refactor
 
+> Historical review: this report describes an earlier revision. The current catalog
+> contains 27 container and Kubernetes labs, renumbered 00 through 26. Lab numbers
+> and counts below use the original catalog and are historical evidence, not current
+> setup instructions. See [the numbering map](../lab-numbering.md) for retained labs.
+
 Reviewed all 33 lab definitions, their questions, worked answers and command blocks.
 The learning objective remains a controlled comparison: predict, change one variable,
 observe the mechanism, recover, and explain the limits of the evidence.

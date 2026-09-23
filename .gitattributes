@@ -9,3 +9,4 @@
 *.cfg text eol=lf
 *.conf text eol=lf
 Vagrantfile text eol=lf
+ansible/files/rke2-kubectl text eol=lf

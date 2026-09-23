@@ -1,5 +1,10 @@
 # Review — Labs 30–32 (Secrets, network segmentation, authorization)
 
+> Historical review: this report describes an earlier revision. The current catalog
+> contains 27 container and Kubernetes labs, renumbered 00 through 26. Lab numbers
+> and counts below use the original catalog and are historical evidence, not current
+> setup instructions. See [the numbering map](../lab-numbering.md) for retained labs.
+
 These three labs extend the security set against the
 [OWASP Kubernetes Top 10 (2025)](https://kubernetes-top10.owasp.org/): K03
 Secrets management failures, K05 missing network segmentation controls, and the

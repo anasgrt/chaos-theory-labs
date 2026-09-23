@@ -23,6 +23,16 @@
   loop_control:
     label: "{{ item.name }}"
 
+# Guarded on rancher_hostname so cleanup still runs wherever the platform
+# variables are absent, and ordered before the kind cluster is deleted.
+- name: Remove this lab's cluster from Rancher before deleting it
+  ansible.builtin.include_tasks: rancher-unimport.yml
+  when:
+    - selected_lab.kubernetes | default(false)
+    - rancher_import_labs | default(true)
+    - rancher_hostname | default('') | length > 0
+    - lab_rancher_ca | default('') | length > 0
+
 - name: Inspect clusters without using the Kubernetes API
   ansible.builtin.command: kind get clusters
   register: reset_clusters
@@ -39,4 +49,3 @@
     path: "{{ lab_workspace }}"
     state: absent
   become: true
-  when: lab_action == 'reset' or not (selected_lab.preserve_on_setup | default(false))

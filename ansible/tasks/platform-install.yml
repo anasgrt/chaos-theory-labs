@@ -1,0 +1,239 @@
+---
+- name: Validate the management platform configuration
+  ansible.builtin.assert:
+    that:
+      - platform_ip in ansible_facts.all_ipv4_addresses
+      - rancher_hostname is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$')
+      - ansible_facts.memtotal_mb | int >= 15000
+      - ansible_facts.processor_vcpus | int >= 4
+      - rke2_version is match('^v1\.(34|35|36)\.[0-9]+\+rke2r[0-9]+$')
+      - rancher_version == '2.15.1'
+    fail_msg: Check config/platform.yml and recreate or reload the VM with its private IP, at least 16 GiB RAM and 4 CPUs.
+
+- name: Inspect existing RKE2 state and repository ownership
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /etc/chaos-platform/managed.json
+    - /etc/rancher/rke2/config.yaml
+    - /var/lib/rancher/rke2/server
+  register: platform_existing
+
+- name: Refuse to adopt an unrelated RKE2 installation
+  ansible.builtin.assert:
+    that: platform_existing.results[0].stat.exists or not (platform_existing.results[1].stat.exists or platform_existing.results[2].stat.exists)
+    fail_msg: Existing unmanaged RKE2 state found. Use a fresh teaching VM.
+
+- name: Read the existing platform identity
+  ansible.builtin.slurp:
+    src: /etc/chaos-platform/managed.json
+  when: platform_existing.results[0].stat.exists
+  register: platform_identity
+
+- name: Preserve the management cluster identity across provisioning runs
+  ansible.builtin.assert:
+    that: "(platform_identity.content | b64decode | from_json) == {'ip': platform_ip, 'hostname': rancher_hostname}"
+    fail_msg: Changing an existing platform IP or hostname requires a planned migration or fresh VM.
+  when: platform_existing.results[0].stat.exists
+
+- name: Create protected platform directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  loop:
+    - /etc/chaos-platform
+    - /etc/chaos-platform/tls
+    - /var/cache/chaos-platform
+    - /etc/rancher/rke2
+
+- name: Record ownership before installing so interrupted provisioning can resume
+  ansible.builtin.copy:
+    content: "{{ {'ip': platform_ip, 'hostname': rancher_hostname} | to_nice_json }}\n"
+    dest: /etc/chaos-platform/managed.json
+    mode: '0600'
+
+- name: Select the platform binary architecture
+  ansible.builtin.set_fact:
+    platform_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts.architecture] }}"
+
+- name: Load the networking modules required by RKE2
+  ansible.builtin.command: "modprobe {{ item }}"
+  loop: [overlay, br_netfilter]
+  changed_when: false
+
+- name: Persist the RKE2 networking modules
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/chaos-rke2.conf
+    content: "overlay\nbr_netfilter\n"
+    mode: '0644'
+
+- name: Configure Kubernetes forwarding
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/70-chaos-rke2.conf
+    content: |
+      net.ipv4.ip_forward = 1
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+    mode: '0644'
+
+- name: Apply Kubernetes forwarding settings
+  ansible.builtin.command: sysctl --load /etc/sysctl.d/70-chaos-rke2.conf
+  changed_when: false
+
+- name: Disable active swap for kubelet
+  ansible.builtin.command: swapoff -a
+  when: ansible_facts.swaptotal_mb | int > 0
+
+- name: Prevent swap from returning at boot
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '^(\s*[^#\s]\S*\s+\S+\s+swap\s+.*)$'
+    replace: '# Disabled by chaos-platform: \1'
+
+- name: Resolve the Rancher hostname inside the VM
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^.*\s{{ rancher_hostname | regex_escape }}(?:\s|$)'
+    line: "{{ platform_ip }} {{ rancher_hostname }}"
+
+- name: Inspect the installed RKE2 version
+  ansible.builtin.command: /usr/local/bin/rke2 --version
+  register: installed_rke2
+  failed_when: false
+  changed_when: false
+
+- name: Refuse implicit RKE2 upgrades or downgrades
+  ansible.builtin.assert:
+    that: installed_rke2.rc != 0 or ('rke2 version ' + rke2_version + ' ') in installed_rke2.stdout
+    fail_msg: The installed RKE2 version differs from the pin. Follow the upgrade procedure; provisioning will not replace a running cluster binary.
+
+- name: Download the verified RKE2 release archive
+  ansible.builtin.get_url:
+    url: "https://github.com/rancher/rke2/releases/download/{{ rke2_version }}/rke2.linux-{{ platform_arch }}.tar.gz"
+    dest: "/var/cache/chaos-platform/rke2-{{ rke2_version }}-{{ platform_arch }}.tar.gz"
+    checksum: "sha256:{{ rke2_sha256[platform_arch] }}"
+    mode: '0600'
+    timeout: 120
+
+- name: Install RKE2 binaries and upstream systemd units
+  # Reconcile the whole archive so a retry repairs an interrupted extraction,
+  # even when the binary was unpacked successfully before its service files.
+  ansible.builtin.unarchive:
+    src: "/var/cache/chaos-platform/rke2-{{ rke2_version }}-{{ platform_arch }}.tar.gz"
+    dest: /usr/local
+    remote_src: true
+
+- name: Configure the permanent management cluster
+  ansible.builtin.template:
+    src: rke2-config.yaml.j2
+    dest: /etc/rancher/rke2/config.yaml
+    mode: '0600'
+  register: rke2_configuration
+
+- name: Create the managed RKE2 addon directory
+  ansible.builtin.file:
+    path: /var/lib/rancher/rke2/server/manifests
+    state: directory
+    mode: '0755'
+
+- name: Give management Pods a local Rancher DNS record
+  ansible.builtin.template:
+    src: rke2-coredns-config.yaml.j2
+    dest: /var/lib/rancher/rke2/server/manifests/rke2-coredns-config.yaml
+    mode: '0600'
+
+- name: Enable and start the RKE2 server
+  ansible.builtin.systemd_service:
+    name: rke2-server
+    enabled: true
+    daemon_reload: true
+    state: "{{ 'restarted' if rke2_configuration.changed and installed_rke2.rc == 0 else 'started' }}"
+  async: 1200
+  poll: 10
+
+- name: Wait for the management API to become ready
+  ansible.builtin.command:
+    argv: [/var/lib/rancher/rke2/bin/kubectl, --kubeconfig=/etc/rancher/rke2/rke2.yaml, --context=default, --request-timeout=10s, get, --raw=/readyz]
+  register: rke2_api
+  until: rke2_api.rc == 0 and rke2_api.stdout == 'ok'
+  retries: 90
+  delay: 10
+  changed_when: false
+
+- name: Wait for the management node
+  ansible.builtin.command:
+    argv: [/var/lib/rancher/rke2/bin/kubectl, --kubeconfig=/etc/rancher/rke2/rke2.yaml, --context=default, wait, --for=condition=Ready, node/chaos-labs, --timeout=600s]
+  changed_when: false
+
+- name: Create the lab user's private Kubernetes directory
+  ansible.builtin.file:
+    path: "{{ lab_home }}/.kube"
+    state: directory
+    owner: "{{ lab_user }}"
+    group: "{{ lab_user }}"
+    mode: '0700'
+
+- name: Read the management kubeconfig without logging credentials
+  ansible.builtin.slurp:
+    src: /etc/rancher/rke2/rke2.yaml
+  register: rke2_kubeconfig
+  no_log: true
+
+- name: Install a separate management kubeconfig without changing the default context
+  ansible.builtin.template:
+    src: rke2-kubeconfig.yaml.j2
+    dest: "{{ lab_home }}/.kube/rke2.yaml"
+    owner: "{{ lab_user }}"
+    group: "{{ lab_user }}"
+    mode: '0600'
+  no_log: true
+
+- name: Install the explicit management client
+  ansible.builtin.copy:
+    src: rke2-kubectl
+    dest: /usr/local/bin/rke2-kubectl
+    mode: '0755'
+
+- name: Download the verified Helm archive
+  ansible.builtin.get_url:
+    url: "https://get.helm.sh/helm-{{ helm_version }}-linux-{{ platform_arch }}.tar.gz"
+    dest: "/var/cache/chaos-platform/helm-{{ helm_version }}-{{ platform_arch }}.tar.gz"
+    checksum: "sha256:{{ helm_sha256[platform_arch] }}"
+    mode: '0600'
+    timeout: 120
+
+- name: Extract Helm in the protected artifact cache
+  ansible.builtin.unarchive:
+    src: "/var/cache/chaos-platform/helm-{{ helm_version }}-{{ platform_arch }}.tar.gz"
+    dest: /var/cache/chaos-platform
+    remote_src: true
+
+- name: Install Helm
+  ansible.builtin.copy:
+    src: "/var/cache/chaos-platform/linux-{{ platform_arch }}/helm"
+    dest: /usr/local/bin/helm
+    remote_src: true
+    mode: '0755'
+
+- name: Install Rancher with persistent TLS and credentials
+  ansible.builtin.import_tasks: rancher.yml
+
+- name: Verify management Pods resolve the private Rancher hostname
+  ansible.builtin.shell: |
+    set -euo pipefail
+    k() { /var/lib/rancher/rke2/bin/kubectl --kubeconfig=/etc/rancher/rke2/rke2.yaml --context=default --namespace=cattle-system --request-timeout=15s "$@"; }
+    cleanup() { k delete pod chaos-platform-dns-check --ignore-not-found --wait=false; }
+    trap cleanup EXIT
+    k delete pod chaos-platform-dns-check --ignore-not-found --wait=true --timeout=60s
+    k run chaos-platform-dns-check --image=busybox:1.36 --restart=Never --command -- nslookup {{ rancher_hostname | quote }}
+    k wait --for=jsonpath='{.status.phase}'=Succeeded pod/chaos-platform-dns-check --timeout=180s
+    k logs chaos-platform-dns-check | grep -F {{ platform_ip | quote }}
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Verify the complete management platform before declaring provisioning successful
+  ansible.builtin.import_tasks: platform-verify.yml

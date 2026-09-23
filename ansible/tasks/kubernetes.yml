@@ -31,7 +31,10 @@
   args:
     executable: /bin/bash
   vars:
-    lab_cluster_images: "{{ ['bloomberg/goldpinger:3.11.3', 'ghcr.io/shopify/toxiproxy:2.12.0'] if lab_id in ['10', '11'] else (['nginx:1.27'] if lab_id == '13' else ['python:3.12-slim']) }}"
+    # The Rancher agent image is deliberately not preloaded: copying it into
+    # every kind node takes longer than the cluster pulling it once, and
+    # exceeds this loader's per-image timeout.
+    lab_cluster_images: "{{ ['bloomberg/goldpinger:3.11.3', 'ghcr.io/shopify/toxiproxy:2.12.0'] if lab_id in ['03', '04'] else (['nginx:1.27'] if lab_id == '06' else ['python:3.12-slim']) }}"
 
 - name: Create this lab's working namespace
   ansible.builtin.shell: |
@@ -46,7 +49,7 @@
     src: kubernetes/goldpinger.yaml
     dest: "{{ lab_workspace }}/goldpinger.yaml"
     mode: '0644'
-  when: lab_id in ['10', '11']
+  when: lab_id in ['03', '04']
 
 - name: Start this lab's Goldpinger replicas
   ansible.builtin.shell: |
@@ -56,4 +59,4 @@
     k rollout status deployment/goldpinger --request-timeout=0 --timeout=180s
   args:
     executable: /bin/bash
-  when: lab_id in ['10', '11']
+  when: lab_id in ['03', '04']

@@ -1,0 +1,95 @@
+---
+# Run only for the explicit platform command, not during VM provisioning.
+- name: Export the public Rancher CA to the laptop (never the private key)
+  ansible.builtin.fetch:
+    src: /etc/chaos-platform/tls/ca.crt
+    dest: "{{ playbook_dir }}/../rancher-lab-ca.crt"
+    flat: true
+
+- name: Verify Rancher access from the Ansible controller
+  delegate_to: localhost
+  become: false
+  block:
+    - name: Resolve the Rancher hostname using the laptop system resolver
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - -c
+          - |
+            import socket, sys
+            try:
+                addresses = sorted({entry[4][0] for entry in socket.getaddrinfo(sys.argv[1], 443, type=socket.SOCK_STREAM)})
+            except socket.gaierror as error:
+                sys.exit(str(error))
+            print('\n'.join(addresses))
+            sys.exit(0 if addresses == [sys.argv[2]] else 1)
+          - "{{ rancher_hostname }}"
+          - "{{ platform_ip }}"
+      register: client_dns
+      changed_when: false
+      failed_when: false
+
+    - name: Require the laptop hostname to resolve to the teaching VM
+      ansible.builtin.assert:
+        that: client_dns.rc == 0
+        fail_msg: >-
+          Rancher is healthy inside the VM, but laptop DNS is missing or points elsewhere.
+          Add '{{ platform_ip }} {{ rancher_hostname }}' to the LAPTOP's /etc/hosts
+          (not inside the VM), or correct its DNS record. Resolver result:
+          {{ client_dns.stdout }} {{ client_dns.stderr }}.
+          On macOS run ./lab.sh browser-setup in your Terminal.
+          See docs/rancher-rke2.md#open-rancher. The public CA is exported to rancher-lab-ca.crt.
+
+    - name: Verify laptop DNS routing and Rancher HTTPS with the exported CA
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --fail
+          - --silent
+          - --show-error
+          - --noproxy
+          - '*'
+          - --connect-timeout
+          - '5'
+          - --max-time
+          - '15'
+          - --cacert
+          - "{{ playbook_dir }}/../rancher-lab-ca.crt"
+          - "https://{{ rancher_hostname }}/ping"
+      register: client_https
+      changed_when: false
+      failed_when: false
+
+    - name: Require a verified Rancher response from the laptop
+      ansible.builtin.assert:
+        that: client_https.rc == 0 and client_https.stdout == 'pong'
+        fail_msg: >-
+          Laptop DNS passed, but CA-verified HTTPS to Rancher failed.
+          Check the host-only route to {{ platform_ip }}:443, VPN/firewall settings,
+          and the ingress certificate. curl: {{ client_https.stderr }}
+          Response: {{ client_https.stdout }}
+
+    - name: Verify the laptop curl trusts the Rancher certificate by default
+      ansible.builtin.command:
+        argv: [curl, --fail, --silent, --show-error, --noproxy, '*', --connect-timeout, '5', --max-time, '15', "https://{{ rancher_hostname }}/ping"]
+      register: client_trust
+      changed_when: false
+      failed_when: false
+
+    - name: Require default client certificate trust
+      ansible.builtin.assert:
+        that: client_trust.rc == 0 and client_trust.stdout == 'pong'
+        fail_msg: >-
+          Laptop DNS and HTTPS with the exported CA passed, but default curl trust/access failed.
+          On macOS run ./lab.sh browser-setup in your Terminal, or
+          import rancher-lab-ca.crt into your OS/browser trusted roots; see
+          docs/rancher-rke2.md#open-rancher. A curl build with a separate CA bundle
+          needs that bundle configured too. Do not disable TLS verification.
+          curl: {{ client_trust.stderr }} Response: {{ client_trust.stdout }}
+
+    - name: Report verified laptop access and the remaining browser check
+      ansible.builtin.debug:
+        msg: >-
+          Laptop DNS, CA-verified HTTPS and default curl trust passed for
+          https://{{ rancher_hostname }}. Open that URL in your browser to verify
+          its own proxy, DNS cache and certificate trust settings.

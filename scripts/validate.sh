@@ -4,7 +4,7 @@ set -euo pipefail
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_dir"
 
-for executable in bash jq python3 ansible-playbook; do
+for executable in bash jq openssl python3 ansible-playbook; do
   command -v "$executable" >/dev/null || {
     echo "Required command not found: $executable" >&2
     exit 1
@@ -22,7 +22,7 @@ export ANSIBLE_CONFIG="$repo_dir/ansible/ansible.cfg"
 
 python3 scripts/check-labs.py
 bash tests/test-lifecycle.sh
-for playbook in provision labs cards; do
+for playbook in provision platform browser-export labs cards reset-all; do
   ansible-playbook -i ansible/inventory/vagrant.ini "ansible/$playbook.yml" --syntax-check
 done
 ansible-playbook -i localhost, tests/ansible/identity.yml

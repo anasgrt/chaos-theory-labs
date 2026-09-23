@@ -1,0 +1,218 @@
+title: Lab 20 — What a Secret protects, and what it does not
+kubernetes: true
+task:
+  question: Where does a Secret's value actually rest, and who can read it?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§12.7.1–12.7.2.'
+    theory_sections:
+    - 12.7.1
+    - 12.7.2
+    theory:
+    - 'A Secret is an ordinary API object. Its values live in .data as base64, which is an encoding and
+      not encryption: anyone allowed to read the object can decode it with one command. kubectl describe
+      prints only key names and sizes, which hides the value from a terminal but changes nothing about
+      who may read it.'
+    - 'What separates a Secret from a ConfigMap is how it is usually treated: RBAC is written more narrowly
+      for it, and the kubelet keeps its contents in memory on the node rather than writing them to disk.
+      Neither property is automatic, and neither is what protects the stored copy.'
+    - The stored copy lives in etcd. Unless the API server is started with an encryption-provider-config,
+      the identity provider is used and the value is written unchanged. This lab reads the same key directly
+      out of etcd with etcdctl, through the control plane node, and finds the password beside its key
+      name.
+    - Encryption at rest applies from the moment it is configured. Objects written before it was enabled
+      stay as they were until something rewrites them, so enabling it is a migration rather than a switch.
+    - A Pod can receive the value two ways. An environment variable is copied into the process when the
+      container starts, so it is visible to every process in that container and to anything that reads
+      /proc/PID/environ. A projected volume places it on a tmpfs file whose path is a symlink into a timestamped
+      directory the kubelet replaces on update.
+    - The workload's ServiceAccount and the kubelet use different identities. Once a Pod referencing
+      the Secret is authorized and admitted, the kubelet fetches and projects its contents using its
+      own API permissions. The workload's ServiceAccount need not have get permission on that Secret.
+      Having no API access and having no secret material are different statements.
+    - The two surfaces behave differently when the value changes. An environment variable stays at the
+      value the process started with, so a rotation reaches it only when the container is replaced. A
+      mounted file is refreshed by the kubelet on its sync period, which takes tens of seconds rather
+      than being immediate.
+    - Measure the delay rather than assuming it. This lab polls the mounted file until it changes and
+      prints the observed seconds, then reads the environment variable in the same Pod for comparison.
+    main_lesson: >-
+      Base64 does not encrypt a Secret; without encryption at rest, its value is also readable in
+      etcd. A Pod can receive mounted material without its ServiceAccount having Secret API access.
+      Environment values remain fixed for that process; ordinary mounted files update eventually
+      and must be reread. Protect storage and workload access separately, and verify that rotation
+      reaches the actual consumer.
+    in_this_lab:
+    - Use namespace ce-lab20 with one Secret and two consumers that differ only in how they receive it,
+      then read the same value through the API, through etcd, through both containers, and after a rotation.
+    - strings displays printable data from the raw etcd value. wait_secret checks the mounted password
+      every five seconds for at most 30 attempts; it reports a change only after reading the expected
+      value. A timeout leaves propagation unproven.
+    readings:
+    - signal: .data.password
+      meaning: The stored value as base64. Decoding it is a transport step, not a permission check.
+    - signal: etcd bytes
+      meaning: What the API server wrote. Plaintext here means no encryption provider is configured for
+        Secrets.
+    - signal: env_var / proc_1_environ
+      meaning: The value as the process holds it. Both come from the container start, so both are stale
+        after a rotation.
+    - signal: mounted_file / mounted_target
+      meaning: The projected file and the timestamped directory it points at. The kubelet replaces the
+        target to publish a new value.
+    - signal: can-i get secrets
+      meaning: Whether that ServiceAccount may read the Secret through the API. It says nothing about
+        what the kubelet already mounted.
+  predict: Predict what etcd holds, which surfaces expose the value inside each container, and which surface
+    changes when the Secret is rotated.
+  answer_with:
+  - What did the API and etcd each show for the same Secret value?
+  - Which surfaces exposed the value inside each container?
+  - Why could the file consumer read a Secret its ServiceAccount may not get?
+  - Which surface changed after the rotation, and how long did it take?
+  evidence:
+    columns:
+    - Surface
+    - Value seen
+    - What limits it
+    rows:
+    - API and etcd
+    - Environment variable
+    - Mounted file
+    - After rotation
+    - Restored
+  transfer: One Secret is mounted into ten Pods and rotated. Which of them need a restart?
+solution:
+- The API returns .data.password as base64 and one decode prints the password; kubectl describe shows
+  only the key and its size. etcd holds the same password as readable bytes beside the key /registry/secrets/ce-lab20/app-credentials,
+  because no encryption-provider-config is configured on this API server. Encoding and storage are separate
+  from access control, and only the second is changed by encryption at rest.
+- The environment consumer exposes the value in its own environment and in /proc/1/environ, so every process
+  in that container and anything that can read that file sees it. The file consumer exposes it as a tmpfs
+  file whose path is a symlink into a timestamped directory, readable by the container's processes but
+  not present in its environment. Cite the actual values from both Pods.
+- The kubelet projects whatever the Pod spec references; RBAC was applied to whoever created the Pod,
+  not to the running workload. can-i get secrets should answer no for that ServiceAccount while the mounted
+  file still holds the password, so "cannot read Secrets through the API" and "holds no secret material"
+  are different statements.
+- The mounted file can update in the existing Pod after kubelet propagates the change; report the observed
+  delay, or state that the expected value was not observed within the wait. The environment variable remains
+  the startup value in the same container. That consumer needs replacement to read the rotated value.
+transfer_solution: Only the ones that read it as an environment variable, or that read the file once at
+  startup and cache it. A mounted file is refreshed in place, so a consumer that re-reads the file picks up
+  the new value without a restart; the delay is the kubelet's sync period, not zero.
+verify_note: Both consumers are Ready, the Secret holds its original value, and the file consumer's
+  ServiceAccount is still refused get on Secrets.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 20 setup on the host. No
+  other lab is required.
+files:
+- secretprobe.py
+- consumers.yaml
+- rbac.yaml
+- exercise.sh
+commands:
+- name: Read the Secret through the API
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab20/exercise.sh
+    source ~/labs/lab20/helpers.sh
+    k get secret app-credentials -o jsonpath='{.type}{"\n"}{.data.password}{"\n"}'
+    k get secret app-credentials -o jsonpath='{.data.password}' | base64 -d; echo
+    k describe secret app-credentials
+    k -n kube-system get pod kube-apiserver-lab20-control-plane -o jsonpath='{.spec.containers[0].command}{"\n"}'
+  record: 'API row: encoded value; decoded password; byte count from describe. In the running API server
+    command, look for --encryption-provider-config; record whether it is present.'
+  expect: The type is Opaque, .data.password is base64 that decodes to the password, describe prints only
+    the key and its size, and the flag count is 0.
+- name: Read the same key out of etcd
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    etcd_get /registry/secrets/ce-lab20/app-credentials > ~/labs/lab20/stored.bin
+    echo "etcd read exit=$?"
+    ls -l ~/labs/lab20/stored.bin
+    strings ~/labs/lab20/stored.bin
+  record: 'API and etcd row: the read exit status, the size of the stored object, and whether the password
+    is readable.'
+  expect: The stored object contains the password as readable text beside its key name, because nothing
+    encrypts it on the way to etcd.
+- name: Compare the two consumers inside their containers
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k exec env-consumer -- python -u /scripts/secretprobe.py
+    k exec file-consumer -- python -u /scripts/secretprobe.py
+    k get pod file-consumer -o jsonpath='{.spec.serviceAccountName}{"\n"}'
+    k auth can-i get secrets --as=system:serviceaccount:ce-lab20:no-secret-access --namespace=ce-lab20
+    echo "can-i exit=$?"
+  record: 'Environment variable and Mounted file rows: every surface reported for both Pods, and the can-i
+    answer with its exit.'
+  expect: The environment consumer reports the value twice and no mounted file; the file consumer reports
+    the file, its mode and its timestamped target and no environment variable. can-i answers no while
+    the file still holds the password.
+- name: Rotate the Secret and measure which surface follows
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k create secret generic app-credentials --from-literal=password=rotated-lab20 \
+      --dry-run=client -o yaml | k apply -f -
+    k get secret app-credentials -o jsonpath='{.data.password}' | base64 -d; echo
+    wait_secret rotated-lab20
+    k exec file-consumer -- python -u /scripts/secretprobe.py
+    k exec env-consumer -- python -u /scripts/secretprobe.py
+  record: 'After rotation row: the new stored value, the measured seconds until the file changed, and
+    both consumers'' surfaces afterwards.'
+  expect: The file consumer should show the new value after tens of seconds, while the environment consumer
+    still reports the original value from its running process.
+- name: Restore the original value and confirm both surfaces
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k create secret generic app-credentials --from-literal=password=lab20-original \
+      --dry-run=client -o yaml | k apply -f -
+    wait_secret lab20-original
+    k exec file-consumer -- python -u /scripts/secretprobe.py
+    k get pods -o custom-columns='NAME:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status'
+    k exec env-consumer -- python -u /scripts/secretprobe.py
+  record: 'Restored row: the value the mounted file returned to, and both Pods'' readiness.'
+  expect: The mounted file returns to the original value after the same kind of delay and both consumers
+    stay Ready; no Pod was replaced during the lab.
+setup:
+- name: Prepare the Secret fixture and both consumers
+  command: !unsafe |
+    mkdir -p ~/labs/lab20
+    cat > ~/labs/lab20/helpers.sh <<'SH'
+    k() { kubectl --kubeconfig="$HOME/labs/lab20/kubeconfig" --context=kind-lab20 --namespace=ce-lab20 --request-timeout=10s "$@"; }
+    etcd_get() {
+      local container
+      container=$(docker exec lab20-control-plane crictl ps --name etcd -q) || return 1
+      docker exec lab20-control-plane crictl exec "$container" etcdctl \
+        --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+        --cert=/etc/kubernetes/pki/etcd/server.crt \
+        --key=/etc/kubernetes/pki/etcd/server.key get "$1"
+    }
+    SH
+    source ~/labs/lab20/helpers.sh
+    for i in $(seq 1 90); do k get --raw /readyz >/dev/null 2>&1 && break; sleep 2; done
+    k get nodes >/dev/null
+    k create namespace ce-lab20 --dry-run=client -o yaml | k apply -f -
+    k apply -f ~/labs/lab20/rbac.yaml
+    k create secret generic app-credentials --from-literal=password=lab20-original --dry-run=client -o yaml | k apply -f -
+    k create configmap secret-scripts --from-file=secretprobe.py="$HOME/labs/lab20/secretprobe.py" --dry-run=client -o yaml | k apply -f -
+    k delete pod env-consumer file-consumer --ignore-not-found --wait=true --timeout=60s
+    k apply -f ~/labs/lab20/consumers.yaml
+    k wait pods --all --for=condition=Ready --timeout=120s --request-timeout=0
+verify:
+- name: Verify both consumers hold the original value
+  command: !unsafe |
+    source ~/labs/lab20/helpers.sh
+    k wait pods --all --for=condition=Ready --timeout=60s --request-timeout=0
+    test "$(k get secret app-credentials -o jsonpath='{.data.password}' | base64 -d)" = lab20-original
+    output=$(k exec file-consumer -- python -u /scripts/secretprobe.py)
+    printf '%s\n' "$output"
+    printf '%s\n' "$output" | grep -q 'mounted_file=lab20-original'
+    ! k auth can-i get secrets --as=system:serviceaccount:ce-lab20:no-secret-access --namespace=ce-lab20 >/dev/null
+reset: []
+fallback:
+- name: Restore the original Secret value without the helpers
+  where: VM terminal 2
+  run: !unsafe |
+    kubectl --kubeconfig="$HOME/labs/lab20/kubeconfig" --context=kind-lab20 --namespace=ce-lab20 \
+      create secret generic app-credentials --from-literal=password=lab20-original --dry-run=client -o yaml |
+      kubectl --kubeconfig="$HOME/labs/lab20/kubeconfig" --context=kind-lab20 --namespace=ce-lab20 apply -f -
+    kubectl --kubeconfig="$HOME/labs/lab20/kubeconfig" --context=kind-lab20 --namespace=ce-lab20 get pods

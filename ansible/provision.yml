@@ -3,28 +3,21 @@
   hosts: chaos_labs
   become: true
   gather_facts: true
+  vars_files:
+    - ../config/platform.yml
   vars:
     lab_user: vagrant
     lab_home: "/home/{{ lab_user }}"
     lab_root: "{{ lab_home }}/labs"
-    book_repository: https://github.com/seeker89/chaos-engineering-book.git
-    book_commit: 3e3ee64db71f51a5e9f79af8562dd4aa913a0e71
     kind_version: v0.33.0
     required_packages:
       - ca-certificates
       - curl
-      - git
       - jq
       - openssl
       - python3
-      - python3-redis
-      - redis-server
-      - build-essential
-      - nginx
-      - sysstat
-      - stress-ng
-      - strace
-      - libseccomp-dev
+      # Lab 20 inspects the raw etcd value with strings.
+      - binutils
       - util-linux
       - iproute2
       - iptables
@@ -35,7 +28,6 @@
     lab_images:
       - hello-world:latest
       - busybox:1.36
-      - ubuntu:24.04
       - python:3.12-slim
       - nginx:1.27
       - bloomberg/goldpinger:3.11.3
@@ -165,18 +157,6 @@
         that: inotify_instances.stdout | int >= 512
         fail_msg: fs.inotify.max_user_instances is below 512; multi-node kind clusters can fail.
 
-    - name: Keep Redis stopped until its lab starts it
-      ansible.builtin.systemd_service:
-        name: redis-server
-        enabled: false
-        state: stopped
-
-    - name: Keep NGINX stopped until its lab configures it
-      ansible.builtin.systemd_service:
-        name: nginx
-        enabled: false
-        state: stopped
-
     - name: Grant the lab user Docker access for new login sessions
       ansible.builtin.user:
         name: "{{ lab_user }}"
@@ -193,15 +173,6 @@
         owner: "{{ lab_user }}"
         group: "{{ lab_user }}"
         mode: '0755'
-
-    - name: Clone the pinned companion source
-      ansible.builtin.git:
-        repo: "{{ book_repository }}"
-        dest: "{{ lab_root }}/book"
-        version: "{{ book_commit }}"
-        update: true
-        force: false
-      become_user: "{{ lab_user }}"
 
     - name: Select the kind binary architecture
       ansible.builtin.set_fact:
@@ -309,6 +280,10 @@
         that: "'Cgroup Version: 2' in docker_info.stdout"
         fail_msg: Docker is not using cgroup v2.
 
+    - name: Verify the binary inspection tool for the Secret storage lab
+      ansible.builtin.command: strings --version
+      changed_when: false
+
     - name: Verify passwordless sudo for the lab user
       ansible.builtin.command: sudo -n true
       become: false
@@ -326,6 +301,9 @@
         that: root_disk_gib.stdout | int >= 60
         fail_msg: The VM root filesystem is smaller than the 60 GiB lab minimum.
 
+    - name: Install the permanent RKE2 and Rancher management platform
+      ansible.builtin.import_tasks: tasks/platform-install.yml
+
     - name: Record provisioned versions
       ansible.builtin.shell: |
         {
@@ -333,38 +311,28 @@
           systemd --version | head -1
           docker version
           python3 --version
-          strace --version
           if command -v kind >/dev/null; then kind version; fi
+          rke2 --version
+          helm version --short
+          printf 'Rancher %s\n' '{{ rancher_version }}'
         } > "{{ lab_root }}/versions.txt" 2>&1
       args:
         executable: /bin/bash
       become_user: "{{ lab_user }}"
       changed_when: false
 
-    - name: Record the checked-out companion source commit
-      ansible.builtin.command:
-        argv: [git, -C, "{{ lab_root }}/book", rev-parse, HEAD]
-      become_user: "{{ lab_user }}"
-      register: checked_out_book_commit
-      changed_when: false
-
-    - name: Save the checked-out companion source commit
-      ansible.builtin.copy:
-        content: "{{ checked_out_book_commit.stdout }}\n"
-        dest: "{{ lab_root }}/book-commit.txt"
-        owner: "{{ lab_user }}"
-        group: "{{ lab_user }}"
-        mode: '0644'
-
-    - name: Confirm the companion source commit
-      ansible.builtin.assert:
-        that: checked_out_book_commit.stdout == book_commit
-        fail_msg: The companion source is not at the required commit.
-
     - name: Record successful shared provisioning
       ansible.builtin.copy:
-        content: "shared-v1\n"
+        content: "shared-rke2-rancher-v2\n"
         dest: "{{ lab_root }}/.provisioned"
         owner: "{{ lab_user }}"
         group: "{{ lab_user }}"
         mode: '0644'
+
+    - name: Show the verified lab Rancher login
+      ansible.builtin.debug:
+        msg:
+          - "Rancher URL: https://{{ rancher_hostname }}"
+          - "Username: admin"
+          - "Password: {{ rancher_admin_password }}"
+          - "Every provision restores this lab password, including after a UI password change."

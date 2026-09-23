@@ -1,0 +1,24 @@
+---
+# Shared by Vagrant and Ansible. Choose a free address in VirtualBox's host-only range.
+platform_ip: 192.168.56.10
+rancher_hostname: rancher.chaos.test
+# Lab-only credential: reapplied on EVERY provision and printed on success.
+rancher_admin_password: SuperAdmin@123
+# Register each lab's disposable kind cluster with Rancher during setup so it
+# appears in the UI, and remove it again during reset. Set false to keep lab
+# clusters free of Rancher's agent components.
+rancher_import_labs: true
+vm_memory_mb: 24576
+vm_cpus: 6
+
+# Rancher 2.15 supports RKE2 1.34-1.36. Pin artifacts, never a moving channel.
+rke2_version: v1.35.8+rke2r1
+rke2_sha256:
+  amd64: 805f26f1e7e875b7721515d7a3e55b79b86124252a8c9191f5fc3f06523af26f
+  arm64: 2fc92e6736d0288e8541ddd63d710be5e1af78d9844db5e14830c5a55e8344f2
+helm_version: v3.21.4
+helm_sha256:
+  amd64: 61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14
+  arm64: b54c04b4e0b2540bbdc08c17a121dab70e9a2ed0de5705528fec68a5fd3b85a7
+rancher_version: 2.15.1
+rancher_chart_sha256: 8aa5d372ed5057694b02d7765c1db505eea924d69ac8bec1d7e40782c80f16d4

@@ -1,5 +1,10 @@
 # Kubernetes lab review
 
+> Historical review: this report describes an earlier revision. The current catalog
+> contains 27 container and Kubernetes labs, renumbered 00 through 26. Lab numbers
+> and counts below use the original catalog and are historical evidence, not current
+> setup instructions. See [the numbering map](../lab-numbering.md) for retained labs.
+
 Historical teaching-content review. For the current single-VM lifecycle, see
 [isolation-review.md](isolation-review.md). Shared-cluster setup notes below are superseded.
 

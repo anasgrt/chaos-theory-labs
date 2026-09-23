@@ -1,5 +1,10 @@
 # Experiment and answer review
 
+> Historical review: this report describes an earlier revision. The current catalog
+> contains 27 container and Kubernetes labs, renumbered 00 through 26. Lab numbers
+> and counts below use the original catalog and are historical evidence, not current
+> setup instructions. See [the numbering map](../lab-numbering.md) for retained labs.
+
 The review covers the parts after the theory in all 22 question cards and their
 solutions. The theory paragraphs are unchanged.
 

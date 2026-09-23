@@ -1,0 +1,140 @@
+---
+- name: Install the persistent lab certificate helper
+  ansible.builtin.copy:
+    src: platform-tls.sh
+    dest: /usr/local/sbin/chaos-platform-tls
+    mode: '0700'
+
+- name: Create or renew the Rancher serving certificate
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/chaos-platform-tls, /etc/chaos-platform/tls, "{{ rancher_hostname }}"]
+  register: rancher_tls
+  changed_when: "'changed:' in rancher_tls.stdout"
+
+- name: Trust the lab CA inside the VM
+  ansible.builtin.copy:
+    src: /etc/chaos-platform/tls/ca.crt
+    dest: /usr/local/share/ca-certificates/chaos-rancher.crt
+    remote_src: true
+    mode: '0644'
+  register: rancher_ca_trust
+
+- name: Refresh the VM trust store
+  ansible.builtin.command: update-ca-certificates
+  when: rancher_ca_trust.changed
+
+- name: Create a private directory for the user's Rancher access files
+  ansible.builtin.file:
+    path: "{{ lab_home }}/rancher"
+    state: directory
+    owner: "{{ lab_user }}"
+    group: "{{ lab_user }}"
+    mode: '0700'
+
+- name: Publish only the public CA for browser trust
+  ansible.builtin.copy:
+    src: /etc/chaos-platform/tls/ca.crt
+    dest: "{{ lab_home }}/rancher/ca.crt"
+    remote_src: true
+    owner: "{{ lab_user }}"
+    group: "{{ lab_user }}"
+    mode: '0644'
+
+- name: Save the configured lab password for bootstrap and local reference
+  ansible.builtin.copy:
+    content: "{{ rancher_admin_password }}\n"
+    dest: "{{ item.path }}"
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: '0600'
+  loop:
+    - {path: /etc/chaos-platform/bootstrap-password, owner: root}
+    - {path: "{{ lab_home }}/rancher/bootstrap-password", owner: "{{ lab_user }}"}
+  no_log: true
+
+- name: Create the management namespace and install the TLS secrets
+  ansible.builtin.shell: |
+    set -euo pipefail
+    k() { /var/lib/rancher/rke2/bin/kubectl --kubeconfig=/etc/rancher/rke2/rke2.yaml --context=default --request-timeout=30s "$@"; }
+    k create namespace cattle-system --dry-run=client -o yaml | k apply -f -
+    k -n cattle-system create secret tls tls-rancher-ingress \
+      --cert=/etc/chaos-platform/tls/tls.crt --key=/etc/chaos-platform/tls/tls.key \
+      --dry-run=client -o yaml | k apply -f -
+    k -n cattle-system create secret generic tls-ca --from-file=cacerts.pem=/etc/chaos-platform/tls/ca.crt \
+      --dry-run=client -o yaml | k apply -f -
+  args:
+    executable: /bin/bash
+  no_log: true
+
+- name: Download the pinned verified Rancher chart
+  ansible.builtin.get_url:
+    url: "https://releases.rancher.com/server-charts/stable/rancher-{{ rancher_version }}.tgz"
+    dest: "/var/cache/chaos-platform/rancher-{{ rancher_version }}.tgz"
+    checksum: "sha256:{{ rancher_chart_sha256 }}"
+    mode: '0600'
+    timeout: 120
+
+- name: Save the complete Rancher values privately
+  ansible.builtin.template:
+    src: rancher-values.yaml.j2
+    dest: /etc/chaos-platform/rancher-values.yaml
+    mode: '0600'
+  no_log: true
+
+- name: Reconcile the pinned Rancher release and wait for readiness
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/helm
+      - upgrade
+      - --install
+      - rancher
+      - "/var/cache/chaos-platform/rancher-{{ rancher_version }}.tgz"
+      - --kubeconfig=/etc/rancher/rke2/rke2.yaml
+      - --kube-context=default
+      - --namespace=cattle-system
+      - --values=/etc/chaos-platform/rancher-values.yaml
+      - --reset-values
+      - --atomic
+      - --wait
+      - --timeout=15m
+      - --history-max=5
+  # Keep Helm internals private; print the verified lab login at provisioning completion.
+  no_log: true
+
+# A downstream cluster agent is told where to call home through this setting.
+# Until it holds a value, Rancher issues registration tokens with an empty
+# manifest URL and no imported cluster can ever register.
+- name: Wait for Rancher to create the server-url setting
+  ansible.builtin.command:
+    argv: [/var/lib/rancher/rke2/bin/kubectl, --kubeconfig=/etc/rancher/rke2/rke2.yaml, --context=default, --request-timeout=15s, get, settings.management.cattle.io, server-url, -o, 'jsonpath={.value}']
+  register: rancher_server_url
+  changed_when: false
+  until: rancher_server_url.rc == 0
+  retries: 12
+  delay: 5
+
+- name: Publish the Rancher server URL used by downstream cluster agents
+  ansible.builtin.command:
+    argv: [/var/lib/rancher/rke2/bin/kubectl, --kubeconfig=/etc/rancher/rke2/rke2.yaml, --context=default, --request-timeout=30s, patch, settings.management.cattle.io, server-url, --type=merge, -p, '{"value": "https://{{ rancher_hostname }}"}']
+  when: rancher_server_url.stdout != 'https://' + rancher_hostname
+
+- name: Reset and verify the lab admin password on every provision
+  ansible.builtin.import_tasks: rancher-password.yml
+
+- name: Save Rancher access instructions
+  ansible.builtin.copy:
+    dest: "{{ lab_home }}/rancher/README.txt"
+    owner: "{{ lab_user }}"
+    group: "{{ lab_user }}"
+    mode: '0644'
+    content: |
+      Rancher: https://{{ rancher_hostname }}
+      LAPTOP hosts-file entry: {{ platform_ip }} {{ rancher_hostname }}
+      VM health checks bypass DNS; the laptop needs its own hostname mapping and CA trust.
+      Import ca.crt into your laptop browser or operating system's trusted roots.
+      From the repository on the laptop: see docs/rancher-rke2.md#open-rancher, then run ./lab.sh platform.
+      Username: admin
+      Password: read ~/rancher/bootstrap-password or the provisioning output.
+      Every provision resets the admin password to the value in config/platform.yml.
+      Management Kubernetes: rke2-kubectl get nodes
+      Labs use separate kind clusters. Do not run destructive labs on management.

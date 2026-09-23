@@ -1,4 +1,4 @@
-"""Check causal comparisons and evidence handling in Labs 33–36."""
+"""Check causal comparisons and evidence handling in Labs 23–26."""
 import base64
 import copy
 import importlib.util
@@ -29,9 +29,9 @@ def manifest(lab, name):
     return yaml.safe_load(asset(lab, name).read_text())
 
 
-server = module('33', 'server.py')
-prepare = module('36', 'prepare.py')
-storage = module('36', 'storage_probe.py')
+server = module('23', 'server.py')
+prepare = module('26', 'prepare.py')
+storage = module('26', 'storage_probe.py')
 
 
 class ProbeComparisonTests(unittest.TestCase):
@@ -48,34 +48,34 @@ class ProbeComparisonTests(unittest.TestCase):
             self.assertEqual(server.response('/started')[0], 200)
 
     def test_restart_comparison_changes_only_startup_protection(self):
-        protected = manifest('33', 'protected.yaml')
+        protected = manifest('23', 'protected.yaml')
         del protected['spec']['containers'][0]['startupProbe']
-        self.assertEqual(protected, manifest('33', 'no-startup.yaml'))
+        self.assertEqual(protected, manifest('23', 'no-startup.yaml'))
 
 
 class StorageAndBudgetTests(unittest.TestCase):
     def test_consumer_conflict_is_only_placement_and_matches_actual_pv(self):
-        good = manifest('34', 'consumer.yaml')
-        bad = manifest('34', 'wrong-node.yaml')
-        volume = manifest('34', 'volume.yaml')['spec']
+        good = manifest('24', 'consumer.yaml')
+        bad = manifest('24', 'wrong-node.yaml')
+        volume = manifest('24', 'volume.yaml')['spec']
         nodes = volume['nodeAffinity']['required']['nodeSelectorTerms'][0]['matchExpressions'][0]['values']
         self.assertIn(good['spec']['nodeSelector']['kubernetes.io/hostname'], nodes)
         self.assertNotIn(bad['spec']['nodeSelector']['kubernetes.io/hostname'], nodes)
         bad['spec']['nodeSelector'] = good['spec']['nodeSelector']
         self.assertEqual(good, bad)
         self.assertEqual(volume['persistentVolumeReclaimPolicy'], 'Retain')
-        self.assertEqual(manifest('34', 'storage-class.yaml')['volumeBindingMode'], 'WaitForFirstConsumer')
+        self.assertEqual(manifest('24', 'storage-class.yaml')['volumeBindingMode'], 'WaitForFirstConsumer')
 
     def test_limit_fault_fits_remaining_quota_and_breaks_only_memory_limit(self):
-        quota = manifest('35', 'quota.yaml')['spec']['hard']
-        baseline = manifest('35', 'baseline.yaml')['spec']['containers'][0]['resources']
-        oversized = manifest('35', 'oversized.yaml')['spec']['containers'][0]['resources']
-        limits = manifest('35', 'defaults.yaml')['spec']['limits'][0]
+        quota = manifest('25', 'quota.yaml')['spec']['hard']
+        baseline = manifest('25', 'baseline.yaml')['spec']['containers'][0]['resources']
+        oversized = manifest('25', 'oversized.yaml')['spec']['containers'][0]['resources']
+        limits = manifest('25', 'defaults.yaml')['spec']['limits'][0]
         self.assertEqual(oversized['requests'], baseline['requests'])
         self.assertEqual(int(quota['requests.cpu'][:-1]), 2 * int(oversized['requests']['cpu'][:-1]))
         self.assertLess(2 * int(oversized['requests']['memory'][:-2]), int(quota['requests.memory'][:-2]))
         self.assertGreater(int(oversized['limits']['memory'][:-2]), int(limits['max']['memory'][:-2]))
-        self.assertNotIn('resources', manifest('35', 'defaulted.yaml')['spec']['containers'][0])
+        self.assertNotIn('resources', manifest('25', 'defaulted.yaml')['spec']['containers'][0])
         self.assertEqual(limits['defaultRequest'], baseline['requests'])
 
 
@@ -105,7 +105,7 @@ class EncryptionEvidenceTests(unittest.TestCase):
                 pod = json.loads((workspace / f'apiserver-{mode}.json').read_text())
                 actual = copy.deepcopy(pod['spec'])
                 self.assertEqual(actual['containers'][0]['command'].pop(),
-                                 f'--encryption-provider-config=/etc/kubernetes/ce-lab36/provider-{mode}.json')
+                                 f'--encryption-provider-config=/etc/kubernetes/ce-lab26/provider-{mode}.json')
                 actual['containers'][0]['volumeMounts'].pop()
                 actual['volumes'].pop()
                 self.assertEqual(actual, original['spec'])
@@ -128,7 +128,7 @@ class EncryptionEvidenceTests(unittest.TestCase):
                    subprocess.CompletedProcess([], 0, stdout=json.dumps({'kvs': [{'value': base64.b64encode(raw).decode()}]}))]
         with patch.object(storage.subprocess, 'run', side_effect=outputs) as run:
             self.assertEqual(storage.read_record('fresh'), raw)
-        self.assertIn('/registry/secrets/ce-lab36/fresh', run.call_args.args[0])
+        self.assertIn('/registry/secrets/ce-lab26/fresh', run.call_args.args[0])
         self.assertIn('prefix=k8s:enc:aescbc:v1:lab-key1:', storage.describe(raw))
         self.assertIn('demo_password_visible=False', storage.describe(raw))
         self.assertIn('demo_password_visible=True', storage.describe(b'k8s\x00' + storage.MARKER))

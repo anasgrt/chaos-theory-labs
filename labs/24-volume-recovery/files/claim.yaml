@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: ce-lab24-local
+  resources:
+    requests:
+      storage: 128Mi

@@ -4,3 +4,4 @@ __pycache__/
 .vagrant/
 output/
 tmp/
+rancher-lab-ca.crt

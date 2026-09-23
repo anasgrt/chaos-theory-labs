@@ -1,0 +1,29 @@
+---
+- name: Render the real platform templates without contacting a cluster
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../../config/platform.yml
+  vars:
+    rke2_kubeconfig:
+      content: "{{ sample_kubeconfig | to_yaml | b64encode }}"
+    sample_kubeconfig:
+      apiVersion: v1
+      kind: Config
+      clusters:
+        - name: default
+          cluster: {server: 'https://127.0.0.1:6443'}
+      contexts:
+        - name: default
+          context: {cluster: default, user: default}
+      users:
+        - name: default
+          user: {token: test-fixture-only}
+      current-context: default
+  tasks:
+    - ansible.builtin.template:
+        src: "../../ansible/templates/{{ item }}.j2"
+        dest: "{{ platform_test_output }}/{{ item }}"
+        mode: '0600'
+      loop: [rke2-config.yaml, rke2-coredns-config.yaml, rancher-values.yaml, rke2-kubeconfig.yaml]

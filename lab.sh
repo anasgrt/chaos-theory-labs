@@ -3,18 +3,28 @@ set -euo pipefail
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ansible_dir="$repo_dir/ansible"
 source "$repo_dir/scripts/lib/lab-env.sh"
-usage() { echo "Usage: $0 provision|start|ssh|stop|status|list | NN [setup|verify|reset|question|solution]" >&2; }
+usage() { echo "Usage: $0 provision|browser-setup|platform|start|ssh|stop|status|list|reset-all [yes] | NN [setup|verify|reset|question|solution]" >&2; }
 [[ $# -ge 1 && $# -le 2 ]] || { usage; exit 1; }
 cd "$repo_dir"
 export ANSIBLE_CONFIG="$ansible_dir/ansible.cfg"
 case "$1" in
-  provision|start|ssh|stop|status)
+  reset-all)
+    # A second argument is accepted only to skip the confirmation prompt.
+    [[ $# -eq 1 || ($# -eq 2 && $2 == yes) ]] || { usage; exit 1; }
+    command -v ansible-playbook >/dev/null || { echo 'Install Ansible on the controller first.' >&2; exit 1; }
+    [[ $# -eq 2 ]] && exec "$repo_dir/scripts/run-ansible.sh" reset-all --extra-vars reset_all_confirmed=yes
+    exec "$repo_dir/scripts/run-ansible.sh" reset-all ;;
+esac
+case "$1" in
+  provision|browser-setup|platform|start|ssh|stop|status)
     [[ $# -eq 1 ]] || { usage; exit 1; }
     case "$1" in
       start) exec vagrant up "$lab_machine" --provider=virtualbox --no-provision ;;
       ssh) exec vagrant ssh "$lab_machine" ;;
       stop) exec vagrant halt "$lab_machine" ;;
       status) exec vagrant status "$lab_machine" ;;
+      platform) exec "$repo_dir/scripts/run-ansible.sh" platform ;;
+      browser-setup) exec python3 "$repo_dir/scripts/setup-browser.py" ;;
       provision)
         command -v ansible-playbook >/dev/null || { echo 'Install Ansible on the controller first.' >&2; exit 1; }
         vagrant up "$lab_machine" --provider=virtualbox --no-provision

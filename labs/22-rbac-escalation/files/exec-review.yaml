@@ -1,0 +1,6 @@
+apiVersion: authorization.k8s.io/v1
+kind: SubjectAccessReview
+metadata: {}
+spec:
+  user: system:serviceaccount:ce-lab22:builder
+  resourceAttributes: {namespace: ce-lab22, verb: create, resource: pods, subresource: exec}

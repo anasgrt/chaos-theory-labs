@@ -1,0 +1,198 @@
+title: Lab 23 — When probes cause or repair restarts
+kubernetes: true
+task:
+  question: When should a probe withdraw traffic, restart a container, or give it more time to start?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§10.12.1, 10.12.2 (maintained supplement; primary references
+      linked there).'
+    theory_sections:
+    - 10.12.1
+    - 10.12.2
+    theory:
+    - Startup, readiness and liveness answer different questions. Startup gates the other two until initialization
+      succeeds. Readiness controls eligibility for ordinary Service traffic. Repeated liveness failure
+      makes kubelet terminate the container; this Pod uses restartPolicy Always, so it starts a new container
+      inside the same Pod UID.
+    - The supplied server waits 15 seconds before opening its listener. Its startup probe allows 20 failed
+      checks at a two-second period; this is a nominal observation window, not an exact restart timestamp.
+      Liveness allows only three failed checks at that period. Without startup protection, the server
+      can be killed before it ever finishes initialization, then repeat that work on every restart.
+    - 'The readiness and liveness paths are independent. A file named /tmp/unready makes only readiness
+      fail. Removing it repairs eligibility without a restart. A different file, /tmp/stalled, simulates
+      lost application progress: both real requests and liveness fail. Restarting clears this file because
+      it belongs to the old container writable layer, so this particular fault is repairable by restart.'
+    - A liveness probe is useful only when restarting can repair the condition it detects. A failed external
+      database does not become healthy because its callers restart. Avoid using the same broad dependency
+      check for every probe; restarting many callers can also remove available capacity.
+    - Record Pod UID, container ID, restart count, last termination and events together. A changed container
+      ID within one UID is a container restart; the procedure deliberately changes UID when replacing
+      immutable probe configurations. Read previous-container logs before deleting that Pod. Neither a
+      nonzero exit nor a failed probe alone proves which policy caused the restart.
+    - Endpoint withdrawal is asynchronous. A failed readiness wait establishes Pod state, not the exact
+      time every routing rule changed. Compare EndpointSlice conditions and a bounded request from the
+      separate client. Missing logs or a wait timeout leave the corresponding conclusion unproven.
+    main_lesson: 'Choose probes by the action they should trigger: startup protects initialization, readiness
+      withdraws traffic, and liveness restarts a container whose progress is lost. A short liveness budget
+      can create a startup loop, while readiness can recover without replacing anything. Compare client
+      results with UID, container ID, events and restart count; configure a restart only for a condition
+      that restarting can actually repair.'
+    in_this_lab:
+    - Use ce-lab23 in its private cluster. One server initializes for 15 seconds; a separate client calls
+      it through its Service. Two manifests differ only in the startup probe.
+    - probe_state saves the Pod JSON under the named phase and prints identities, restart state and EndpointSlices.
+      wait_restarts checks up to 90 times with two-second pauses; API request time adds to the wait. probe_http
+      makes one Service request with a three-second timeout; a failure is an observation, not an instruction
+      to stop the shell. wait_service retries that request up to 15 times during setup and recovery, with
+      two-second pauses.
+    readings:
+    - signal: UID / containerID / restartCount
+      meaning: Distinguish a restarted container from a deliberately recreated Pod; retain evidence before
+        deleting it.
+    - signal: Ready / EndpointSlice ready
+      meaning: Pod readiness and routing eligibility converge asynchronously; record both rather than
+        assuming identical timing.
+    - signal: Unhealthy / Killing / previous logs
+      meaning: Match the failing probe and kubelet action to whether initialization ever reached the listening
+        log.
+    - signal: HTTP / elapsed_seconds
+      meaning: One bounded client observation tests the Service path; it does not measure continuous availability.
+  predict: Predict whether each fault changes readiness, restart count, Pod UID and client HTTP, and whether
+    restarting repairs it.
+  answer_with:
+  - Why did readiness recover without changing the container identity?
+  - What proves the progress fault restarted a container inside the same Pod?
+  - Why did removing only the startup probe prevent initialization from completing?
+  - Which observations prove the protected configuration recovered?
+  evidence:
+    columns:
+    - Phase
+    - Observed state
+    - Evidence / explanation
+    rows:
+    - Protected baseline
+    - Readiness fault
+    - Readiness restored
+    - Progress fault recovered
+    - No startup protection
+    - Protected restored
+  transfer: Would attaching the liveness probe to a temporarily unavailable shared database repair that
+    database?
+solution:
+- The /tmp/unready marker changes only the readiness result. The same process keeps running and its liveness
+  succeeds. Removing the marker should restore Ready and Service eligibility with the same Pod UID, container
+  ID and restart count; record when the client request succeeds.
+- The stalled marker makes both the application request and liveness fail. After the failure threshold,
+  kubelet terminates that container. A rising restart count, new container ID within the saved Pod UID,
+  matching Killing/Unhealthy events and eventual HTTP recovery identify the mechanism. The new writable
+  layer has no marker.
+- The application still needs 15 seconds, but liveness now begins before initialization finishes and exhausts
+  its much shorter budget. Previous logs should show initialization starting without reaching the listening
+  message. Startup protection changes when liveness begins; it does not make initialization faster.
+- The intentionally recreated protected Pod should finish startup, become Ready and return HTTP 200. Its
+  UID differs because you deleted the prior Pod; its initial container should have no liveness restarts.
+  Save the previous fault evidence first.
+transfer_solution: No. Restarting callers leaves the external failure unchanged and repeats their initialization.
+  Choose an observation and response that match a repairable local condition; use readiness only when
+  withholding that caller from traffic is the intended response.
+verify_note: The protected Pod is Ready with zero restarts, and the client receives HTTP 200 through probe-web.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 23 setup on the host.
+  No other lab is required.
+files:
+- server.py
+- request.py
+- exercise.sh
+- protected.yaml
+- no-startup.yaml
+- service.yaml
+- client.yaml
+commands:
+- name: Record the protected baseline
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    source ~/labs/lab23/helpers.sh
+    probe_state baseline
+    probe_http
+    k logs probe-web
+  record: 'Protected baseline row: Pod UID, container ID, restarts, Ready, endpoints and HTTP.'
+  expect: Initialization should finish once; the protected server should be Ready with zero restarts.
+- name: Fail only readiness
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k exec probe-web -- touch /tmp/unready
+    k wait pod/probe-web --for=condition=Ready=false --timeout=30s --request-timeout=0
+    probe_state unready
+    probe_http
+  record: 'Readiness fault row: the same identities and restart count; Pod and endpoint conditions; HTTP
+    result.'
+  expect: Readiness should fail without restarting the container. Ordinary Service requests should fail
+    once endpoint withdrawal converges.
+- name: Remove the readiness fault
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k exec probe-web -- rm /tmp/unready
+    k wait pod/probe-web --for=condition=Ready --timeout=30s --request-timeout=0
+    probe_state ready-again
+    probe_http
+  record: 'Readiness restored row: identity, restart count, Ready and HTTP.'
+  expect: The same container should return to readiness; retry the observation if Service routing is still
+    converging.
+- name: Lose progress and observe a repairable restart
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k exec probe-web -- touch /tmp/stalled
+    wait_restarts 1
+    k logs probe-web --previous
+    k describe pod probe-web
+    k wait pod/probe-web --for=condition=Ready --timeout=90s --request-timeout=0
+    probe_state progress-recovered
+    probe_http
+  record: 'Progress fault recovered row: UID, container IDs, restarts, probe events, previous log and
+    recovered HTTP.'
+  expect: The container should restart inside the same Pod and initialize again. The marker disappears
+    with its old writable layer.
+- name: Remove startup protection while keeping the application unchanged
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k delete pod probe-web --wait=true --timeout=30s
+    k apply -f ~/labs/lab23/no-startup.yaml
+    wait_restarts 1
+    probe_state no-startup
+    k logs probe-web --previous
+    k describe pod probe-web
+  record: 'No startup protection row: new Pod UID, restart count, failing probe and whether the previous
+    log reached listening.'
+  expect: Liveness should kill the slow initializer before it listens. A new Pod UID came from your explicit
+    replacement, not from liveness.
+- name: Restore the startup probe and check the client outcome
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    k delete pod probe-web --wait=true --timeout=30s
+    k apply -f ~/labs/lab23/protected.yaml
+    k wait pod/probe-web --for=condition=Ready --timeout=90s --request-timeout=0
+    probe_state protected-restored
+    k logs probe-web
+    wait_service
+  record: 'Protected restored row: initialization log, UID, zero restarts, Ready, endpoints and HTTP.'
+  expect: The protected initializer should finish and serve requests. Saved phase JSON remains in this
+    lab workspace.
+setup:
+- name: Prepare the independent probe comparison
+  command: !unsafe |
+    cat > ~/labs/lab23/helpers.sh <<'SH'
+    k() { kubectl --kubeconfig="$HOME/labs/lab23/kubeconfig" --context=kind-lab23 --namespace=ce-lab23 --request-timeout=10s "$@"; }
+    source "$HOME/labs/lab23/exercise.sh"
+    SH
+    source ~/labs/lab23/helpers.sh
+    k create namespace ce-lab23 --dry-run=client -o yaml | k apply -f -
+    k create configmap probe-scripts --from-file="$HOME/labs/lab23/server.py" --from-file="$HOME/labs/lab23/request.py" --dry-run=client -o yaml | k apply -f -
+    k apply -f ~/labs/lab23/service.yaml -f ~/labs/lab23/client.yaml -f ~/labs/lab23/protected.yaml
+    k wait pod/client pod/probe-web --for=condition=Ready --timeout=120s --request-timeout=0
+    wait_service
+verify:
+- name: Check initialized server and client path
+  command: !unsafe |
+    source ~/labs/lab23/helpers.sh
+    k wait pod/probe-web --for=condition=Ready --timeout=60s --request-timeout=0
+    k get pod probe-web -o json | jq -e '.spec.containers[0].startupProbe != null and .status.containerStatuses[0].restartCount == 0' >/dev/null
+    wait_service
+reset: []

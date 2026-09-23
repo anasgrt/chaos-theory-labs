@@ -1,0 +1,100 @@
+---
+# One run that removes every lab currently installed in the shared VM. Resetting
+# labs one at a time works, but each ./lab.sh NN reset pays for its own Ansible
+# start-up, SSH set-up and identity checks, so clearing a VM that way is slow.
+# This discovers what is actually installed and reuses a single connection.
+- name: Reset every installed Chaos Lab in the shared VM
+  hosts: chaos_labs
+  gather_facts: false
+  vars_files:
+    - ../config/platform.yml
+  vars:
+    lab_home: /home/vagrant
+    lab_root: "{{ lab_home }}/labs"
+    # Public CA only; the lab user reads this copy, never the platform private key.
+    lab_rancher_ca: "{{ lab_home }}/rancher/ca.crt"
+    # Set by ./lab.sh reset-all yes to skip the interactive confirmation.
+    reset_all_confirmed: ''
+
+  pre_tasks:
+    - name: Enforce the shared VM boundary
+      ansible.builtin.include_tasks: tasks/identity.yml
+
+    - name: Check shared provisioning is complete
+      ansible.builtin.stat:
+        path: "{{ lab_root }}/.provisioned"
+      register: shared_provisioning
+
+    - name: Require the shared prerequisites
+      ansible.builtin.assert:
+        that: shared_provisioning.stat.exists
+        fail_msg: Run ./lab.sh provision once before resetting labs.
+
+  tasks:
+    # Read on the controller: the lab definitions live in this checkout, not in
+    # the VM, and reset needs each lab's own units, fixtures and reset commands.
+    - name: Find every lab definition in this checkout
+      ansible.builtin.find:
+        paths: "{{ playbook_dir }}/../labs"
+        patterns: lab.yml
+        recurse: true
+        depth: 2
+      register: all_lab_definitions
+      delegate_to: localhost
+
+    # A workspace exists for every lab that completed setup, including container
+    # labs with no cluster, and reset removes it. Kind clusters are listed as
+    # well so a lab whose workspace was already deleted is still cleaned up.
+    - name: Discover which labs left state in the VM
+      ansible.builtin.shell: |
+        {
+          ls -1 {{ lab_root | quote }} 2>/dev/null | grep -E '^lab[0-9]{2}$' || true
+          kind get clusters 2>/dev/null | grep -E '^lab[0-9]{2}$' || true
+        } | sed 's/^lab//' | sort -u
+      args:
+        executable: /bin/bash
+      register: installed_labs
+      changed_when: false
+
+    - name: Show which labs will be removed
+      ansible.builtin.debug:
+        msg: >-
+          {{ ('Installed labs to reset: ' + (installed_labs.stdout_lines | join(', ')))
+             if installed_labs.stdout_lines | length > 0
+             else 'No installed labs found in this VM; nothing to reset.' }}
+
+    - name: Confirm before removing every installed lab
+      ansible.builtin.pause:
+        prompt: |
+          This removes the workspaces, clusters, containers, service units and
+          Rancher entries for labs {{ installed_labs.stdout_lines | join(', ') }}.
+          Results saved inside those workspaces are deleted with them.
+          Type reset-all to continue, or press Ctrl-C then A to abort
+      register: reset_all_answer
+      when:
+        - installed_labs.stdout_lines | length > 0
+        - reset_all_confirmed | length == 0
+
+    - name: Require an explicit confirmation before changing anything
+      ansible.builtin.assert:
+        that: (reset_all_answer.user_input | default('')) | trim == 'reset-all'
+        fail_msg: Not confirmed, so no lab was changed.
+      when:
+        - installed_labs.stdout_lines | length > 0
+        - reset_all_confirmed | length == 0
+
+    - name: Reset each installed lab
+      ansible.builtin.include_tasks: tasks/reset-one.yml
+      loop: "{{ installed_labs.stdout_lines }}"
+      loop_control:
+        loop_var: lab_id
+        label: "lab{{ lab_id }}"
+
+    - name: Report the finished cleanup
+      ansible.builtin.debug:
+        msg: >-
+          {{ ('Reset ' + (installed_labs.stdout_lines | length | string) + ' lab(s): '
+              + (installed_labs.stdout_lines | join(', '))
+              + '. Shared tools, cached images, RKE2 and Rancher are untouched.')
+             if installed_labs.stdout_lines | length > 0
+             else 'Nothing to reset.' }}

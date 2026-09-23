@@ -1,0 +1,205 @@
+title: Lab 12 — Orphan reaping and the container process budget
+task:
+  question: Why can a container run out of processes while almost nothing is running?
+  brief:
+    theory_source: 'docs/chaos-theory.md: §§5.14.1–5.14.2.'
+    theory_sections:
+    - 5.14.1
+    - 5.14.2
+    theory:
+    - 'A container starts its own PID namespace, so its main process is PID 1 inside it. When a process
+      exits, the kernel keeps its exit status until the parent collects it with wait. That entry is a
+      zombie: it retains a PID and kernel bookkeeping but executes no code, and it cannot be killed,
+      because it has already exited.'
+    - An orphan is adopted by the nearest ancestor configured as a child subreaper, or otherwise by
+      the PID namespace's PID 1. That process becomes responsible for reaping it. Here PID 1 adopts
+      the orphans directly. The reaper calls wait to collect them; the comparison application never
+      waits, so exited children remain zombies.
+    - The comparison is two containers from the same image with the same budget, differing only in PID
+      1. The first runs an ordinary application, written inline in its docker create command, that sleeps
+      and never waits; the second runs reaper.py, which loops on waitpid(-1) and prints every PID it collects.
+      Orphans are then produced deliberately, by a maker started with docker exec that forks 40 short-lived
+      children and exits first, so PID 1 inherits all 40.
+    - Each later burst asks for live children, 40 and then 200, and kills and reaps its own children before
+      returning, so it leaves no zombies behind. docker run --init installs a packaged init (tini) for
+      the reaping job; the explicit reaper is used here so the mechanism stays visible.
+    - --pids-limit 64 sets pids.max in each container's cgroup, and pids.current counts every live process
+      and thread in it. Zombie entries count as well. At the ceiling the kernel refuses the next fork
+      with EAGAIN, which programs report as Resource temporarily unavailable.
+    - That budget is shared by PID 1, the process you start with docker exec and every child it makes.
+      The children a burst can create is therefore roughly 64 minus pids.current minus the burst process
+      itself, so predict each burst from the count measured just before it.
+    - Read state, not names. State Z in /proc/PID/stat identifies a zombie and ppid identifies who must
+      reap it. Both containers run python, so use pid1_cmdline to tell the application from the reaper,
+      and the reaped lines in the log to watch collection happen.
+    - 'Two causes then produce the identical fork error: zombies holding the budget, or a genuine burst
+      of live processes reaching the ceiling with none. Compare the zombie count with pids.current before
+      repairing, because a larger pids.max cannot reap anything and an init cannot reduce live concurrency.'
+    main_lesson: >-
+      A container can exhaust its task budget through unreaped zombies or too many live processes.
+      Reaping releases exited children's entries; a PID limit only bounds the total and can produce
+      the same fork error for either cause. Compare zombie state with cgroup task counts before
+      choosing a fix: raising the limit does not repair reaping, and adding a reaper does not
+      control live concurrency.
+    in_this_lab:
+    - Run two containers with the same image and the same 64-PID budget, changing only PID 1. Create inherited
+      orphans in each, then request live processes until forking fails.
+    - start_process_container copies the supplied process tools, starts the named container and waits
+      for its ready log. The visible docker create command sets the same 64-PID limit in each case.
+    readings:
+    - signal: pid1_comm / pid1_cmdline
+      meaning: Which program is PID 1. Both containers run python, so use the command line to tell the
+        application from the reaper.
+    - signal: zombies / zombies_reparented_to_pid1
+      meaning: Zombie entries counted from /proc. The second count is those whose parent is PID 1, the
+        ones an init must reap.
+    - signal: pids.current / pids.max
+      meaning: Live processes, threads and zombie entries against this container's cgroup ceiling. Equality
+        means the next fork is refused.
+    - signal: created / fork_error
+      meaning: Children started before forking failed, and the errno. EAGAIN is the pids limit refusing
+        a fork, not a memory error.
+    - signal: reaped pid=
+      meaning: The reaper container logs each entry it collects. Absence of these lines in the no-init
+        container is the difference being measured.
+  predict: Predict the zombie count, pids.current and fork outcome for each container after 40 orphans
+    and after each burst.
+  answer_with:
+  - Which process removes the zombie entries, and what did each container do with them?
+  - Why did the burst of 40 fail in the no-init container?
+  - Why did the burst of 200 fail with the same error but no zombies?
+  - What did the pids limit contain, and what did it not repair?
+  evidence:
+    columns:
+    - Case
+    - PID 1 / zombies
+    - pids.current / pids.max
+    - Fork result
+    rows:
+    - No init baseline
+    - No init after 40 orphans
+    - No init burst of 40
+    - Init after 40 orphans
+    - Init burst of 40
+    - Init burst of 200
+  transfer: pids.current equals pids.max with zero zombies. Is a larger limit the fix?
+solution:
+- Both containers should report the same image and the same 64-PID budget, and both should inherit 40
+  orphans after their maker exits. The no-init container's PID 1 is the inline application, which never
+  waits, so those entries should remain as zombies with ppid 1 and keep counting in pids.current. The
+  init container's PID 1 is reaper.py, which should log reaped lines and return the zombie count to zero
+  and pids.current close to its baseline.
+- In the no-init container roughly forty of the sixty-four PIDs are already held by zombie entries, so
+  the burst of 40 should create only the remainder before forking fails with EAGAIN, reported as Resource
+  temporarily unavailable. At that moment pids.current should equal pids.max. The live workload is small;
+  the unreaped exit statuses are what consumed the budget.
+- With a clean process table, the burst of 40 should create all forty children, because PID 1, the burst
+  parent and forty children stay below sixty-four. The burst of 200 should stop at the ceiling with the
+  same EAGAIN error and pids.current equal to pids.max, but with zero zombies. Identical errors, different
+  causes; reaping cannot help the second one and a larger limit only postpones exhaustion if zombies keep
+  accumulating.
+- The host can see the container processes, so its count can change. The 64-task ceiling applies to this
+  container’s cgroup; it does not impose a 64-task limit on the VM. After the bursts reap their children,
+  pids.current should fall back toward the baseline. Removing both containers should leave no ce-lab12
+  containers. The limit bounded the blast radius of a fork storm; it did not reap zombies or reduce demand.
+transfer_solution: No. Zero zombies means nothing is waiting to be reaped, so live processes or threads are holding the budget. Identify what creates them and how many are required before changing the ceiling; a larger limit only moves the same failure further out.
+verify_note: Both experiment containers were removed after their evidence was recorded. The process limit was local to each container; the VM remained usable.
+prerequisites: Provision the shared VM once with ./lab.sh provision. Run ./lab.sh 12 setup on the host. No other lab is required.
+files:
+- reaper.py
+- orphan-maker.py
+- fork-burst.py
+- procreport.py
+- exercise.sh
+commands:
+- name: Start the no-init container and record its baseline process table
+  where: VM terminal 1
+  run: !unsafe |
+    source ~/labs/lab12/exercise.sh
+    docker create --name ce-lab12-noinit --pids-limit 64 python:3.12-slim python -u -c 'import os, time; print(f"application pid={os.getpid()} reaping=no", flush=True); time.sleep(3600)'
+    start_process_container ce-lab12-noinit
+    docker exec ce-lab12-noinit python -u /procreport.py
+  record: 'No init baseline row: pid1_comm and pid1_cmdline, the process count, the zombies, and pids.current
+    and pids.max.'
+  expect: PID 1 should be the application itself, with no zombies and a pids.current far below the 64-PID
+    ceiling.
+- name: Inherit forty orphans in the no-init container
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    docker exec ce-lab12-noinit python -u /orphan-maker.py 40
+    sleep 2
+    docker exec ce-lab12-noinit python -u /procreport.py
+    docker logs ce-lab12-noinit
+  record: 'No init after 40 orphans row: orphans_started, the zombie count, zombies_reparented_to_pid1,
+    pids.current, and any reaped lines.'
+  expect: The maker exits first, so PID 1 inherits the children. Without a wait loop those exited children
+    should remain as zombie entries counted in pids.current.
+- name: Request forty live processes in the same container
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    docker exec ce-lab12-noinit python -u /fork-burst.py 40
+    docker exec ce-lab12-noinit python -u /procreport.py
+  record: 'No init burst of 40 row: created, fork_error, pids.current and pids.max at the failure, and
+    the zombies left.'
+  expect: Only the unused part of the budget is available, so the burst should stop early with EAGAIN
+    while pids.current equals pids.max.
+- name: Start the init container and inherit the same forty orphans
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    docker create --name ce-lab12-init --pids-limit 64 python:3.12-slim python -u /reaper.py
+    start_process_container ce-lab12-init
+    docker exec ce-lab12-init python -u /procreport.py
+    docker exec ce-lab12-init python -u /orphan-maker.py 40
+    sleep 2
+    docker exec ce-lab12-init python -u /procreport.py
+    docker logs ce-lab12-init --tail 5
+  record: 'Init after 40 orphans row: pid1_cmdline, the zombies before and after, pids.current, and the
+    reaped lines.'
+  expect: The only changed variable is PID 1. Its wait loop should collect the inherited entries and log
+    them, leaving no zombies.
+- name: Request forty live processes with a clean process table
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    docker exec ce-lab12-init python -u /fork-burst.py 40
+    docker exec ce-lab12-init python -u /procreport.py
+  record: 'Init burst of 40 row: created, fork_error, pids.current and pids.max, and the value after reaping.'
+  expect: The same request should now succeed, because the budget is not held by zombie entries.
+- name: Request two hundred live processes and read the ceiling
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    docker exec ce-lab12-init python -u /fork-burst.py 200
+    docker exec ce-lab12-init python -u /procreport.py
+    nproc
+    ps -eo pid --no-headers | wc -l
+  record: 'Init burst of 200 row: created, fork_error, pids.current and pids.max, the zombies, and the
+    host process count.'
+  expect: This burst should reach pids.max with no zombies present, producing the same errno from a different
+    cause. The host still sees container processes, but this failure does not mean the VM has reached
+    its own process limit.
+- name: Remove both containers after recording the evidence
+  where: VM terminal 1, same shell
+  run: !unsafe |
+    docker rm -f ce-lab12-noinit ce-lab12-init
+    docker ps -a --filter 'name=^/ce-lab12-' --format '{{.Names}}'
+    ps -eo pid --no-headers | wc -l
+  record: Whether any ce-lab12 container remains, and the final host process count.
+  expect: No ce-lab12 containers should remain, and the host count should be close to the value recorded
+    before the bursts.
+setup:
+- name: Prepare the container process-budget workspace
+  command: !unsafe |
+    mkdir -p ~/labs/lab12
+    docker image inspect python:3.12-slim >/dev/null
+    docker ps -aq --filter 'name=^/ce-lab12-' | xargs -r docker rm -f
+verify:
+- name: Check the process-budget fixture
+  command: !unsafe |
+    test -s ~/labs/lab12/reaper.py
+    test -s ~/labs/lab12/orphan-maker.py
+    test -s ~/labs/lab12/fork-burst.py
+    test -s ~/labs/lab12/procreport.py
+    test -z "$(docker ps -aq --filter 'name=^/ce-lab12-')"
+reset:
+- name: Remove only this lab's process-budget containers
+  command: !unsafe |
+    docker ps -aq --filter 'name=^/ce-lab12-' | xargs -r docker rm -f

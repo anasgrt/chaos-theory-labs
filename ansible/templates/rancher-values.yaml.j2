@@ -1,0 +1,15 @@
+hostname: {{ rancher_hostname }}
+replicas: 1
+bootstrapPassword: {{ rancher_admin_password | to_json }}
+privateCA: true
+agentTLSMode: strict
+ingress:
+  ingressClassName: traefik
+  tls:
+    source: secret
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    memory: 4Gi
