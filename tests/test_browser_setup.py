@@ -2,6 +2,7 @@
 import importlib.util
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 import unittest
@@ -39,6 +40,78 @@ class BrowserHostsTests(unittest.TestCase):
                          ('192.168.56.10', '$(touch injected)')]:
             with self.subTest(ip=ip, name=name), self.assertRaises(ValueError):
                 browser.update_hosts('127.0.0.1 localhost\n', ip, name)
+
+
+def make_ca(directory, name, common='Chaos Labs Rancher CA'):
+    """A real self-signed CA, so digests come from certificates, not fixtures."""
+    key, crt = directory / (name + '.key'), directory / (name + '.crt')
+    subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+                    '-keyout', str(key), '-out', str(crt), '-days', '2',
+                    '-subj', '/CN=' + common], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return crt
+
+
+class SupersededCertificateTests(unittest.TestCase):
+    """Recreating a VM mints a new CA under the same name; the old one lingers."""
+
+    def test_digests_match_openssl_for_a_real_certificate(self):
+        with tempfile.TemporaryDirectory(prefix='browser-ca-') as tmp:
+            crt = make_ca(Path(tmp), 'current')
+            sha1, sha256 = browser.certificate_digests(crt.read_text())
+            for algorithm, expected in (('sha1', sha1), ('sha256', sha256)):
+                der = subprocess.run(['openssl', 'x509', '-in', str(crt), '-outform', 'der'],
+                                     check=True, capture_output=True).stdout
+                digest = subprocess.run(['openssl', 'dgst', '-' + algorithm],
+                                        input=der, check=True, capture_output=True).stdout
+                self.assertIn(expected.lower(), digest.decode().strip().lower())
+
+    def test_only_certificates_other_than_the_current_one_are_superseded(self):
+        with tempfile.TemporaryDirectory(prefix='browser-stale-') as tmp:
+            directory = Path(tmp)
+            current, old, older = (make_ca(directory, name) for name in ('current', 'old', 'older'))
+            bundle = old.read_text() + current.read_text() + older.read_text()
+            stale = browser.superseded_certificates(bundle, current.read_text())
+            self.assertEqual(stale, [browser.certificate_digests(old.read_text())[0],
+                                     browser.certificate_digests(older.read_text())[0]])
+            self.assertNotIn(browser.certificate_digests(current.read_text())[0], stale)
+
+    def test_nothing_is_superseded_when_only_the_current_ca_is_trusted(self):
+        with tempfile.TemporaryDirectory(prefix='browser-clean-') as tmp:
+            current = make_ca(Path(tmp), 'current')
+            self.assertEqual(browser.superseded_certificates(current.read_text(), current.read_text()), [])
+            self.assertEqual(browser.superseded_certificates('', current.read_text()), [])
+            # A duplicate listing of the same certificate is not a second CA.
+            self.assertEqual(
+                browser.superseded_certificates(current.read_text() * 2, current.read_text()), [])
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'macOS keychain tooling required')
+    def test_pruning_automatically_removes_only_the_old_ca(self):
+        with tempfile.TemporaryDirectory(prefix='browser-keychain-') as tmp:
+            directory = Path(tmp)
+            current, old = make_ca(directory, 'current'), make_ca(directory, 'old')
+            unrelated = make_ca(directory, 'unrelated', common='Someone Else CA')
+            keychain = str(directory / 'probe.keychain')
+            subprocess.run(['security', 'create-keychain', '-p', 'probepass', keychain], check=True)
+            self.addCleanup(subprocess.run, ['security', 'delete-keychain', keychain])
+            for certificate in (current, old, unrelated):
+                subprocess.run(['security', 'import', str(certificate), '-k', keychain, '-A'],
+                               check=True, stdout=subprocess.DEVNULL)
+
+            removed = browser.prune_superseded_cas(current, keychain)
+            self.assertEqual(removed, [browser.certificate_digests(old.read_text())[0]])
+            listed = subprocess.run(['security', 'find-certificate', '-c', 'Chaos Labs Rancher CA',
+                                     '-a', '-p', keychain], check=True, capture_output=True, text=True)
+            remaining = browser.pem_certificates(listed.stdout)
+            self.assertEqual(len(remaining), 1)
+            self.assertEqual(browser.certificate_digests(remaining[0]),
+                             browser.certificate_digests(current.read_text()))
+            # A certificate with another name is never touched.
+            other = subprocess.run(['security', 'find-certificate', '-c', 'Someone Else CA',
+                                    '-a', '-p', keychain], check=True, capture_output=True, text=True)
+            self.assertEqual(len(browser.pem_certificates(other.stdout)), 1)
+            # Running again has nothing left to do.
+            self.assertEqual(browser.prune_superseded_cas(current, keychain), [])
 
 
 class BrowserCommandTests(unittest.TestCase):

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Explicit macOS browser setup; never called by provisioning or lab actions."""
+import base64
+import hashlib
 import ipaddress
 import json
 import os
@@ -11,6 +13,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 HOSTS = Path('/etc/hosts')
+SYSTEM_KEYCHAIN = '/Library/Keychains/System.keychain'
 
 
 def validate(ip, hostname):
@@ -58,6 +61,67 @@ def run(*args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
 
 
+def pem_certificates(bundle):
+    """Every certificate block in a PEM listing, in the order given."""
+    return re.findall(r'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', bundle, re.S)
+
+
+def certificate_digests(pem):
+    """The SHA-1 and SHA-256 digests macOS identifies a certificate by."""
+    body = ''.join(line for line in pem.splitlines() if 'CERTIFICATE' not in line)
+    der = base64.b64decode(body)
+    return hashlib.sha1(der).hexdigest().upper(), hashlib.sha256(der).hexdigest().upper()
+
+
+def superseded_certificates(bundle, current_pem):
+    """SHA-1 digests of same-named lab CAs that are not the current one.
+
+    Recreating the VM mints a new CA under the same name. macOS only ever adds
+    trust, so every rebuild leaves another trusted root behind, and a browser
+    validating today's certificate against a dead root fails in a way that is
+    hard to read. Identity is taken from the digest, never from the name.
+    """
+    current = certificate_digests(current_pem)[1]
+    stale = []
+    for block in pem_certificates(bundle):
+        sha1, sha256 = certificate_digests(block)
+        if sha256 != current and sha1 not in stale:
+            stale.append(sha1)
+    return stale
+
+
+def common_name(pem_path):
+    subject = run('/usr/bin/openssl', 'x509', '-in', str(pem_path), '-noout', '-subject',
+                  '-nameopt', 'RFC2253', capture_output=True, text=True).stdout
+    match = re.search(r'CN=([^,\n]+)', subject)
+    if not match:
+        raise RuntimeError('The exported lab CA has no common name.')
+    return match.group(1).strip()
+
+
+def prune_superseded_cas(ca_path, keychain=SYSTEM_KEYCHAIN):
+    """Remove the lab CAs this one replaced, reporting each removal.
+
+    Scope is deliberately narrow: only certificates sharing this CA's own
+    common name, and only those whose digest differs from the CA now in use.
+    A certificate with any other subject, and the current CA itself, are never
+    touched. Removal is automatic because a stale same-named root left behind
+    by a rebuilt VM breaks the browser in a way that is hard to read.
+    """
+    current_pem = Path(ca_path).read_text()
+    name = common_name(ca_path)
+    listing = subprocess.run(['/usr/bin/security', 'find-certificate', '-c', name, '-a', '-p', keychain],
+                             capture_output=True, text=True)
+    stale = superseded_certificates(listing.stdout, current_pem)
+    if not stale:
+        return []
+    print(f'Removing {len(stale)} superseded "{name}" certificate(s) left by an earlier VM.', flush=True)
+    for sha1 in stale:
+        run('sudo', '/usr/bin/security', 'delete-certificate', '-Z', sha1, keychain)
+        print(f'Removed superseded lab CA {sha1}', flush=True)
+    return stale
+
+
 def main():
     if sys.platform != 'darwin':
         raise RuntimeError('browser-setup currently supports macOS. See docs/rancher-rke2.md#open-rancher for Linux.')
@@ -89,7 +153,8 @@ def main():
     if trusted.returncode:
         print('Trusting the public lab CA for SSL. Approve macOS authentication if prompted.', flush=True)
         run('sudo', '/usr/bin/security', 'add-trusted-cert', '-d', '-r', 'trustRoot', '-p', 'ssl',
-            '-k', '/Library/Keychains/System.keychain', ca)
+            '-k', SYSTEM_KEYCHAIN, ca)
+    prune_superseded_cas(ca)
     run(str(ROOT / 'lab.sh'), 'platform')
     print(f'Browser setup complete. Open https://{hostname}')
 

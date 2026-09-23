@@ -88,8 +88,26 @@ by this helper.
 These settings survive Mac and VM restarts. Repeated runs do not duplicate the
 hostname entry or reinstall an already trusted CA. Rerun after recreating the VM
 with a new CA, or after removing the laptop configuration. Normal provisioning
-preserves the CA, including when renewing its server certificate. The helper does
-not remove old trusted CAs or hostnames belonging to other configurations.
+preserves the CA, including when renewing its server certificate.
+
+Recreating a VM mints a new CA under the same name, and macOS only ever adds
+trust, so each run also removes the lab CAs this one replaced and prints what it
+removed. Certificates are compared by digest, never by name. The scope is only
+this CA's own common name, and only entries whose digest differs from the CA now
+in use: the current CA and any certificate with another subject are never
+touched. Removal needs no confirmation, so a rebuilt VM leaves no stale root
+behind to break the browser.
+
+A browser warning after rebuilding a VM is usually this: the Mac still trusts the
+previous CA while Rancher serves a certificate from the new one. Compare them with
+
+```bash
+vagrant ssh chaos -c 'openssl x509 -in /home/vagrant/rancher/ca.crt -noout -fingerprint -sha256'
+security find-certificate -c 'Chaos Labs Rancher CA' -a -Z /Library/Keychains/System.keychain | grep SHA-256
+```
+
+and rerun `./lab.sh browser-setup` if they differ. Fully quit and reopen the
+browser afterwards; Chromium caches certificate errors for the session.
 
 `browser-setup` currently supports macOS. Linux users should follow the manual
 steps below. Provisioning and `platform` never silently change laptop trust.
